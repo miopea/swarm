@@ -2148,7 +2148,7 @@
             e.stopPropagation();
             container.style.outline = '';
             if (e.dataTransfer.files.length > 0) {
-                uploadAndPaste(e.dataTransfer.files[0]);
+                uploadAndPaste(e.dataTransfer.files[0], term, entry && entry.ws);
             }
         });
 
@@ -2205,7 +2205,7 @@
                         e.preventDefault();
                         e.stopPropagation();
                         var blob = items[i].getAsFile();
-                        if (blob) uploadAndPaste(blob);
+                        if (blob) uploadAndPaste(blob, term, entry && entry.ws);
                         return;
                     }
                 }
@@ -3113,8 +3113,16 @@
         _origSelectWorker(name);
     };
 
-    function uploadAndPaste(file) {
-        if (!inlineTerm || !inlineTermWs || inlineTermWs.readyState !== WebSocket.OPEN) {
+    // *targetTerm*/*targetWs* identify WHICH terminal was pasted/dropped
+    // into. They default to the active inline terminal for the global
+    // drop-outside fallback, but the per-terminal paste/drop handlers in
+    // createTermEntry pass their own entry — critical for the embedded
+    // Queen, which is deliberately not `activeTermWorker`, so without
+    // this its pastes went to the last active worker instead.
+    function uploadAndPaste(file, targetTerm, targetWs) {
+        var t = targetTerm || inlineTerm;
+        var ws = targetWs || inlineTermWs;
+        if (!t || !ws || ws.readyState !== WebSocket.OPEN) {
             showToast('Terminal not connected', true);
             return;
         }
@@ -3125,8 +3133,8 @@
         fetch('/api/uploads', { method: 'POST', body: fd, headers: { 'X-Requested-With': 'swarm' } })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (data.path && inlineTerm) {
-                    inlineTerm.paste(data.path);
+                if (data.path && t) {
+                    t.paste(data.path);
                     showToast('Pasted: ' + fname);
                 } else if (!data.path) {
                     showToast('Upload failed: ' + (data.error || 'unknown'), true);
@@ -8304,14 +8312,21 @@
         let startY = 0;
         let startTopFr = 0.5;
 
-        // Read saved ratio
-        const saved = localStorage.getItem('swarm-split');
-        if (saved) {
+        // Restore the saved split. Exposed because show() clears the
+        // detail-area gridTemplateRows on every return to the Command
+        // Center — without re-applying this, the task/bottom panel
+        // forgets its position (every other panel persists because
+        // show() re-applies its size; this one had no re-apply).
+        function applySavedSplit() {
+            const saved = localStorage.getItem('swarm-split');
+            if (!saved) return;
             const ratio = parseFloat(saved);
             if (ratio > 0.15 && ratio < 0.85) {
                 area.style.gridTemplateRows = ratio + 'fr auto ' + (1 - ratio) + 'fr';
             }
         }
+        applySavedSplit();
+        window.__applySavedSplit = applySavedSplit;
 
         function startDrag(clientY) {
             dragging = true;
@@ -8570,7 +8585,13 @@
         var rh = resizeHandle();
         if (rh) rh.style.display = '';
         var da = detailArea();
-        if (da) da.style.gridTemplateRows = '';
+        if (da) {
+            // Clear first (drops any stale inline value a worker visit's
+            // hide() left behind), then re-apply the operator's persisted
+            // split from storage so the task panel keeps its position.
+            da.style.gridTemplateRows = '';
+            if (window.__applySavedSplit) window.__applySavedSplit();
+        }
         // Re-apply saved CC panel sizes (defensive — survives any
         // intermediate CSS-var clear during a worker visit).
         applyCcLayoutFromStorage();
@@ -9003,13 +9024,9 @@
 
 
     // ----- CC layout: drag-resize handles + localStorage persistence ------
-    var CC_LIVE_HEIGHT_KEY = 'swarm_cc_live_height';
     var CC_ATTENTION_PCT_KEY = 'swarm_cc_attention_pct';
-    var CC_MIN_LIVE_HEIGHT = 60;
     var CC_MIN_PCT = 15;
     var CC_MAX_PCT = 85;
-    // Always leave room for the Attention/Ask Queen row below.
-    var CC_BOTTOM_RESERVE = 180;
 
     function applyCcLayoutFromStorage() {
         var cc = el('command-center');
@@ -9017,15 +9034,6 @@
         var grid = cc.querySelector('.command-center-grid');
         if (!grid) return;
         try {
-            var h = parseFloat(localStorage.getItem(CC_LIVE_HEIGHT_KEY));
-            if (isFinite(h) && h >= CC_MIN_LIVE_HEIGHT) {
-                // Don't clamp here — when show() just toggled display
-                // from none to '', the grid's getBoundingClientRect()
-                // may report 0 height for a frame, and clamping against
-                // that destroyed the saved value. Trust storage; the
-                // drag handler enforces limits at save time.
-                grid.style.setProperty('--cc-live-height', h + 'px');
-            }
             var p = parseFloat(localStorage.getItem(CC_ATTENTION_PCT_KEY));
             if (isFinite(p) && p >= CC_MIN_PCT && p <= CC_MAX_PCT) {
                 grid.style.setProperty('--cc-attention-pct', p + '%');
@@ -9033,61 +9041,14 @@
         } catch (_) {}
     }
 
-    function ccMaxLiveHeight(grid) {
-        var gridRect = grid.getBoundingClientRect();
-        return Math.max(CC_MIN_LIVE_HEIGHT, gridRect.height - CC_BOTTOM_RESERVE);
-    }
-
     function attachCcResizeHandles() {
         var grid = document.querySelector('#command-center .command-center-grid');
         if (!grid) return;
-        var rowHandle = el('cc-row-resize');
         var colHandle = el('cc-col-resize');
-        if (rowHandle && !rowHandle.dataset.ccBound) {
-            rowHandle.dataset.ccBound = '1';
-            attachRowResize(rowHandle, grid);
-        }
         if (colHandle && !colHandle.dataset.ccBound) {
             colHandle.dataset.ccBound = '1';
             attachColResize(colHandle, grid);
         }
-    }
-
-    function attachRowResize(handle, grid) {
-        var dragging = false;
-        var startY = 0;
-        var startH = 0;
-        function onDown(e) {
-            dragging = true;
-            startY = e.clientY;
-            var current = grid.style.getPropertyValue('--cc-live-height') || '180px';
-            startH = parseFloat(current);
-            if (!isFinite(startH)) startH = 180;
-            handle.classList.add('dragging');
-            document.body.style.cursor = 'row-resize';
-            e.preventDefault();
-            window.addEventListener('mousemove', onMove);
-            window.addEventListener('mouseup', onUp, { once: true });
-        }
-        function onMove(e) {
-            if (!dragging) return;
-            var newH = startH + (e.clientY - startY);
-            var maxH = ccMaxLiveHeight(grid);
-            newH = Math.max(CC_MIN_LIVE_HEIGHT, Math.min(maxH, newH));
-            grid.style.setProperty('--cc-live-height', newH + 'px');
-        }
-        function onUp() {
-            if (!dragging) return;
-            dragging = false;
-            handle.classList.remove('dragging');
-            document.body.style.cursor = '';
-            window.removeEventListener('mousemove', onMove);
-            try {
-                var v = grid.style.getPropertyValue('--cc-live-height');
-                if (v) localStorage.setItem(CC_LIVE_HEIGHT_KEY, parseFloat(v));
-            } catch (_) {}
-        }
-        handle.addEventListener('mousedown', onDown);
     }
 
     function attachColResize(handle, grid) {
@@ -9120,176 +9081,6 @@
             } catch (_) {}
         }
         handle.addEventListener('mousedown', onDown);
-    }
-
-    // ----- Live worker activity ("Now" panel) -----------------------------
-    var LIVE_POLL_MS = 5000;
-
-    function loadLive() {
-        // Fetch workers + PTY tails + active tasks + recent events.
-        // PTY tail is the ground-truth signal for "what is this worker
-        // doing" — it's what's actually on screen. State + recent_tools
-        // are derived signals that can lag or be wrong.
-        return Promise.all([
-            fetchJSON('/api/workers').catch(function () { return null; }),
-            fetchJSON('/api/workers/tails?lines=12').catch(function () { return null; }),
-            fetchJSON('/api/tasks?status=active').catch(function () { return null; }),
-            fetchJSON('/api/events?categories=drone,task,queen,worker_state&limit=300').catch(function () { return null; }),
-        ]).then(function (results) {
-            var workers = (results[0] && results[0].workers) || [];
-            var tails = (results[1] && results[1].tails) || {};
-            var tasks = (results[2] && (results[2].tasks || results[2])) || [];
-            var events = (results[3] && (results[3].events || [])) || [];
-            var taskByWorker = {};
-            (Array.isArray(tasks) ? tasks : []).forEach(function (t) {
-                if (!t || !t.assigned_worker) return;
-                var current = taskByWorker[t.assigned_worker];
-                if (!current || (t.number != null && (current.number == null || t.number < current.number))) {
-                    taskByWorker[t.assigned_worker] = t;
-                }
-            });
-            var lastEventByWorker = {};
-            for (var i = 0; i < events.length; i++) {
-                var ev = events[i];
-                if (!ev || !ev.worker) continue;
-                if (lastEventByWorker[ev.worker]) continue;
-                lastEventByWorker[ev.worker] = ev;
-            }
-            workers.forEach(function (w) {
-                var t = taskByWorker[w.name];
-                if (t) {
-                    w.current_task_title = t.title || '';
-                    w.current_task_number = t.number;
-                }
-                var ev = lastEventByWorker[w.name];
-                if (ev) w._last_event = ev;
-                w._pty_tail = tails[w.name] || '';
-            });
-            renderLive(workers);
-        }).catch(function () {});
-    }
-
-    function renderLive(workers) {
-        var body = el('cc-live-body');
-        var countBadge = el('cc-live-count');
-        if (!body) return;
-        // Include any non-sleeping worker. PTY tail is the primary
-        // signal; state classifier accuracy is secondary.
-        var active = workers.filter(function (w) {
-            if (!w || !w.name || w.name === 'queen') return false;
-            var st = String(w.state || '').toUpperCase();
-            return st !== 'SLEEPING';
-        });
-        var rank = { STUNG: 0, WAITING: 1, BUZZING: 2, RESTING: 3 };
-        active.sort(function (a, b) {
-            var ra = rank[String(a.state || '').toUpperCase()] || 9;
-            var rb = rank[String(b.state || '').toUpperCase()] || 9;
-            if (ra !== rb) return ra - rb;
-            return String(a.name).localeCompare(String(b.name));
-        });
-        if (countBadge) {
-            countBadge.textContent = String(active.length);
-            countBadge.setAttribute('data-count', String(active.length));
-        }
-        if (!active.length) {
-            body.innerHTML = '<div class="cc-empty">No active workers — all idle</div>';
-            return;
-        }
-        body.innerHTML = active.map(renderLiveRow).join('');
-    }
-
-    function renderLiveRow(w) {
-        var state = String(w.state || '').toLowerCase();
-        var name = escapeHtml(w.name);
-        var doing = renderLiveDoing(w);
-        var ctx = (typeof w.context_pct === 'number' && w.context_pct > 0.05)
-            ? '<span class="cc-live-ctx' + (w.context_pct > 0.7 ? ' cc-live-ctx-warn' : '') + '">ctx ' + Math.round(w.context_pct * 100) + '%</span>'
-            : '';
-        var since = formatDuration(w.state_duration);
-        var attention = w.needs_operator_input ? '<span class="cc-live-attn" title="Worker is waiting on a prompt">⚠</span>' : '';
-        var tailHtml = renderLivePtyTail(w);
-        return '<div class="cc-live-row" data-action="ccFocusLive" data-worker="' + name + '">'
-            + '<div class="cc-live-row-top">'
-            +   '<span class="cc-live-state state-' + escapeHtml(state) + '">' + escapeHtml(state || '?') + '</span>'
-            +   '<span class="cc-live-name">' + name + '</span>'
-            +   '<span class="cc-live-task">' + attention + doing + '</span>'
-            +   ctx
-            +   '<span class="cc-live-since">' + escapeHtml(since) + '</span>'
-            + '</div>'
-            + tailHtml
-            + '</div>';
-    }
-
-    function renderLivePtyTail(w) {
-        var tail = w._pty_tail;
-        if (!tail) return '';
-        // Show all chrome-filtered lines from the backend (up to 12).
-        // Each line gets its own div so text-overflow ellipsis clamps
-        // per-line. Card height grows naturally to content; the Now
-        // panel itself scrolls when total content exceeds panel
-        // height. Operator gets MORE info when few workers are active
-        // (each card has room to show many lines), less when many
-        // workers (each card clamps, panel scrolls).
-        var lines = tail.split('\n').filter(function (l) { return l && l.trim().length; });
-        if (!lines.length) return '';
-        var keep = lines.map(function (l) {
-            return '<div class="cc-live-pty-line">' + escapeHtml(l.replace(/\s+$/, '')) + '</div>';
-        });
-        return '<div class="cc-live-pty">' + keep.join('') + '</div>';
-    }
-
-    function renderLiveDoing(w) {
-        // Priority order:
-        // 1. Latest tool call (recent_tools, in-memory, present when daemon
-        //    has been running since the worker last ran a hook). Most precise.
-        // 2. Latest buzz_log event for this worker (survives daemon restart;
-        //    falls back when recent_tools is empty after a fresh boot).
-        // 3. Assigned task title.
-        // 4. State-based label.
-        var tools = w.recent_tools;
-        if (Array.isArray(tools) && tools.length) {
-            var last = tools[tools.length - 1];
-            if (last && (last.desc || last.tool)) {
-                var label = last.desc || last.tool;
-                return '▸ ' + escapeHtml(String(label).substring(0, 90));
-            }
-        }
-        if (w._last_event) {
-            var ev = w._last_event;
-            var evText = ev.title || ev.detail || '';
-            if (evText) {
-                // Strip the "lowercase action" prefix that /api/events adds
-                // (e.g., "approved tool_use: Bash …" → just the meaningful tail)
-                var t = String(evText);
-                if (t.length > 100) t = t.substring(0, 100) + '…';
-                return '<span class="text-muted">·</span> ' + escapeHtml(t);
-            }
-        }
-        if (w.current_task_title || w.task_title) {
-            var num = w.current_task_number || w.task_number;
-            var title = escapeHtml(w.current_task_title || w.task_title || '');
-            var prefix = num != null ? '<span class="cc-live-task-num">#' + escapeHtml(String(num)) + '</span>' : '';
-            return prefix + title;
-        }
-        var st = String(w.state || '').toUpperCase();
-        if (st === 'STUNG') return '<span class="text-poppy">crashed — needs revive</span>';
-        if (st === 'WAITING') return '<span class="text-muted">waiting for input</span>';
-        if (st === 'BUZZING') return '<span class="text-muted">working… (no recent activity recorded)</span>';
-        return '<span class="text-muted">—</span>';
-    }
-
-    function formatDuration(seconds) {
-        var s = parseFloat(seconds);
-        if (!isFinite(s) || s < 0) return '';
-        if (s < 60) return Math.round(s) + 's';
-        if (s < 3600) {
-            var m = Math.floor(s / 60);
-            var rem = Math.round(s - m * 60);
-            return rem > 0 ? m + 'm ' + rem + 's' : m + 'm';
-        }
-        var h = Math.floor(s / 3600);
-        var mh = Math.round((s - h * 3600) / 60);
-        return mh > 0 ? h + 'h ' + mh + 'm' : h + 'h';
     }
 
     function ccFocusLive(target) {
@@ -9354,7 +9145,6 @@
         // Refresh the panels — operator is returning to the dashboard.
         loadAttention();
         loadDigest();
-        loadLive();
     }
     window.ccShowDashboard = ccShowDashboard;
 
@@ -9365,7 +9155,6 @@
         ccPost('/api/workers/' + encodeURIComponent(name) + '/force-rest', {}).then(function (r) {
             if (!r.ok && window.showToast) window.showToast('Force-rest failed (' + r.status + ')', true);
             loadAttention();
-            loadLive();
         }).catch(function () {});
     }
 
@@ -9375,7 +9164,6 @@
         ccPost('/api/workers/' + encodeURIComponent(name) + '/revive', {}).then(function (r) {
             if (!r.ok && window.showToast) window.showToast('Revive failed (' + r.status + ')', true);
             loadAttention();
-            loadLive();
         }).catch(function () {});
     }
 
@@ -9461,26 +9249,10 @@
 
         loadAttention().then(maybeNotifyAttention);
         loadDigest();
-        loadLive();
         loadQueenStatusStrip();
         attachDetailBodyObserver();
         applyCcLayoutFromStorage();
         attachCcResizeHandles();
-
-        setInterval(function () {
-            var cc = el('command-center');
-            if (!cc || cc.style.display === 'none') return;
-            loadAttention().then(maybeNotifyAttention);
-            loadQueenStatusStrip();
-        }, POLL_INTERVAL_MS);
-
-        // The Live panel polls faster — it's the operator's "what are
-        // workers doing right now" surface; 15s would feel stale.
-        setInterval(function () {
-            var cc = el('command-center');
-            if (!cc || cc.style.display === 'none') return;
-            loadLive();
-        }, LIVE_POLL_MS);
 
         setInterval(function () {
             var cc = el('command-center');

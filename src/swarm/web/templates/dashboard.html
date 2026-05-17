@@ -131,31 +131,9 @@
                     <div class="cc-digest-strip" id="cc-digest-body">
                         <span class="text-muted text-xs">Loading today's summary…</span>
                     </div>
-                    <!-- Live activity: what each active worker is doing RIGHT NOW -->
-                    <div class="cc-live-panel cc-panel" id="cc-live-panel">
-                        <div class="cc-panel-header">
-                            <span>Now <span class="cc-badge" id="cc-live-count">0</span></span>
-                            <span class="text-muted text-xs">live worker activity · click to focus</span>
-                        </div>
-                        <div class="cc-panel-body" id="cc-live-body">
-                            <div class="cc-empty">Loading…</div>
-                        </div>
-                    </div>
-                    <!-- Drag handle: resize the Now panel's height -->
-                    <div class="cc-row-resize" id="cc-row-resize" title="Drag to resize Now panel"></div>
-                    <!-- Drag handle: resize Attention / Ask Queen split (column 2) -->
-                    <div class="cc-col-resize" id="cc-col-resize" title="Drag to resize Attention / Ask Queen split"></div>
-                    <!-- Attention queue (left primary) -->
-                    <div class="cc-panel cc-attention">
-                        <div class="cc-panel-header">
-                            <span>Attention <span class="cc-badge" id="cc-attention-count">0</span></span>
-                            <span class="text-muted text-xs">click a card to act</span>
-                        </div>
-                        <div class="cc-panel-body" id="cc-attention-list">
-                            <div class="cc-empty">No items needing attention</div>
-                        </div>
-                    </div>
-                    <!-- Queen (right primary): her real live PTY session,
+                    <!-- Drag handle: resize the Queen / Attention split (column 2) -->
+                    <div class="cc-col-resize" id="cc-col-resize" title="Drag to resize Queen / Attention split"></div>
+                    <!-- Queen (LEFT primary): her real live PTY session,
                          embedded. Click her sidebar card for full-screen. -->
                     <div class="cc-panel cc-ask-queen">
                         <div class="cc-panel-header">
@@ -164,6 +142,16 @@
                         </div>
                         <div class="cc-panel-body cc-ask-queen-body">
                             <div id="cc-queen-term-holder" class="cc-queen-term-holder"></div>
+                        </div>
+                    </div>
+                    <!-- Attention queue (RIGHT primary) -->
+                    <div class="cc-panel cc-attention">
+                        <div class="cc-panel-header">
+                            <span>Attention <span class="cc-badge" id="cc-attention-count">0</span></span>
+                            <span class="text-muted text-xs">click a card to act</span>
+                        </div>
+                        <div class="cc-panel-body" id="cc-attention-list">
+                            <div class="cc-empty">No items needing attention</div>
                         </div>
                     </div>
                 </div>

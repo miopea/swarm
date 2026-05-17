@@ -10,6 +10,44 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.17.7] - 2026-05-17
+
+### Changes
+
+- **Command Center: retired the "Now" (live activity) panel.** The
+  per-worker live-activity feed and its row-resize handle added no
+  signal over the worker tiles + Attention queue, so it's removed
+  entirely — JS cluster (`loadLive`/`renderLive*`/poll loop/row-resize
+  geometry/`CC_LIVE_*` storage keys) and the `cc-live-panel` markup +
+  `.cc-live*`/`.cc-row-resize` CSS. `ccFocusLive` is kept (still used by
+  the Attention card). The CC grid collapses to `auto 1fr` and the
+  column-resize handle now sits on the single content row.
+- **Command Center: Queen on the left, Attention on the right.** The
+  Queen's live terminal is now the primary left pane and the Attention
+  queue moved to the right of it (was reversed). The column-resize
+  handle and stored `--cc-attention-pct` split track the new order.
+
+### Fixes
+
+- **Task/bottom panel now remembers its split position.** The persisted
+  `swarm-split` ratio was restored once at page load but wiped on every
+  return to the Command Center: `show()` cleared
+  `gridTemplateRows` with no re-apply (every other panel survives via
+  `applyCcLayoutFromStorage`; the bottom split had no equivalent).
+  Extracted `applySavedSplit()` and `show()` now calls it — clears the
+  stale per-visit inline state first (preserving the original intent),
+  then re-applies the operator's persisted ratio.
+- **Pasting an image into the Queen no longer lands in the last active
+  worker.** The embedded Queen terminal is deliberately not
+  `activeTermWorker`, but `uploadAndPaste()` hard-coded the
+  `inlineTerm`/`inlineTermWs` globals (= last-focused worker), so Queen
+  pastes/drops were routed to whatever worker was active. Refactored to
+  `uploadAndPaste(file, targetTerm, targetWs)`; the per-terminal
+  paste/drop handlers in `createTermEntry` now pass their own
+  `term` + `entry.ws`, so an image pasted into the Queen reaches the
+  Queen's PTY. The global drop-outside fallback still defaults to the
+  active terminal.
+
 ## [2026.5.17.6] - 2026-05-17
 
 ### Features

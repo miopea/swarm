@@ -2282,29 +2282,16 @@
         .command-center { height: 100%; padding: 0.5rem; box-sizing: border-box; overflow: hidden; }
         .command-center-grid {
             display: grid;
+            /* col 1 = Queen, col 2 = splitter, col 3 = Attention.
+               --cc-attention-pct historically named, now sizes col 1
+               (the left/Queen column); the splitter still works. */
             grid-template-columns: var(--cc-attention-pct, 50%) 6px 1fr;
-            grid-template-rows: auto var(--cc-live-height, 360px) 6px 1fr;
+            grid-template-rows: auto 1fr;
             gap: 0.5rem 0;
             height: 100%;
         }
-        .cc-row-resize {
-            grid-column: 1 / span 3; grid-row: 3;
-            cursor: row-resize;
-            background: transparent;
-            position: relative;
-        }
-        .cc-row-resize::after {
-            content: '';
-            position: absolute; left: 50%; top: 50%;
-            transform: translate(-50%, -50%);
-            width: 50px; height: 3px;
-            border-radius: 2px;
-            background: var(--border);
-            transition: background 0.15s, width 0.15s;
-        }
-        .cc-row-resize:hover::after, .cc-row-resize.dragging::after { background: var(--honey); width: 70px; }
         .cc-col-resize {
-            grid-column: 2; grid-row: 4;
+            grid-column: 2; grid-row: 2;
             cursor: col-resize;
             background: transparent;
             position: relative;
@@ -2337,95 +2324,8 @@
             min-height: 0;
         }
         .cc-digest-strip .cc-digest-num { color: var(--leaf); font-weight: 600; }
-        /* Now (live worker activity) spans all columns; height resizable via --cc-live-height */
-        .cc-live-panel { grid-column: 1 / span 3; grid-row: 2; min-height: 60px; }
-        /* Now panel body: two columns of worker cards so each card has
-           room for a 5-6 line PTY tail. minmax(0, 1fr) lets the
-           columns shrink below content width so long PTY lines don't
-           push cards past the viewport edge.
-           grid-auto-rows: minmax(140px, 1fr) lets cards stretch to
-           fill vertical space when there are few workers, while
-           guaranteeing a minimum size so dense grids stay readable. */
-        #cc-live-body {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-            grid-auto-rows: minmax(140px, 1fr);
-            gap: 0.4rem;
-            height: 100%;
-        }
-        .cc-live-row {
-            display: flex; flex-direction: column; gap: 0.15rem;
-            padding: 0.3rem 0.4rem;
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 0.78rem;
-            border: 1px solid var(--border-subtle, rgba(255,255,255,0.05));
-            background: rgba(255,255,255,0.015);
-            min-width: 0;
-            min-height: 0;
-            overflow: hidden;
-        }
-        .cc-live-row:hover {
-            background: rgba(255,255,255,0.04);
-            border-color: var(--border);
-        }
-        .cc-live-row-top {
-            display: flex; align-items: center; gap: 0.6rem;
-            flex-wrap: wrap;
-            min-width: 0;
-        }
-        .cc-live-row-top .cc-live-task {
-            min-width: 0;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .cc-live-pty {
-            font-family: var(--font-mono, monospace);
-            font-size: 0.7rem;
-            color: var(--muted);
-            background: rgba(0,0,0,0.22);
-            border-left: 2px solid var(--border);
-            padding: 0.3rem 0.5rem;
-            margin-top: 0.25rem;
-            border-radius: 2px;
-            overflow: hidden;
-            line-height: 1.4;
-            flex: 1 1 0;
-            min-height: 0;
-            min-width: 0;
-        }
-        .cc-live-pty-line {
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        /* The Now panel body should let each card grow to fill space when
-           there are few workers, and scroll when there are many. */
-        .cc-live-panel .cc-panel-body { display: block; }
-        @media (max-width: 1100px) {
-            #cc-live-body { grid-template-columns: minmax(0, 1fr); }
-        }
-        .cc-live-row:hover { background: rgba(255,255,255,0.04); }
-        .cc-live-state {
-            font-size: 0.6rem; padding: 0.05em 0.4em;
-            border-radius: 2px; min-width: 4.5em; text-align: center;
-            font-weight: 600;
-        }
-        .cc-live-state.state-buzzing  { background: var(--leaf); color: var(--bg); }
-        .cc-live-state.state-waiting  { background: var(--honey); color: var(--bg); }
-        .cc-live-state.state-resting  { background: var(--lavender); color: var(--bg); }
-        .cc-live-state.state-sleeping { background: var(--muted); color: var(--bg); }
-        .cc-live-state.state-stung    { background: var(--poppy); color: var(--bg); }
-        .cc-live-name { font-weight: 600; min-width: 7em; }
-        .cc-live-task { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-        .cc-live-task .cc-live-task-num { color: var(--honey); margin-right: 0.3em; }
-        .cc-live-since { color: var(--muted); font-size: 0.7rem; white-space: nowrap; min-width: 4em; text-align: right; }
-        .cc-live-ctx { color: var(--muted); font-size: 0.7rem; white-space: nowrap; padding: 0 0.3em; }
-        .cc-live-ctx-warn { color: var(--poppy); font-weight: 600; }
-        .cc-live-attn { color: var(--honey); margin-right: 0.3em; font-weight: 600; }
-        .cc-attention   { grid-column: 1; grid-row: 4; min-width: 0; }
-        .cc-ask-queen   { grid-column: 3; grid-row: 4; min-height: 180px; min-width: 0; }
+        .cc-attention   { grid-column: 3; grid-row: 2; min-width: 0; }
+        .cc-ask-queen   { grid-column: 1; grid-row: 2; min-height: 180px; min-width: 0; }
         .cc-attention-card { padding: 0.4rem 0.5rem; border-left: 3px solid var(--honey); background: rgba(255,255,255,0.02); border-radius: 3px; margin-bottom: 0.4rem; }
         .cc-attention-card.cc-kind-queen-escalation { border-left-color: var(--poppy); }
         .cc-attention-card.cc-kind-worker-message { border-left-color: var(--honey); }
@@ -2465,8 +2365,8 @@
                 grid-template-rows: none;
                 grid-auto-rows: auto;
             }
-            .cc-attention, .cc-ask-queen, .cc-digest-strip, .cc-live-panel { grid-column: 1; grid-row: auto; }
-            .cc-row-resize, .cc-col-resize { display: none; }
+            .cc-attention, .cc-ask-queen, .cc-digest-strip { grid-column: 1; grid-row: auto; }
+            .cc-col-resize { display: none; }
             #cc-queen-strip { font-size: 0.65rem !important; gap: 0.5rem !important; }
             #cc-qs-session-wrap { display: none !important; }
         }
