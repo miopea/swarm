@@ -10,6 +10,22 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.17.9] - 2026-05-17
+
+### Fixes
+
+- **Attention queue cards now word-wrap their titles instead of
+  truncating.** `.cc-attention-card-title` forced single-line
+  truncation (`overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap`), so a multi-line escalation title showed as
+  `swarm: Status correction (oper…`. Now `white-space:normal;
+  overflow-wrap:anywhere; word-break:break-word` — the full title wraps
+  to as many lines as it needs (long unbroken tokens like a path/URL
+  wrap too). `.cc-attention-card-meta` gained `white-space:nowrap;
+  flex:0 0 auto` so the `worker · age` meta stays pinned on one line as
+  the title grows downward (the card head is a baseline-aligned flex
+  row). CSS-only, `base.html`.
+
 ## [2026.5.17.8] - 2026-05-17
 
 ### Fixes
