@@ -10,6 +10,35 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.17.8] - 2026-05-17
+
+### Fixes
+
+- **`swarm_park_task` no longer silently parks the wrong task** (#407;
+  follow-up to #406, off the 2026-05-17 public-website incident). #406
+  shipped with no task argument — it parked "the" active task via
+  `current_task_for_worker()`. When a worker legitimately owns >1 ACTIVE
+  task (legal pre-#405-reload / un-reconciled board state), that
+  iterated `_tasks` and set down an arbitrary one: public-website owned
+  #393/#394/#398/#399, intended #399, the tool parked the
+  genuinely-blocked #393 instead. A state-mutating worker tool that
+  silently targets the wrong task corrupts board truth and can
+  de-silence a correctly-blocked task's idle-watcher — the exact skew
+  #405 was meant to end.
+  - `swarm_park_task` now accepts an explicit `task_number`; parks
+    exactly that task (rejected, no mutation, if not owned by the caller
+    or not ACTIVE).
+  - Omitted + caller owns exactly one ACTIVE task → parks it
+    (back-compat with the common #406 case).
+  - Omitted + caller owns >1 ACTIVE task → **REFUSES**, lists the
+    candidate numbers, mutates nothing — never a silent guess.
+  - New `TaskBoard.parkable_tasks_for_worker()` accessor (keeps the
+    `TaskStatus` enum in the board layer; mirrors the existing
+    `current_task_for_worker` / `active_tasks_for_worker` family).
+  - Regression: explicit-id-among-several, omitted+multiple refusal,
+    omitted+single back-compat, not-owned / not-active / invalid-arg
+    rejections, and a faithful public-website-incident-shape test.
+
 ## [2026.5.17.7] - 2026-05-17
 
 ### Changes

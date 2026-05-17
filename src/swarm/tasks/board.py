@@ -726,6 +726,21 @@ class TaskBoard(EventEmitter):
             and t.status in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE)
         ]
 
+    def parkable_tasks_for_worker(self, worker_name: str) -> list[SwarmTask]:
+        """#407: the tasks this worker may park — its OWN tasks that are
+        currently ACTIVE. ``park()`` only transitions ACTIVE→ASSIGNED, so
+        this *is* the parkable set. With #405 INV-1 enforced it is ≤1, but
+        an un-reconciled / pre-reload board can hold several; the park
+        handler refuses to guess among them rather than silently picking
+        one (the 2026-05-17 public-website wrong-task incident)."""
+        with self._lock:
+            snapshot = list(self._tasks.values())
+        return [
+            t
+            for t in snapshot
+            if t.assigned_worker == worker_name and t.status == TaskStatus.ACTIVE
+        ]
+
     def query(
         self,
         *,
