@@ -8908,12 +8908,23 @@
                 + '<button class="btn btn-sm" data-action="ccReplySendBtn" data-thread-id="' + ref + '">Send</button>'
                 + '</div>'
             : '';
+        // The worker's own choice-prompt options, so the operator answers
+        // the actual question inline instead of "Open terminal" + typing.
+        var optBtns = (item.options || []).map(function (o) {
+            return '<button class="btn btn-sm cc-choice-btn" data-action="ccChoose"'
+                + ' data-worker="' + worker + '" data-choice="' + escapeHtml(String(o.value)) + '">'
+                + escapeHtml(String(o.value)) + '. ' + escapeHtml(o.label || '') + '</button>';
+        }).join('');
+        var optsRow = optBtns
+            ? '<div class="cc-attention-card-options">' + optBtns + '</div>'
+            : '';
         return '<div class="cc-attention-card cc-sev-' + sev + ' cc-kind-' + escapeHtml(item.kind) + '" data-thread-id="' + ref + '">'
             + '<div class="cc-attention-card-head">'
             + '<span class="cc-attention-card-title">' + escapeHtml(item.title || '(no title)') + '</span>'
             + '<span class="cc-attention-card-meta">' + (worker || escapeHtml(item.kind)) + ' · ' + ago + '</span>'
             + '</div>'
             + (item.detail ? '<div class="cc-attention-card-detail">' + escapeHtml(item.detail) + '</div>' : '')
+            + optsRow
             + '<div class="cc-attention-card-actions">' + btns + '</div>'
             + replyBox
             + '</div>';
@@ -9255,6 +9266,19 @@
         if (window.showToast) window.showToast('System under pressure — see the Resources panel');
     }
 
+    // Answer a waiting worker's choice prompt inline: send the picked
+    // option number to its PTY (same path the Queen "1"/"2" strip uses),
+    // then re-poll so the resolved card clears.
+    function ccChoose(target) {
+        var name = target && target.dataset && target.dataset.worker;
+        var choice = target && target.dataset && target.dataset.choice;
+        if (!name || choice == null || choice === '') return;
+        ccPost('/api/workers/' + encodeURIComponent(name) + '/send', { message: String(choice) }).then(function (r) {
+            if (!r.ok && window.showToast) window.showToast('Send failed (' + r.status + ')', true);
+            loadAttention();
+        }).catch(function () {});
+    }
+
     // Queen-bottom action strip. The worker toolbar's doAction path keys
     // off the selectedWorker/activeTermWorker globals, and the embedded
     // Queen is deliberately neither — so these reuse the explicit-name
@@ -9297,6 +9321,7 @@
         ccShowDashboard: ccShowDashboard,
         ccFocusLive: ccFocusLive,
         ccForceRest: ccForceRest,
+        ccChoose: ccChoose,
         ccRevive: ccRevive,
         ccApproveProposal: ccApproveProposal,
         ccRejectProposal: ccRejectProposal,

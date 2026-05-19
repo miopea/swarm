@@ -18,6 +18,7 @@ from the live stores and calls this.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -109,6 +110,10 @@ class ExceptionItem:
     age_seconds: float
     updated_at: float
     actions: list[str] = field(default_factory=list)
+    # For worker-waiting on a choice prompt: the worker's own options so
+    # the operator answers inline instead of opening a terminal. Each is
+    # {"value": <keystroke to send>, "label": <display text>}.
+    options: list[dict[str, str]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -123,6 +128,7 @@ class ExceptionItem:
             "age_seconds": round(self.age_seconds, 1),
             "updated_at": self.updated_at,
             "actions": list(self.actions),
+            "options": [dict(o) for o in self.options],
         }
 
 
@@ -178,6 +184,36 @@ def _human_age(seconds: float) -> str:
     if s < 172800:
         return f"{int(s / 3600)}h"
     return f"{int(s / 86400)}d"
+
+
+# Choice-prompt option lines, matching the provider's own detection
+# (swarm.providers.claude `_RE_CURSOR_OPTION` / `_RE_OTHER_OPTION`): a
+# focused option carries a `>`/`❯` cursor; the rest are plain numbered
+# lines. We require BOTH a cursor option and another option before
+# treating the text as a real menu, so coincidental "1." numbering in
+# prose doesn't sprout fake buttons.
+_RE_CHOICE_CURSOR = re.compile(r"^[^\S\n]*[>❯][^\S\n]*(\d+)\.[^\S\n]*(.+?)[^\S\n]*$", re.MULTILINE)
+_RE_CHOICE_PLAIN = re.compile(r"^[^\S\n]+(\d+)\.[^\S\n]*(.+?)[^\S\n]*$", re.MULTILINE)
+
+
+def extract_choice_options(text: str | None) -> list[dict[str, str]]:
+    """Parse a worker's WAITING choice prompt into selectable options.
+
+    Returns ``[{"value": "<digit to send>", "label": "<text>"}, ...]``
+    ordered by option number, or ``[]`` when the text isn't a real
+    numbered choice menu (free-form question, plain prompt, prose).
+    Pure — regex over the captured PTY tail, no provider import.
+    """
+    if not text:
+        return []
+    cursor = _RE_CHOICE_CURSOR.findall(text)
+    plain = _RE_CHOICE_PLAIN.findall(text)
+    if not cursor or not plain:
+        return []
+    by_num: dict[str, str] = {}
+    for num, label in [*plain, *cursor]:  # cursor wins on dup number
+        by_num[num] = " ".join(label.split())[:60]
+    return [{"value": n, "label": by_num[n]} for n in sorted(by_num, key=int)]
 
 
 # Thread kinds that are operator-review intent when present (Queen-authored).
@@ -387,6 +423,10 @@ def _classify_waiting(
     detail = _clip(w.waiting_excerpt) or (
         f"Waiting {_human_age(w.state_duration)} · no autonomous nudge — needs your input."
     )
+    # If the worker is on a numbered choice menu, surface its own
+    # options as buttons so the operator answers inline instead of
+    # opening a terminal to type the pick.
+    options = extract_choice_options(w.waiting_excerpt)
     view.decision.append(
         ExceptionItem(
             id=f"worker:{w.name}",
@@ -400,6 +440,7 @@ def _classify_waiting(
             age_seconds=w.state_duration,
             updated_at=now - w.state_duration,
             actions=["focus", "force_rest"],
+            options=options,
         )
     )
 

@@ -300,4 +300,52 @@ def test_to_dict_shape_matches_frontend_contract():
         "detail",
         "worker_name",
         "actions",
+        "options",
     }
+
+
+# ---------------------------------------------------------------------------
+# Choice-prompt options on a worker-waiting card (answer inline)
+# ---------------------------------------------------------------------------
+
+_MENU = "Do you want to proceed?\n❯ 1. Yes\n  2. Yes, and don't ask again\n  3. No, keep working\n"
+
+
+def test_extract_choice_options_parses_numbered_menu():
+    opts = am.extract_choice_options(_MENU)
+    assert opts == [
+        {"value": "1", "label": "Yes"},
+        {"value": "2", "label": "Yes, and don't ask again"},
+        {"value": "3", "label": "No, keep working"},
+    ]
+
+
+def test_extract_choice_options_empty_for_freeform_text():
+    prose = "No — and to be precise about state: nothing is committed or pushed yet."
+    assert am.extract_choice_options(prose) == []
+    assert am.extract_choice_options(None) == []
+
+
+def test_extract_choice_options_requires_cursor_and_other():
+    # A plain numbered list with no focused (>/❯) option is not a live
+    # menu — mirrors provider.has_choice_prompt; don't sprout fake buttons.
+    assert am.extract_choice_options("1. one\n2. two\n") == []
+
+
+def test_waiting_card_surfaces_worker_choice_options():
+    w = _worker("realtruth", "WAITING", waiting_excerpt=_MENU)
+    view = _run(workers=[w])
+    assert len(view.decision) == 1
+    item = view.decision[0]
+    assert item.kind == "worker-waiting"
+    assert [o["value"] for o in item.options] == ["1", "2", "3"]
+    assert item.options[0]["label"] == "Yes"
+    # Generic verbs stay as the fallback alongside the inline answers.
+    assert item.actions == ["focus", "force_rest"]
+    assert view.to_dict()["decision"][0]["options"][0] == {"value": "1", "label": "Yes"}
+
+
+def test_waiting_card_no_options_when_not_a_menu():
+    w = _worker("realtruth", "WAITING", waiting_excerpt="What should I name the table?")
+    view = _run(workers=[w])
+    assert view.decision[0].options == []

@@ -10,6 +10,27 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.19] - 2026-05-19
+
+### Features
+
+- **Answer a waiting worker's choice prompt from the Attention card.**
+  When a `worker-waiting` exception is a numbered Claude choice menu,
+  the card now renders the worker's *own* options as buttons; clicking
+  one sends that selection straight to the worker's PTY (same path the
+  Queen 1/2 strip uses) instead of forcing "Open terminal" + typing.
+  `attention_model.extract_choice_options()` parses the captured WAITING
+  tail with the same cursor/plain-option shape the Claude provider uses
+  for detection (requires a focused `>`/`❯` option **and** another
+  numbered line, so prose with stray "1." doesn't sprout fake buttons);
+  options ride on `ExceptionItem.options`; the generic Open terminal /
+  Force rest verbs stay as the fallback. Pure + unit-tested; no options
+  parsed ⇒ unchanged behaviour.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.18.3] - 2026-05-18
 
 ### Features
