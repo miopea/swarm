@@ -2075,6 +2075,29 @@ def test_on_drone_entry_broadcasts_system_log(daemon):
     assert payload["detail"] == "test detail"
 
 
+def test_on_drone_entry_tersens_multiline_detail(daemon):
+    """A multi-line crash dump (WORKER_STUNG's 30-line terminal tail) is
+    reduced to a one-line summary in the WS broadcast — the toast is a
+    glance; the full detail still lives in the buzz log."""
+    from swarm.drones.log import LogCategory, SystemEntry
+
+    dump = "worker exited\n--- last output ---\n" + "\n".join(f"line {i}" for i in range(30))
+    entry = SystemEntry(
+        timestamp=0.0,
+        action=SystemAction.WORKER_STUNG,
+        worker_name="api",
+        detail=dump,
+        category=LogCategory.WORKER,
+        is_notification=True,
+    )
+
+    daemon._on_drone_entry(entry)
+
+    payload = daemon.broadcast_ws.call_args_list[0][0][0]
+    assert payload["detail"] == "worker exited"
+    assert "\n" not in payload["detail"]
+
+
 # --- safe_capture_output ---
 
 

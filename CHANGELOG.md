@@ -10,6 +10,30 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.19.2] - 2026-05-19
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Toast notifications can no longer wall the screen.** Toasts are
+  one-line glances, but `showToast` had no text cap, no stack limit and
+  no height clamp, and `WORKER_STUNG` broadcast its full 30-line
+  terminal tail straight into a toast — a burst produced an unreadable
+  paragraph wall while the Attention panel stayed empty (those events
+  are Queen-handled / live in the Activity tab). Now: `toast.js`
+  collapses whitespace and hard-caps to one ellipsised line
+  (`TOAST_MAX_CHARS`), and keeps only the newest `TOAST_MAX_STACK` so a
+  flurry can't fill the viewport; `.toast` CSS clamps height as
+  defense-in-depth; `StatePublisher.on_drone_entry` broadcasts a terse
+  first-line summary (`_terse_detail`) for the `system_log` WS event and
+  the push notification while the **full** multi-line detail still lands
+  in the buzz log for the Activity tab (no diagnostics lost). Per the
+  operator decision, Queen-handled events stay as terse FYI toasts
+  rather than being suppressed.
+
 ## [2026.5.19] - 2026-05-19
 
 ### Features

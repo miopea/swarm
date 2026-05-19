@@ -20,6 +20,22 @@ if TYPE_CHECKING:
 
 _log = get_logger("server.state_publisher")
 
+# Toasts/notifications are one-line glances. Reduce a possibly multi-line
+# log detail (WORKER_STUNG ships a 30-line terminal tail) to its first
+# meaningful line, whitespace-collapsed and length-capped. The full
+# detail still lives in the buzz log for the Activity tab.
+_BROADCAST_DETAIL_MAX = 160
+
+
+def _terse_detail(detail: str | None) -> str:
+    if not detail:
+        return ""
+    for line in str(detail).splitlines():
+        s = " ".join(line.split())
+        if s:
+            return s if len(s) <= _BROADCAST_DETAIL_MAX else s[: _BROADCAST_DETAIL_MAX - 1] + "…"
+    return ""
+
 
 class StatePublisher:
     """Owns worker/task/pipeline state broadcasting and debounce logic.
@@ -208,12 +224,19 @@ class StatePublisher:
     # --- Drone log ---
 
     def on_drone_entry(self, entry: SystemEntry) -> None:
+        # The full multi-line detail (e.g. WORKER_STUNG's 30-line terminal
+        # tail) stays in the buzz log — the Activity tab is its readable
+        # home. The WS broadcast + push feed transient toasts, which are
+        # one-line glances; ship a terse summary so a crash dump can't
+        # become an unreadable wall. refreshBuzzLog() still pulls the
+        # full record for the Activity tab, so no diagnostics are lost.
+        terse = _terse_detail(entry.detail)
         self._broadcast_ws(
             {
                 "type": "system_log",
                 "action": entry.action.value,
                 "worker": entry.worker_name,
-                "detail": entry.detail,
+                "detail": terse,
                 "category": entry.category.value,
                 "is_notification": entry.is_notification,
             }
@@ -223,7 +246,7 @@ class StatePublisher:
             self._push_notification(
                 event=entry.action.value.lower(),
                 worker=entry.worker_name,
-                message=entry.detail,
+                message=terse,
                 priority="high"
                 if entry.action.value
                 in (

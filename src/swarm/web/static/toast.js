@@ -25,6 +25,11 @@
 
     var TOAST_DEDUP_MS = 2000;
     var TOAST_VISIBLE_MS = 3500;
+    // A toast is a glance, not a log. Hard-cap to one ellipsised line so
+    // a 30-line terminal dump / full escalation reason can't become a
+    // wall, and cap how many can stack so a burst can't fill the screen.
+    var TOAST_MAX_CHARS = 160;
+    var TOAST_MAX_STACK = 4;
     var BEE_HAPPY = '/static/bees/happy.svg';
     var BEE_ANGRY = '/static/bees/angry.svg';
 
@@ -38,6 +43,14 @@
         var d = document.createElement('div');
         d.textContent = String(str == null ? '' : str);
         return d.innerHTML;
+    }
+
+    // Collapse newlines/runs of whitespace and clamp to a single short
+    // line. Applied before dedup + display so near-identical multi-line
+    // blobs also collapse and nothing ever renders as a paragraph.
+    function _terse(msg) {
+        var s = String(msg == null ? '' : msg).replace(/\s+/g, ' ').trim();
+        return s.length > TOAST_MAX_CHARS ? s.slice(0, TOAST_MAX_CHARS - 1) + '…' : s;
     }
 
     function _isDuplicate(msg) {
@@ -58,6 +71,7 @@
     }
 
     window.showToast = function (msg, warning, beeSrc) {
+        msg = _terse(msg);
         if (_isDuplicate(msg)) return;
         _announce(msg);
 
@@ -77,6 +91,11 @@
             toast.remove();
         });
         container.appendChild(toast);
+        // Burst guard: keep only the newest TOAST_MAX_STACK so a flurry
+        // (many workers escalating at once) can't wall the viewport.
+        while (container.children.length > TOAST_MAX_STACK) {
+            container.removeChild(container.firstChild);
+        }
         setTimeout(function () { toast.remove(); }, TOAST_VISIBLE_MS);
 
         // Optional dashboard hook for badge counter + title flash.
