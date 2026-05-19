@@ -60,10 +60,32 @@ class OversightHandler:
 
         worker_outputs = self._capture_outputs()
         signals = monitor.collect_signals(self.workers, self.task_board, worker_outputs)
-        if not signals:
-            return False
 
+        # Operator-blocked-stall guard (deterministic, Queen-free so it
+        # survives a rate-limit storm): raise ONE park proposal per
+        # stalled ACTIVE task and suppress this cycle's drift
+        # intervention for those workers (parking IS the intervention).
         had_action = False
+        parked_workers: set[str] = set()
+        for wname, task_id, reason in monitor.collect_park_proposals(self.workers, self.task_board):
+            worker = next((w for w in self.workers if w.name == wname), None)
+            if worker is None:
+                continue
+            self._emit("park_proposal", worker, task_id, reason)
+            self.log.add(
+                SystemAction.PARK_PROPOSED,
+                wname,
+                reason,
+                category=LogCategory.QUEEN,
+                is_notification=True,
+            )
+            parked_workers.add(wname)
+            had_action = True
+
+        signals = [s for s in signals if s.worker_name not in parked_workers]
+        if not signals:
+            return had_action
+
         for signal in signals:
             self.log.add(
                 SystemAction.OVERSIGHT_SIGNAL,

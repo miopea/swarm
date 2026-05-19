@@ -559,3 +559,52 @@ class TestQuery:
         board.add(_quick_task("b"))
         tasks, total = board.query()
         assert total == 2
+
+
+# ---------------------------------------------------------------------------
+# Operator-blocked park (#auto-park): ACTIVE → BLOCKED, stable, unparkable
+# ---------------------------------------------------------------------------
+
+
+class TestBlockForOperator:
+    def _active(self, board: TaskBoard) -> SwarmTask:
+        t = board.add(_quick_task("stalled prog"))
+        board.assign(t.id, "project-root")
+        board.activate(t.id)
+        assert t.status == TaskStatus.ACTIVE
+        return t
+
+    def test_block_for_operator_active_to_blocked(self) -> None:
+        board = _make_board()
+        t = self._active(board)
+        assert board.block_for_operator(t.id, "operator-blocked: awaiting hand-back")
+        assert t.status == TaskStatus.BLOCKED
+        assert "awaiting hand-back" in t.block_reason
+        # No longer in the worker's active set → churn loops skip it.
+        assert t not in board.active_tasks_for_worker("project-root")
+
+    def test_block_for_operator_rejects_non_active(self) -> None:
+        board = _make_board()
+        t = board.add(_quick_task("x"))
+        board.assign(t.id, "project-root")  # ASSIGNED, not ACTIVE
+        assert board.block_for_operator(t.id, "r") is False
+        assert t.status == TaskStatus.ASSIGNED
+        assert board.block_for_operator("nope", "r") is False
+
+    def test_activate_unparks_and_clears_block_reason(self) -> None:
+        board = _make_board()
+        t = self._active(board)
+        board.block_for_operator(t.id, "operator-blocked: waiting")
+        assert board.activate(t.id)  # operator re-dispatch / hand-back
+        assert t.status == TaskStatus.ACTIVE
+        assert t.block_reason == ""
+
+    def test_reconcile_does_not_revert_unbound_blocked(self) -> None:
+        board = _make_board()
+        t = self._active(board)
+        board.block_for_operator(t.id, "operator-blocked")
+        # Worker not "working" and NO blocker binding — reconciler only
+        # mutates ACTIVE tasks, so a BLOCKED task is left untouched.
+        repairs = board.reconcile_invariants(working_workers=set(), blocked_task_ids=set())
+        assert t.status == TaskStatus.BLOCKED
+        assert all(r["task_id"] != t.id for r in repairs)

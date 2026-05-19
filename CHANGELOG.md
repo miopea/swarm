@@ -10,6 +10,37 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.19.4] - 2026-05-19
+
+### Features
+
+- **Operator-blocked-stall guard — a task waiting on the operator no
+  longer churns ACTIVE forever.** Incident: #443 sat `active` while the
+  worker stood by for an operator hand-back; over 12h that drew ~259
+  drone CONTINUED + ~63 oversight interventions + ~46 completion
+  proposals (each a headless Queen call), zero progress. Now the
+  oversight monitor tracks a per-(worker, task) no-progress streak
+  (`task.updated_at` frozen while ACTIVE across N drift-cadence checks —
+  deterministic and Queen-free so it survives a rate-limit storm); at
+  `auto_park_no_progress_checks` (default 3, ~30 min) it raises **one**
+  `ProposalType.PARK` proposal. Approve → `TaskBoard.block_for_operator`
+  parks it to the existing #405 `BLOCKED` hold (idle-watcher, completion
+  loop and reconciler already skip BLOCKED, so every churn loop stands
+  down with no new guards); the worker resumes on the normal operator
+  re-dispatch (`activate` → BLOCKED→ACTIVE, `block_reason` cleared).
+  Dismiss → `auto_park_reject_backoff_seconds` (default 2h) before it
+  can re-propose. Pending-park dedupe (`has_pending_park`) freezes the
+  oversight/completion churn while the proposal awaits the operator. The
+  proposal surfaces as a normal Approve/Dismiss decision card via the
+  existing exception-queue path — deliberately *not* an extra
+  modal/push (single-source-of-truth, no new interruptive notification).
+  New `queen.oversight` knobs: `auto_park_enabled`,
+  `auto_park_no_progress_checks`, `auto_park_reject_backoff_seconds`.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.19.3] - 2026-05-19
 
 ### Features

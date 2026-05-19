@@ -98,6 +98,32 @@ class ProposalCoordinator:
                 worker.name,
             )
 
+    def on_park_proposal(self, worker: Worker, task: SwarmTask, reason: str = "") -> None:
+        """Oversight detected an ACTIVE task stalled with no progress
+        (operator-blocked pattern) — raise ONE park proposal for the
+        operator. Mirrors on_task_done: skip if the worker resumed
+        (BUZZING = real progress, not parked) or a park is already
+        pending (dedupe — the freeze that stops the churn while pending).
+        """
+        if worker.state == WorkerState.BUZZING:
+            _log.info(
+                "Ignoring park_proposal for '%s': worker %s is BUZZING (resumed)",
+                task.title,
+                worker.name,
+            )
+            return
+        if self._proposal_store.has_pending_park(worker.name, task.id):
+            return
+        proposal = AssignmentProposal.park(
+            worker_name=worker.name,
+            task_id=task.id,
+            task_title=task.title,
+            assessment=reason or "stalled on an ACTIVE task with no progress",
+            reasoning=f"No task progress across repeated oversight drift checks "
+            f"while {worker.name} idled — looks blocked on the operator.",
+        )
+        self.queue_proposal(proposal)
+
     def on_task_assigned(self, worker: Worker, task: SwarmTask, message: str = "") -> None:
         """Handle pilot auto-approved task assignment."""
         # When the pilot auto-approved, actually assign & send the message

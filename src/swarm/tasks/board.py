@@ -465,6 +465,27 @@ class TaskBoard(EventEmitter):
             _log.info("task %s parked by %s (%s)", task_id, worker_name, reason[:80])
         return True
 
+    def block_for_operator(self, task_id: str, reason: str) -> bool:
+        """Operator-approved park of a stalled, operator-blocked task:
+        ACTIVE → BLOCKED (off-active, not auto-assignable, owner retained).
+
+        Reuses the #405 BLOCKED hold (``task.block``) — every churn loop
+        (idle-watcher, completion, oversight) already skips BLOCKED, and
+        the reconciler only mutates ACTIVE tasks so an unbound BLOCKED is
+        stable. Returns False if the task no longer exists or isn't
+        ACTIVE (the stall resolved on its own — park is moot). Unpark is
+        the normal operator re-dispatch (``activate`` → BLOCKED→ACTIVE).
+        """
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None or task.status != TaskStatus.ACTIVE:
+                return False
+            task.block(reason)
+            self._persist()
+            self._notify()
+            _log.info("task %s blocked (operator-park): %s", task_id, reason[:80])
+        return True
+
     def reconcile_invariants(
         self,
         *,

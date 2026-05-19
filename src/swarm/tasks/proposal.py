@@ -27,6 +27,10 @@ class ProposalType(str, Enum):
     ASSIGNMENT = "assignment"
     ESCALATION = "escalation"
     COMPLETION = "completion"
+    # An ACTIVE task whose worker has stalled with no progress — looks
+    # blocked on the operator (not on another task). One-click approve
+    # parks it (→ BLOCKED) so the autonomous loops stand down.
+    PARK = "park"
 
 
 class QueenAction(str, Enum):
@@ -107,6 +111,34 @@ class AssignmentProposal:
             task_title=task_title,
             proposal_type=ProposalType.COMPLETION,
             queen_action=QueenAction.COMPLETE_TASK,
+            assessment=assessment,
+            reasoning=reasoning,
+            confidence=confidence,
+        )
+
+    @classmethod
+    def park(
+        cls,
+        *,
+        worker_name: str,
+        task_id: str,
+        task_title: str,
+        assessment: str,
+        reasoning: str = "",
+        confidence: float = 0.9,
+    ) -> AssignmentProposal:
+        """Propose parking a stalled, operator-blocked ACTIVE task.
+
+        Approve → ``TaskBoard`` blocks it (→ BLOCKED, off-active) so the
+        drone/oversight/completion loops stand down until the operator
+        re-dispatches it. Reject → backoff before it can re-propose.
+        """
+        return cls(
+            worker_name=worker_name,
+            task_id=task_id,
+            task_title=task_title,
+            proposal_type=ProposalType.PARK,
+            queen_action=QueenAction.WAIT,
             assessment=assessment,
             reasoning=reasoning,
             confidence=confidence,
@@ -212,6 +244,12 @@ class ProposalStore:
     def has_pending_completion(self, worker_name: str, task_id: str) -> bool:
         return any(
             p.proposal_type == ProposalType.COMPLETION and p.task_id == task_id
+            for p in self.pending_for_worker(worker_name)
+        )
+
+    def has_pending_park(self, worker_name: str, task_id: str) -> bool:
+        return any(
+            p.proposal_type == ProposalType.PARK and p.task_id == task_id
             for p in self.pending_for_worker(worker_name)
         )
 

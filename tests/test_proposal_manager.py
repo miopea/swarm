@@ -315,3 +315,49 @@ class TestFocusGate:
         mgr.on_proposal(proposal)
 
         assert len(store.pending) == 1
+
+
+class TestApproveRejectPark:
+    """Auto-park: PARK proposal approve → board.block_for_operator;
+    reject → pilot.note_park_rejected (backoff)."""
+
+    @pytest.mark.asyncio
+    async def test_approve_park_blocks_task(self):
+        mgr, store, drone_log, get_worker = _make_mgr()
+        mgr._task_board.block_for_operator = MagicMock(return_value=True)
+        p = AssignmentProposal.park(
+            worker_name="api",
+            task_id="t1",
+            task_title="Renovate rollout",
+            assessment="no progress 30m — operator-blocked",
+        )
+        store.add(p)
+        get_worker.return_value = _make_worker("api")
+
+        assert await mgr.approve(p.id) is True
+        mgr._task_board.block_for_operator.assert_called_once()
+        args = mgr._task_board.block_for_operator.call_args[0]
+        assert args[0] == "t1"
+        assert "operator-blocked" in args[1]
+
+    @pytest.mark.asyncio
+    async def test_approve_park_raises_when_no_longer_active(self):
+        from swarm.server.daemon import TaskOperationError
+
+        mgr, store, drone_log, get_worker = _make_mgr()
+        mgr._task_board.block_for_operator = MagicMock(return_value=False)
+        p = AssignmentProposal.park(worker_name="api", task_id="t1", task_title="T", assessment="x")
+        store.add(p)
+        get_worker.return_value = _make_worker("api")
+        with pytest.raises(TaskOperationError):
+            await mgr.approve(p.id)
+
+    def test_reject_park_arms_backoff(self):
+        mgr, store, drone_log, get_worker = _make_mgr()
+        pilot = MagicMock()
+        mgr._get_pilot = MagicMock(return_value=pilot)
+        p = AssignmentProposal.park(worker_name="api", task_id="t1", task_title="T", assessment="x")
+        store.add(p)
+
+        assert mgr.reject(p.id, "not actually blocked") is True
+        pilot.note_park_rejected.assert_called_once_with("api", "t1")

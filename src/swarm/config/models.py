@@ -180,6 +180,15 @@ class OversightConfig:
     # (or skip entirely) so a periodic drift signal can't interrupt an
     # interactive session. Set to 0 to disable the gate.
     operator_engagement_minutes: float = 10.0
+    # Auto-park: after this many consecutive drift checks with NO task
+    # progress (task.updated_at frozen while ACTIVE), raise ONE park
+    # proposal instead of intervening again — the operator-blocked-stall
+    # guard (a task waiting on the operator must not churn forever).
+    # auto_park_enabled=False disables. After a rejected park proposal,
+    # don't re-propose for the same (worker,task) for the backoff window.
+    auto_park_enabled: bool = True
+    auto_park_no_progress_checks: int = 3
+    auto_park_reject_backoff_seconds: float = 7200.0
 
 
 @dataclass

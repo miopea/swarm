@@ -944,6 +944,13 @@ class DronePilot(EventEmitter):
         """Remove a task from the proposed-completions tracker."""
         self._task_lifecycle.clear_proposed_completion(task_id)
 
+    def note_park_rejected(self, worker_name: str, task_id: str) -> None:
+        """Operator rejected a park proposal — tell oversight to back off
+        re-proposing park for this (worker, task) for the configured
+        window (and reset its no-progress streak)."""
+        if self._oversight is not None:
+            self._oversight.note_park_rejected(worker_name, task_id)
+
     def record_completion_verdict(self, task_id: str, done: bool, confidence: float) -> None:
         """Record Queen's latest completion verdict so the cooldown can
         extend when the Queen is confidently sure the worker hasn't finished.

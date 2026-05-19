@@ -296,6 +296,7 @@ class ProposalManager:
         handlers = {
             ProposalType.ESCALATION: self._approve_escalation,
             ProposalType.COMPLETION: self._approve_completion,
+            ProposalType.PARK: self._approve_park,
         }
         handler = handlers.get(proposal.proposal_type, self._approve_assignment)
         log_detail = await handler(proposal, worker)
@@ -308,7 +309,8 @@ class ProposalManager:
             pilot.clear_escalation(proposal.worker_name)
         cat = (
             LogCategory.QUEEN
-            if proposal.proposal_type in (ProposalType.ESCALATION, ProposalType.COMPLETION)
+            if proposal.proposal_type
+            in (ProposalType.ESCALATION, ProposalType.COMPLETION, ProposalType.PARK)
             else LogCategory.DRONE
         )
         self._drone_log.add(DroneAction.APPROVED, proposal.worker_name, log_detail, category=cat)
@@ -346,6 +348,22 @@ class ProposalManager:
         resolution = proposal.assessment or proposal.reasoning or ""
         self._complete_task(proposal.task_id, actor="queen", resolution=resolution)
         return f"task completed: {proposal.task_title}"
+
+    async def _approve_park(
+        self,
+        proposal: AssignmentProposal,
+        worker: Worker,
+        **_kwargs: object,
+    ) -> str:
+        """Park a stalled, operator-blocked task: ACTIVE → BLOCKED so the
+        autonomous loops stand down. Returns log detail string."""
+        from swarm.server.daemon import TaskOperationError
+
+        reason = f"operator-blocked: {proposal.assessment or proposal.reasoning or 'stalled'}"
+        if not self._task_board.block_for_operator(proposal.task_id, reason):
+            # Stall resolved before approval (task left ACTIVE) — park moot.
+            raise TaskOperationError(f"Cannot park '{proposal.task_title}' — task no longer ACTIVE")
+        return f"task parked (operator-blocked): {proposal.task_title}"
 
     async def _approve_assignment(
         self,
@@ -388,9 +406,14 @@ class ProposalManager:
             pilot.clear_escalation(proposal.worker_name)
             if proposal.proposal_type == ProposalType.COMPLETION and proposal.task_id:
                 pilot.clear_proposed_completion(proposal.task_id)
+            if proposal.proposal_type == ProposalType.PARK and proposal.task_id:
+                # Operator says "not operator-blocked" — back off so
+                # oversight doesn't immediately re-propose the same park.
+                pilot.note_park_rejected(proposal.worker_name, proposal.task_id)
         cat = (
             LogCategory.QUEEN
-            if proposal.proposal_type in (ProposalType.ESCALATION, ProposalType.COMPLETION)
+            if proposal.proposal_type
+            in (ProposalType.ESCALATION, ProposalType.COMPLETION, ProposalType.PARK)
             else LogCategory.DRONE
         )
         detail = f"proposal rejected: {proposal.task_title}"

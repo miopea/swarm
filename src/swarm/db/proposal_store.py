@@ -109,6 +109,16 @@ class SqliteProposalStore(BaseStore):
             )
             return row is not None
 
+    def has_pending_park(self, worker_name: str, task_id: str) -> bool:
+        with self._lock:
+            row = self._db.fetchone(
+                "SELECT 1 FROM proposals WHERE status = 'pending' "
+                "AND worker_name = ? AND task_id = ? "
+                "AND proposal_type = 'park' LIMIT 1",
+                (worker_name, task_id),
+            )
+            return row is not None
+
     def expire_old(self, max_age: float | None = None) -> int:
         threshold = max_age if max_age is not None else _MAX_PROPOSAL_AGE
         cutoff = time.time() - threshold

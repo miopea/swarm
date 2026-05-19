@@ -155,6 +155,10 @@ class SwarmTask:
 
     def start(self) -> None:
         self.status = TaskStatus.ACTIVE
+        # Resuming clears any stale hold reason — covers the operator
+        # unpark of an operator-blocked task (BLOCKED→ACTIVE via
+        # board.activate) and any #405 blocker-binding resume.
+        self.block_reason = ""
         self.updated_at = time.time()
 
     def block(self, reason: str = "") -> None:

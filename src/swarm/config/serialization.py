@@ -38,6 +38,9 @@ def _serialize_queen(q: QueenConfig) -> dict[str, Any]:
         "drift_check_interval_minutes": q.oversight.drift_check_interval_minutes,
         "max_calls_per_hour": q.oversight.max_calls_per_hour,
         "operator_engagement_minutes": q.oversight.operator_engagement_minutes,
+        "auto_park_enabled": q.oversight.auto_park_enabled,
+        "auto_park_no_progress_checks": q.oversight.auto_park_no_progress_checks,
+        "auto_park_reject_backoff_seconds": q.oversight.auto_park_reject_backoff_seconds,
     }
     return d
 

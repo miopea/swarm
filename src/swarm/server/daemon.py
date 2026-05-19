@@ -692,6 +692,7 @@ class SwarmDaemon(EventEmitter):
         self.pilot.set_oversight(self._oversight_monitor)
         self.pilot.on("oversight_alert", self._on_oversight_alert)
         self.pilot.on("operator_terminal_approval", self._on_operator_terminal_approval)
+        self.pilot.on("park_proposal", self._on_park_proposal)
 
         self.pilot.start()
         self.pilot.enabled = enabled
@@ -965,6 +966,15 @@ class SwarmDaemon(EventEmitter):
     def _on_task_done(self, worker: Worker, task: SwarmTask, resolution: str = "") -> None:
         """Handle a task that appears complete — create a proposal for user approval."""
         self.proposal_coord.on_task_done(worker, task, resolution)
+
+    def _on_park_proposal(self, worker: Worker, task_id: str, reason: str = "") -> None:
+        """Oversight detected an operator-blocked stall — raise a park
+        proposal. Resolve the task; if it left the board / is no longer
+        ACTIVE the stall self-resolved, so there's nothing to park."""
+        task = self.task_board.get(task_id) if task_id else None
+        if task is None or task.status != TaskStatus.ACTIVE:
+            return
+        self.proposal_coord.on_park_proposal(worker, task, reason)
 
     def _worker_task_map(self) -> dict[str, str]:
         """Return {worker_name: task_title} for all assigned/in-progress tasks."""

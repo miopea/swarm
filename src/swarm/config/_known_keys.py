@@ -89,6 +89,9 @@ _KNOWN_OVERSIGHT_KEYS = {
     "drift_check_interval_minutes",
     "max_calls_per_hour",
     "operator_engagement_minutes",
+    "auto_park_enabled",
+    "auto_park_no_progress_checks",
+    "auto_park_reject_backoff_seconds",
 }
 
 _KNOWN_NOTIFY_KEYS = {

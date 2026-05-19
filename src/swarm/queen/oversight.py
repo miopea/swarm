@@ -78,6 +78,13 @@ class OversightMonitor:
         # Track interventions for status reporting
         self._interventions: list[dict[str, Any]] = field(default_factory=list)
         self._interventions = []
+        # Auto-park (operator-blocked-stall guard): per (worker, task_id)
+        # consecutive no-progress drift cycles, last-seen task.updated_at,
+        # own cadence timer, and post-reject backoff.
+        self._no_progress_streak: dict[tuple[str, str], int] = {}
+        self._last_task_updated: dict[tuple[str, str], float] = {}
+        self._last_stall_check: dict[str, float] = {}
+        self._park_reject_backoff: dict[tuple[str, str], float] = {}
 
     @property
     def enabled(self) -> bool:
@@ -378,7 +385,95 @@ if there is clear evidence of being stuck or drifting."""
             "recent_interventions": self._interventions[-10:],
         }
 
+    def note_park_rejected(self, worker_name: str, task_id: str) -> None:
+        """Operator rejected a park proposal — back off re-proposing for
+        ``(worker, task)`` for ``auto_park_reject_backoff_seconds`` and
+        reset its no-progress streak."""
+        key = (worker_name, task_id)
+        self._park_reject_backoff[key] = time.time()
+        self._no_progress_streak.pop(key, None)
+
+    def collect_park_proposals(
+        self,
+        workers: list[Worker],
+        task_board: TaskBoard | None,
+    ) -> list[tuple[str, str, str]]:
+        """Operator-blocked-stall guard. Returns ``(worker, task_id,
+        reason)`` for each ACTIVE task that has shown NO progress
+        (``task.updated_at`` frozen) across ``auto_park_no_progress_checks``
+        consecutive drift-cadence checks — the signal that a worker is
+        standing by on something blocked on the operator. Deterministic
+        and Queen-free so it still fires during an oversight rate-limit
+        storm (the #443 failure mode). The caller raises ONE park
+        proposal per entry; ``has_pending_park`` dedupes while pending.
+        """
+        if not self._config.auto_park_enabled or task_board is None:
+            return []
+        now = time.time()
+        interval_s = self._config.drift_check_interval_minutes * 60
+        out: list[tuple[str, str, str]] = []
+        for worker in workers:
+            cand = self._park_candidate_for(worker, task_board, now, interval_s)
+            if cand is not None:
+                out.append(cand)
+        return out
+
+    def _park_candidate_for(
+        self,
+        worker: Worker,
+        task_board: TaskBoard,
+        now: float,
+        interval_s: float,
+    ) -> tuple[str, str, str] | None:
+        from swarm.tasks.task import TaskStatus
+
+        active = task_board.active_tasks_for_worker(worker.name)
+        task = active[0] if active else None
+        if task is None or task.status != TaskStatus.ACTIVE:
+            # Not ACTIVE → cannot be an operator-blocked stall; forget any
+            # streak so a later ACTIVE stint starts clean.
+            for k in [k for k in self._no_progress_streak if k[0] == worker.name]:
+                self._no_progress_streak.pop(k, None)
+                self._last_task_updated.pop(k, None)
+            return None
+        # Own cadence (same rhythm as drift; independent timestamp).
+        if now - self._last_stall_check.get(worker.name, 0.0) < interval_s:
+            return None
+        self._last_stall_check[worker.name] = now
+        key = (worker.name, task.id)
+        rej = self._park_reject_backoff.get(key)
+        if rej is not None and now - rej < self._config.auto_park_reject_backoff_seconds:
+            return None
+        prev = self._last_task_updated.get(key)
+        self._last_task_updated[key] = task.updated_at
+        if prev is None or task.updated_at > prev:
+            self._no_progress_streak[key] = 0  # progress (or first observation)
+            return None
+        streak = self._no_progress_streak.get(key, 0) + 1
+        self._no_progress_streak[key] = streak
+        if streak < self._config.auto_park_no_progress_checks:
+            return None
+        # Threshold crossed — propose park. Reset the streak; the pending
+        # proposal (has_pending_park) is the steady-state dedupe, and a
+        # reject arms the backoff.
+        self._no_progress_streak[key] = 0
+        mins = int(streak * interval_s / 60)
+        reason = (
+            f"No task progress across {streak} oversight checks (~{mins}m) while "
+            f"{worker.name} idled on ACTIVE task '{task.title}' — looks blocked "
+            "on the operator (not on another task)."
+        )
+        return (worker.name, task.id, reason)
+
     def reset_worker(self, worker_name: str) -> None:
         """Reset oversight state for a worker (e.g., after state change)."""
         self._buzzing_notified.discard(worker_name)
         self._last_drift_check.pop(worker_name, None)
+        self._last_stall_check.pop(worker_name, None)
+        for store in (
+            self._no_progress_streak,
+            self._last_task_updated,
+            self._park_reject_backoff,
+        ):
+            for k in [k for k in store if k[0] == worker_name]:
+                store.pop(k, None)

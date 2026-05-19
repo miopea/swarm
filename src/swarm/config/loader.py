@@ -349,6 +349,11 @@ def _parse_config(path: Path) -> HiveConfig:
         drift_check_interval_minutes=oversight_data.get("drift_check_interval_minutes", 10.0),
         max_calls_per_hour=oversight_data.get("max_calls_per_hour", 6),
         operator_engagement_minutes=oversight_data.get("operator_engagement_minutes", 10.0),
+        auto_park_enabled=oversight_data.get("auto_park_enabled", True),
+        auto_park_no_progress_checks=oversight_data.get("auto_park_no_progress_checks", 3),
+        auto_park_reject_backoff_seconds=oversight_data.get(
+            "auto_park_reject_backoff_seconds", 7200.0
+        ),
     )
     queen = QueenConfig(
         cooldown=queen_data.get("cooldown", 30.0),
