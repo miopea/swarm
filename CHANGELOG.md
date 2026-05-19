@@ -10,6 +10,26 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.19.3] - 2026-05-19
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **WAITING workers poll at the base cadence (fast resume detection).**
+  `compute_backoff` applied the same idle exponential backoff to WAITING
+  as to truly-idle RESTING workers, so a WAITING worker was polled as
+  rarely as every `max_idle_interval` (30s default) and memory pressure
+  doubled it again — WAITING→BUZZING took 30–60s to show after the
+  worker actually resumed. A WAITING worker is the one *most* likely to
+  resume imminently (it was just answered/unblocked), so it now polls at
+  the flat base interval (`poll_interval_waiting or base`), exempt from
+  both the idle-streak multiplier and the memory-pressure doubling.
+  Focus still only speeds it up further; RESTING/BUZZING backoff
+  unchanged. Resume is now observed in ~base seconds (5s default).
+
 ## [2026.5.19.2] - 2026-05-19
 
 ### Features
