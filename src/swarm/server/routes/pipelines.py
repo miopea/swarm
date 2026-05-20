@@ -41,6 +41,10 @@ def register(app: web.Application) -> None:
         "/api/pipelines/{pipeline_id}/steps/{step_id}/skip",
         handle_skip_step,
     )
+    app.router.add_post(
+        "/api/pipelines/{pipeline_id}/steps/{step_id}/retry",
+        handle_retry_step,
+    )
 
 
 def _get_engine(request: web.Request) -> PipelineEngine:
@@ -296,3 +300,25 @@ async def handle_skip_step(request: web.Request) -> web.Response:
             "ready_steps": [s.id for s in ready],
         }
     )
+
+
+async def handle_retry_step(request: web.Request) -> web.Response:
+    """Reset a FAILED step plus its FAILED downstream and re-fire (P3).
+
+    Maps ``engine.retry_step``'s exceptions onto HTTP semantics:
+      * pipeline/step not found → 404
+      * step is not in FAILED state → 409 (operator can't retry a step
+        that isn't currently failed; we surface this rather than
+        silently no-op'ing so the UI can show a useful message)
+    """
+    engine = _get_engine(request)
+    pipeline_id = request.match_info["pipeline_id"]
+    step_id = request.match_info["step_id"]
+    try:
+        reset_ids = engine.retry_step(pipeline_id, step_id)
+    except ValueError as e:
+        message = str(e)
+        if "not found" in message:
+            return json_error(message, 404)
+        return json_error(message, 409)
+    return web.json_response({"ok": True, "reset": reset_ids})

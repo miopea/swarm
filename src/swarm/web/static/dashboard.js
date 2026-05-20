@@ -140,6 +140,12 @@
         createPipeline: function() { submitPipeline(); },  // legacy alias
         submitPipeline: function() { submitPipeline(); },
         showEditPipeline: function(el) { showEditPipeline(el.dataset.pipelineId); },
+        showPipelineDetail: function(el) { showPipelineDetail(el.dataset.pipelineId); },
+        hidePipelineDetail: function() { hidePipelineDetail(); },
+        editFromDetail: function() { editFromDetail(); },
+        retryStep: function(el) { retryStep(el.dataset.pipelineId, el.dataset.stepId); },
+        openLinkedTask: function(el) { openLinkedTask(el.dataset.taskId); },
+        copyStepResult: function(el) { copyStepResult(el.dataset.stepId); },
         toggleResourcePopover: function(el, e) { e.stopPropagation(); toggleResourcePopover(); },
         toggleBottomPanel: function() { toggleBottomPanel(); },
         toggleFocusMode: function() { toggleFocusMode(); },
@@ -556,6 +562,11 @@
                 break;
             case 'pipelines_changed':
                 refreshPipelines();
+                // P3: re-render the detail view if it's currently open
+                // and viewing this pipeline. No-op when no detail is open.
+                if (typeof window._pldOnPipelinesChanged === 'function') {
+                    window._pldOnPipelinesChanged();
+                }
                 break;
             case 'proposal_created':
                 // FYI toast only — a fresh proposal sits in the autonomous
@@ -1340,24 +1351,31 @@
                 }
                 progressPct = Math.round((completedSteps / p.steps.length) * 100);
             }
-            html += '<div class="task-item" data-pipeline-id="' + p.id + '">';
+            // P3: whole row opens the detail view (buttons keep their own
+            // handlers and stop propagation via the action delegator).
+            html += '<div class="task-item pipeline-clickable" data-pipeline-id="' + p.id + '" data-action="showPipelineDetail">';
             html += '<div class="flex-center gap-sm">';
             html += '<span class="' + statusClass + ' fw-bold">' + statusIcon + '</span>';
             html += '<span class="task-title">' + escapeHtml(p.name) + '</span>';
             html += '<span class="conf-badge ' + statusClass + '" style="background:var(--panel);border:1px solid var(--border)">' + p.status + '</span>';
             html += '<span class="text-muted text-xs">' + progressPct + '%</span>';
+            // Inline action buttons must stopPropagation so they don't
+            // also fire the row's data-action="showPipelineDetail" (added
+            // in P3 to make the whole card the detail-open target).
             if (p.status === 'draft') {
-                html += '<button class="btn btn-sm btn-approve" onclick="pipelineAction(\'start\',\'' + p.id + '\')">Start</button>';
+                html += '<button class="btn btn-sm btn-approve" onclick="event.stopPropagation();pipelineAction(\'start\',\'' + p.id + '\')">Start</button>';
             } else if (p.status === 'running') {
-                html += '<button class="btn btn-sm btn-secondary" onclick="pipelineAction(\'pause\',\'' + p.id + '\')">Pause</button>';
+                html += '<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();pipelineAction(\'pause\',\'' + p.id + '\')">Pause</button>';
             } else if (p.status === 'paused') {
-                html += '<button class="btn btn-sm btn-approve" onclick="pipelineAction(\'resume\',\'' + p.id + '\')">Resume</button>';
+                html += '<button class="btn btn-sm btn-approve" onclick="event.stopPropagation();pipelineAction(\'resume\',\'' + p.id + '\')">Resume</button>';
             }
             // Edit allowed while step graph is mutable (matches engine guard).
+            // Inline onclick (rather than data-action) to keep the
+            // stopPropagation contract uniform with the other action buttons.
             if (p.status === 'draft' || p.status === 'paused') {
-                html += '<button class="btn btn-sm btn-secondary" data-action="showEditPipeline" data-pipeline-id="' + p.id + '">Edit</button>';
+                html += '<button class="btn btn-sm btn-secondary" onclick="event.stopPropagation();showEditPipeline(\'' + p.id + '\')">Edit</button>';
             }
-            html += '<button class="btn btn-sm btn-secondary btn-log" onclick="pipelineAction(\'delete\',\'' + p.id + '\')">&#x2715;</button>';
+            html += '<button class="btn btn-sm btn-secondary btn-log" onclick="event.stopPropagation();pipelineAction(\'delete\',\'' + p.id + '\')">&#x2715;</button>';
             html += '</div>';
             if (p.steps && p.steps.length) {
                 html += '<div class="context-bar" style="max-width:100%;margin:0.3rem 0"><div class="context-bar-fill" style="width:' + progressPct + '%"></div></div>';
@@ -2208,6 +2226,346 @@
     });
     var _plTzSel = document.getElementById('pl-timezone');
     if (_plTzSel) _plTzSel.addEventListener('change', _plUpdateSchedulePreview);
+
+    // -----------------------------------------------------------------------
+    // P3: Pipeline detail view
+    // -----------------------------------------------------------------------
+    //
+    // - Click anywhere on a pipeline card opens this read-only inspector.
+    // - Step list grouped by execution wave (Kahn-style levelization).
+    // - For each step: status + duration + linked task chip + error +
+    //   pretty-printed result. shell_command results get stdout/stderr/
+    //   returncode pulled out above the raw JSON.
+    // - Retry button on FAILED steps cascade-resets FAILED downstream.
+    // - Re-renders on `pipelines_changed` WS events for live updates.
+
+    var _pldViewingId = null;     // pipeline id currently on screen, or null
+    var _pldLastData = null;      // last response from /api/pipelines/{id}
+    var _pldResultCache = {};     // step_id → raw result dict (for copy)
+
+    function _pldComputeWaves(steps) {
+        // Kahn-style: wave 0 = steps with no deps. Wave N = steps whose
+        // deps all live in earlier waves. A step with a missing dep ID
+        // is placed in wave 0 — we don't drop it, we surface it.
+        var byId = {};
+        steps.forEach(function(s) { byId[s.id] = s; });
+        var waveOf = {};
+        function depth(id, stack) {
+            if (waveOf[id] !== undefined) return waveOf[id];
+            if (stack && stack.indexOf(id) >= 0) return 0;  // defensive
+            var s = byId[id];
+            if (!s || !s.depends_on || !s.depends_on.length) {
+                waveOf[id] = 0;
+                return 0;
+            }
+            var max = -1;
+            (s.depends_on || []).forEach(function(d) {
+                if (!byId[d]) return;  // dangling dep; skip
+                max = Math.max(max, depth(d, (stack || []).concat(id)));
+            });
+            waveOf[id] = max + 1;
+            return waveOf[id];
+        }
+        steps.forEach(function(s) { depth(s.id); });
+        var waves = {};
+        steps.forEach(function(s) {
+            var w = waveOf[s.id] || 0;
+            if (!waves[w]) waves[w] = [];
+            waves[w].push(s);
+        });
+        var levels = Object.keys(waves).map(function(k) { return parseInt(k, 10); }).sort(function(a, b) { return a - b; });
+        return levels.map(function(l) { return { level: l, steps: waves[l] }; });
+    }
+
+    function _pldDurationLabel(step) {
+        if (!step.started_at) return '';
+        var end = step.completed_at || (Date.now() / 1000);
+        var seconds = Math.max(0, Math.floor(end - step.started_at));
+        if (seconds < 60) return seconds + 's';
+        if (seconds < 3600) {
+            var m = Math.floor(seconds / 60), s = seconds % 60;
+            return m + 'm ' + s + 's';
+        }
+        var h = Math.floor(seconds / 3600), rm = Math.floor((seconds % 3600) / 60);
+        return h + 'h ' + rm + 'm';
+    }
+
+    function _pldFmtTime(epoch) {
+        if (!epoch) return '';
+        try { return new Date(epoch * 1000).toLocaleString(); }
+        catch (e) { return ''; }
+    }
+
+    function _pldStatusIcon(status) {
+        return status === 'completed' ? '✓'
+            : status === 'in_progress' ? '●'
+            : status === 'failed' ? '✗'
+            : status === 'skipped' ? '⊘'
+            : status === 'ready' ? '◎'
+            : '○';
+    }
+
+    function _pldRenderResult(step) {
+        // Pretty JSON + Copy button. For shell_command, surface
+        // stdout/stderr/returncode as labeled blocks above the raw JSON
+        // since that's the common case.
+        if (!step.result || !Object.keys(step.result).length) return '';
+        _pldResultCache[step.id] = step.result;
+        var out = '';
+        var r = step.result;
+        var isShell = (step.service === 'shell_command') ||
+            ('stdout' in r && 'returncode' in r);
+        if (isShell) {
+            if (r.stdout) {
+                out += '<div class="pld-result-block"><div class="pld-result-label">stdout</div>'
+                    + '<div class="pld-result-pre">' + escapeHtml(String(r.stdout)) + '</div></div>';
+            }
+            if (r.stderr) {
+                out += '<div class="pld-result-block"><div class="pld-result-label">stderr</div>'
+                    + '<div class="pld-result-pre">' + escapeHtml(String(r.stderr)) + '</div></div>';
+            }
+            if (r.returncode !== undefined) {
+                out += '<div class="pld-result-block"><div class="pld-result-label">returncode</div>'
+                    + '<div class="pld-result-pre">' + escapeHtml(String(r.returncode)) + '</div></div>';
+            }
+        }
+        var raw;
+        try { raw = JSON.stringify(r, null, 2); } catch (e) { raw = '[unserializable]'; }
+        out += '<div class="pld-result-block">'
+            + '<div class="flex-between"><div class="pld-result-label">result (JSON)</div>'
+            + '<button class="btn btn-xs btn-secondary" data-action="copyStepResult" data-step-id="' + escapeHtml(step.id) + '">Copy</button></div>'
+            + '<div class="pld-result-pre">' + escapeHtml(raw) + '</div></div>';
+        return out;
+    }
+
+    function _pldRenderStep(step, pipelineId) {
+        var statusClass = 'status-' + step.status;
+        var icon = _pldStatusIcon(step.status);
+        var html = '<div class="pld-step ' + statusClass + '">';
+        html += '<div class="pld-step-header">';
+        html += '<span>' + icon + '</span>';
+        html += '<span class="pld-step-title">' + escapeHtml(step.name) + '</span>';
+        html += '<span class="conf-badge" style="background:var(--panel);border:1px solid var(--border)">' + escapeHtml(step.step_type) + '</span>';
+        html += '<span class="conf-badge" style="background:var(--panel);border:1px solid var(--border)">' + escapeHtml(step.status) + '</span>';
+        var dur = _pldDurationLabel(step);
+        if (dur) html += '<span class="pld-step-meta">' + dur + '</span>';
+        if (step.task_id) {
+            html += '<span class="pld-task-chip" data-action="openLinkedTask" data-task-id="' + escapeHtml(step.task_id) + '" title="Jump to task">#' + escapeHtml(step.task_id) + '</span>';
+        }
+        if (step.assigned_worker) {
+            html += '<span class="pld-step-meta">→ ' + escapeHtml(step.assigned_worker) + '</span>';
+        }
+        html += '</div>';
+        if (step.depends_on && step.depends_on.length) {
+            html += '<div class="pld-step-meta pld-dep-list">← blocked by ' + step.depends_on.map(escapeHtml).join(', ') + '</div>';
+        }
+        if (step.description) {
+            html += '<div class="pld-step-body">' + escapeHtml(step.description) + '</div>';
+        }
+        if (step.step_type === 'automated' && step.service) {
+            html += '<div class="pld-step-body pld-step-meta">service: ' + escapeHtml(step.service);
+            if (step.config && Object.keys(step.config).length) {
+                var cfg;
+                try { cfg = JSON.stringify(step.config, null, 2); } catch (e) { cfg = '[unserializable]'; }
+                html += '<div class="pld-result-block"><div class="pld-result-label">config</div>'
+                    + '<div class="pld-result-pre">' + escapeHtml(cfg) + '</div></div>';
+            }
+            html += '</div>';
+        }
+        if (step.schedule) {
+            html += '<div class="pld-step-meta">schedule: ' + escapeHtml(step.schedule) + '</div>';
+        }
+        if (step.started_at) {
+            html += '<div class="pld-step-meta">started: ' + escapeHtml(_pldFmtTime(step.started_at));
+            if (step.completed_at) html += '  ·  finished: ' + escapeHtml(_pldFmtTime(step.completed_at));
+            html += '</div>';
+        }
+        if (step.error) {
+            html += '<div class="pld-step-error">' + escapeHtml(String(step.error)) + '</div>';
+        }
+        html += _pldRenderResult(step);
+        // Per-step actions: Retry (FAILED only), Skip (READY/IN_PROGRESS),
+        // Mark done (human steps in READY/IN_PROGRESS) — mirrors what the
+        // list view already does for skip/done.
+        var actions = [];
+        if (step.status === 'failed') {
+            actions.push('<button class="btn btn-sm btn-approve" data-action="retryStep" data-pipeline-id="' + escapeHtml(pipelineId) + '" data-step-id="' + escapeHtml(step.id) + '">Retry</button>');
+        }
+        if (step.status === 'ready' || step.status === 'in_progress') {
+            if (step.step_type === 'human') {
+                actions.push('<button class="btn btn-sm btn-approve" onclick="completeStep(\'' + pipelineId + '\',\'' + step.id + '\')">Mark done</button>');
+            }
+            actions.push('<button class="btn btn-sm btn-secondary" onclick="skipStep(\'' + pipelineId + '\',\'' + step.id + '\')">Skip</button>');
+        }
+        if (actions.length) {
+            html += '<div class="pld-step-actions">' + actions.join('') + '</div>';
+        }
+        html += '</div>';
+        return html;
+    }
+
+    function _pldRender(data) {
+        _pldLastData = data;
+        _pldResultCache = {};
+        var body = document.getElementById('pld-body');
+        if (!body) return;
+        // Title bar
+        document.getElementById('pld-title').textContent = data.name || 'Pipeline';
+        var editBtn = document.getElementById('pld-edit-btn');
+        if (editBtn) {
+            editBtn.style.display = (data.status === 'draft' || data.status === 'paused') ? '' : 'none';
+        }
+        // Header — pipeline metadata
+        var header = '<div class="pld-header">';
+        if (data.description) header += '<div class="text-sm mb-sm">' + escapeHtml(data.description) + '</div>';
+        var headerBits = [];
+        headerBits.push('status: <strong>' + escapeHtml(data.status) + '</strong>');
+        var pctDone = Math.round((data.progress || 0) * 100);
+        if (data.steps && data.steps.length) {
+            var done = data.steps.filter(function(s) { return s.status === 'completed' || s.status === 'skipped'; }).length;
+            pctDone = Math.round((done / data.steps.length) * 100);
+            headerBits.push(done + ' / ' + data.steps.length + ' steps (' + pctDone + '%)');
+        }
+        if (data.timezone) headerBits.push('tz: <span class="pld-tag">' + escapeHtml(data.timezone) + '</span>');
+        if (data.template_name) headerBits.push('template: ' + escapeHtml(data.template_name));
+        if (data.tags && data.tags.length) headerBits.push('tags: ' + data.tags.map(escapeHtml).join(', '));
+        if (data.created_at) headerBits.push('created: ' + escapeHtml(_pldFmtTime(data.created_at)));
+        header += '<div class="pld-header-row">' + headerBits.join(' · ') + '</div>';
+        header += '</div>';
+        // Wave-grouped step list
+        var stepsHtml = '';
+        if (!data.steps || !data.steps.length) {
+            stepsHtml = '<div class="empty-state">No steps</div>';
+        } else {
+            var waves = _pldComputeWaves(data.steps);
+            waves.forEach(function(w) {
+                stepsHtml += '<div class="pld-wave">';
+                stepsHtml += '<div class="pld-wave-label">Wave ' + (w.level + 1) + '</div>';
+                w.steps.forEach(function(s) { stepsHtml += _pldRenderStep(s, data.id); });
+                stepsHtml += '</div>';
+            });
+        }
+        body.innerHTML = header + stepsHtml;
+    }
+
+    window.showPipelineDetail = function(pipelineId) {
+        _pldViewingId = pipelineId;
+        document.getElementById('pipeline-detail-modal').style.display = 'flex';
+        document.getElementById('pld-body').innerHTML = '<div class="empty-state">Loading…</div>';
+        fetch('/api/pipelines/' + pipelineId, { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) {
+                if (!r.ok) throw new Error('not found');
+                return r.json();
+            })
+            .then(_pldRender)
+            .catch(function() {
+                document.getElementById('pld-body').innerHTML = '<div class="empty-state text-poppy">Pipeline not found</div>';
+            });
+    };
+
+    window.hidePipelineDetail = function() {
+        _pldViewingId = null;
+        _pldLastData = null;
+        _pldResultCache = {};
+        document.getElementById('pipeline-detail-modal').style.display = 'none';
+    };
+
+    window.editFromDetail = function() {
+        if (!_pldViewingId) return;
+        var pid = _pldViewingId;
+        hidePipelineDetail();
+        showEditPipeline(pid);
+    };
+
+    window.retryStep = function(pipelineId, stepId) {
+        fetch('/api/pipelines/' + pipelineId + '/steps/' + stepId + '/retry', {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'Dashboard', 'Content-Type': 'application/json' },
+            body: '{}',
+        })
+            .then(function(r) {
+                return r.json().then(function(d) { return { ok: r.ok, status: r.status, data: d }; });
+            })
+            .then(function(resp) {
+                if (!resp.ok) {
+                    showToast(resp.data.error || ('Retry failed (' + resp.status + ')'), true);
+                    return;
+                }
+                var reset = resp.data.reset || [];
+                if (reset.length > 1) {
+                    showToast('Retried ' + stepId + ' (also reset: ' + reset.slice(1).join(', ') + ')');
+                } else {
+                    showToast('Retried ' + stepId);
+                }
+                refreshPipelines();
+                // Live update will already fire via pipelines_changed; this
+                // is a belt-and-suspenders refresh for the detail view.
+                if (_pldViewingId === pipelineId) showPipelineDetail(pipelineId);
+            })
+            .catch(function() { showToast('Retry failed', true); });
+    };
+
+    window.openLinkedTask = function(taskId) {
+        // Tasks render via an HTMX partial, not from dashboard.js — there's
+        // no "open task editor by ID" helper to reuse. The honest move is
+        // to dismiss the detail modal, switch to the Tasks tab, then try
+        // to scroll the task row into view + highlight it. The operator
+        // clicks the row to open the editor (the tasks tab already wires
+        // that). If we can't find a row with the ID, surface a toast so
+        // the operator knows where to look.
+        hidePipelineDetail();
+        if (typeof switchTab === 'function') switchTab('tasks');
+        setTimeout(function() {
+            // Tasks panel partials render rows that include the task ID
+            // in various attributes; look for the most common shapes.
+            var row = document.querySelector('[data-task-id="' + taskId + '"]')
+                || document.querySelector('[data-row-task-id="' + taskId + '"]')
+                || document.querySelector('[data-id="' + taskId + '"]');
+            if (row) {
+                try { row.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+                row.classList.add('task-row-flash');
+                setTimeout(function() { row.classList.remove('task-row-flash'); }, 1500);
+            } else {
+                showToast('Task #' + taskId + ' — scroll the Tasks tab to find it');
+            }
+        }, 80);
+    };
+
+    window.copyStepResult = function(stepId) {
+        var data = _pldResultCache[stepId];
+        if (!data) return;
+        var text;
+        try { text = JSON.stringify(data, null, 2); }
+        catch (e) { text = String(data); }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function() { showToast('Copied'); });
+        } else {
+            // Fallback: textarea + execCommand for the rare missing-API case.
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); showToast('Copied'); }
+            catch (e) { showToast('Copy failed', true); }
+            document.body.removeChild(ta);
+        }
+    };
+
+    // Live updates: re-render detail when the pipeline we're viewing
+    // changes. The WS message type 'pipelines_changed' already triggers
+    // refreshPipelines(); we piggyback on the same handler.
+    function _pldOnPipelinesChanged() {
+        if (!_pldViewingId) return;
+        var pid = _pldViewingId;
+        fetch('/api/pipelines/' + pid, { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(d) { if (d && _pldViewingId === pid) _pldRender(d); })
+            .catch(function() {});
+    }
+
+    // Hook into the existing WS handler — the dashboard fires
+    // `refreshPipelines()` on 'pipelines_changed'; do the same here.
+    window._pldOnPipelinesChanged = _pldOnPipelinesChanged;
 
     window.showDecisionModal = function(idx) {
         var d = _decisionCache[idx];

@@ -10,6 +10,44 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.20.4] - 2026-05-20
+
+### Features
+
+- **Pipeline detail view + retry — P3 of the editor UX series.** Adds a
+  read-only inspect modal that opens when an operator clicks anywhere on
+  a pipeline card. The step list is grouped by execution wave (Kahn-style
+  levelization client-side; same DAG the engine's `advance()` walks),
+  each step shown with status / duration / linked task chip / error +
+  pretty-printed result. For `shell_command` results, stdout / stderr /
+  returncode are surfaced as labeled blocks above the raw JSON. A Copy
+  button is on every result block. New `POST /api/pipelines/{id}/steps/
+  {step_id}/retry` endpoint resets a FAILED step plus its FAILED
+  downstream descendants (BFS forward through the DAG); SKIPPED and
+  COMPLETED downstream are left alone — SKIPPED is sticky operator
+  intent and re-running a COMPLETED side-effecting step would
+  double-fire it. The retry resets `status`, `started_at`,
+  `completed_at`, `error`, `result`, and `task_id` so the engine
+  re-creates fresh tasks for agent steps. 404 for unknown pipeline/step,
+  409 for non-FAILED targets. The detail view subscribes to the existing
+  `pipelines_changed` WS event for live re-render — steps tick through
+  pending→ready→in_progress→completed without refreshing the page.
+  Detail modal has its own Edit button (only when status ∈
+  {DRAFT, PAUSED}, matching the engine guard) that warps into the
+  P1 editor pre-filled. Pipeline metadata header shows timezone /
+  schedule / tags / template_name / created. Linked-task chips switch
+  to the Tasks tab + scroll-and-flash the row (the existing task editor
+  isn't ID-addressable so we don't open it directly — flagged as
+  deferred in the spec). Spec lives at
+  `docs/specs/pipeline-detail-view.md`. 11 new tests (7 engine, 4 route)
+  covering the cascade-reset semantics, SKIPPED/COMPLETED preservation,
+  and status-code mapping. P4 in the series adds the playbook
+  analytics + config tuning surface.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.20.3] - 2026-05-20
 
 ### Features

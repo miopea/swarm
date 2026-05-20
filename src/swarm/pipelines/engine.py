@@ -267,6 +267,85 @@ class PipelineEngine(EventEmitter):
         self.emit("change")
         return newly_ready
 
+    def retry_step(self, pipeline_id: str, step_id: str) -> list[str]:
+        """Reset a FAILED step plus its FAILED downstream descendants.
+
+        P3 of the editor-UX series. Returns the list of step IDs that were
+        reset (the operator's explicit target first, then any FAILED steps
+        transitively downstream of it). SKIPPED and COMPLETED downstream
+        are left alone — SKIPPED is sticky operator intent and re-running
+        a COMPLETED side-effecting step would double-fire it.
+
+        Raises ``ValueError`` for not-found and for non-FAILED targets;
+        the route handler maps those to 404 / 409 respectively.
+        """
+        pipeline = self._pipelines.get(pipeline_id)
+        if not pipeline:
+            raise ValueError(f"Pipeline {pipeline_id} not found")
+        step = pipeline.get_step(step_id)
+        if not step:
+            raise ValueError(f"Step {step_id} not found")
+        if step.status != StepStatus.FAILED:
+            raise ValueError(
+                f"Step {step_id} is {step.status.value} — retry only resets FAILED steps"
+            )
+
+        # Collect the target + every FAILED descendant. BFS forward through
+        # the DAG: a step is "downstream" if its depends_on includes one of
+        # our reset-set IDs (transitively).
+        reset_ids: list[str] = [step_id]
+        seen = {step_id}
+        frontier = [step_id]
+        while frontier:
+            current = frontier.pop(0)
+            for candidate in pipeline.steps:
+                if candidate.id in seen:
+                    continue
+                if current not in (candidate.depends_on or []):
+                    continue
+                if candidate.status == StepStatus.FAILED:
+                    reset_ids.append(candidate.id)
+                    seen.add(candidate.id)
+                    frontier.append(candidate.id)
+                else:
+                    # Non-FAILED downstream blocks the cascade — we don't
+                    # walk past it. A SKIPPED step's downstream stays in
+                    # whatever state the operator left it.
+                    continue
+
+        # Apply the resets. Wipe transient fields so the engine treats each
+        # step like a fresh PENDING entry; advance() then re-evaluates
+        # readiness from the dep graph.
+        for sid in reset_ids:
+            s = pipeline.get_step(sid)
+            if s is None:
+                continue
+            s.status = StepStatus.PENDING
+            s.started_at = None
+            s.completed_at = None
+            s.error = ""
+            s.result = {}
+            # Drop the task link so a downstream agent step gets a fresh
+            # SwarmTask on the next advance(); the old task may already
+            # have been completed/failed and we don't want to inherit it.
+            if s.task_id:
+                self._task_step_map.pop(s.task_id, None)
+            s.task_id = None
+
+        newly_ready = pipeline.advance()
+        self._create_tasks_for_steps(pipeline, newly_ready)
+        self._persist()
+        self.emit("change")
+        _log.info(
+            "pipeline %s step %s retried, %d steps reset (%s), %d newly ready",
+            pipeline_id,
+            step_id,
+            len(reset_ids),
+            ",".join(reset_ids),
+            len(newly_ready),
+        )
+        return reset_ids
+
     # -- Task integration ------------------------------------------------------
 
     def on_task_completed(self, task_id: str, resolution: str = "") -> None:

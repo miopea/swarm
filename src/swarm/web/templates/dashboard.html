@@ -824,6 +824,21 @@
         </div>
     </div>
 </div>
+<!-- Pipeline DETAIL modal (P3) — inspect-only with retry/skip per step -->
+<div id="pipeline-detail-modal" class="modal-overlay" style="display:none" data-modal-dismiss="hidePipelineDetail">
+    <div class="modal-box modal-lg" role="dialog" aria-modal="true">
+        <div class="panel-header">
+            <span id="pld-title">Pipeline</span>
+            <div class="flex-center gap-sm">
+                <button class="btn btn-sm btn-secondary" id="pld-edit-btn" data-action="editFromDetail" style="display:none">Edit</button>
+                <button class="btn btn-sm btn-secondary" data-action="hidePipelineDetail">Close</button>
+            </div>
+        </div>
+        <div class="modal-padding modal-body-scroll" id="pld-body">
+            <div class="empty-state">Loading…</div>
+        </div>
+    </div>
+</div>
 <!-- Feedback modal (hidden) — bug reports, feature requests, questions -->
 <div id="feedback-modal" class="modal-overlay" style="display:none" data-modal-dismiss="hideFeedback">
     <div class="modal-box modal-lg" role="dialog" aria-modal="true">

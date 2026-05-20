@@ -345,6 +345,171 @@ class TestPipelineEngine:
         with pytest.raises(ValueError, match="can only be edited"):
             engine.update(p.id, steps=[PipelineStep(id="b", name="B")])
 
+    # -----------------------------------------------------------------
+    # P3: retry_step — reset FAILED + cascade-reset FAILED downstream.
+    # -----------------------------------------------------------------
+
+    def test_retry_step_resets_failed_step(self, tmp_path: Path) -> None:
+        engine, _ = self._make_engine(tmp_path)
+        p = engine.create("retry-basic", steps=[PipelineStep(id="a", name="A")])
+        engine.start_pipeline(p.id)
+        engine.fail_step(p.id, "a", error="kaboom")
+        reset = engine.retry_step(p.id, "a")
+        assert reset == ["a"]
+        step_a = engine.get(p.id).get_step("a")
+        assert step_a.status in (StepStatus.PENDING, StepStatus.READY, StepStatus.IN_PROGRESS)
+        assert step_a.error == ""
+        assert step_a.result == {}
+
+    def test_retry_step_cascades_failed_downstream(self, tmp_path: Path) -> None:
+        engine, _ = self._make_engine(tmp_path)
+        p = engine.create(
+            "cascade",
+            steps=[
+                PipelineStep(id="a", name="A"),
+                PipelineStep(id="b", name="B", depends_on=["a"]),
+                PipelineStep(id="c", name="C", depends_on=["b"]),
+            ],
+        )
+        engine.start_pipeline(p.id)
+        engine.fail_step(p.id, "a")
+        # b and c can't actually have run since a failed — simulate the
+        # multi-step-failure case by force-flipping them to FAILED.
+        for sid in ("b", "c"):
+            engine.get(p.id).get_step(sid).status = StepStatus.FAILED
+        reset = engine.retry_step(p.id, "a")
+        # All three reset, in order from the cascade walk.
+        assert set(reset) == {"a", "b", "c"}
+        assert reset[0] == "a"
+
+    def test_retry_step_does_not_touch_skipped_downstream(self, tmp_path: Path) -> None:
+        engine, _ = self._make_engine(tmp_path)
+        p = engine.create(
+            "sticky-skip",
+            steps=[
+                PipelineStep(id="a", name="A"),
+                PipelineStep(id="b", name="B", depends_on=["a"]),
+            ],
+        )
+        engine.start_pipeline(p.id)
+        engine.fail_step(p.id, "a")
+        # Operator skipped b explicitly — that intent is sticky.
+        engine.get(p.id).get_step("b").status = StepStatus.SKIPPED
+        reset = engine.retry_step(p.id, "a")
+        assert reset == ["a"]
+        assert engine.get(p.id).get_step("b").status == StepStatus.SKIPPED
+
+    def test_retry_step_does_not_touch_completed_downstream(self, tmp_path: Path) -> None:
+        engine, _ = self._make_engine(tmp_path)
+        p = engine.create(
+            "no-double",
+            steps=[
+                PipelineStep(id="a", name="A"),
+                PipelineStep(id="b", name="B", depends_on=["a"]),
+            ],
+        )
+        engine.start_pipeline(p.id)
+        engine.fail_step(p.id, "a")
+        engine.get(p.id).get_step("b").status = StepStatus.COMPLETED
+        reset = engine.retry_step(p.id, "a")
+        assert reset == ["a"]
+        assert engine.get(p.id).get_step("b").status == StepStatus.COMPLETED
+
+    def test_retry_step_rejects_non_failed(self, tmp_path: Path) -> None:
+        engine, _ = self._make_engine(tmp_path)
+        p = engine.create("not-failed", steps=[PipelineStep(id="a", name="A")])
+        engine.start_pipeline(p.id)
+        # Step is IN_PROGRESS — not FAILED — so retry must refuse.
+        with pytest.raises(ValueError, match="retry only resets FAILED"):
+            engine.retry_step(p.id, "a")
+
+    def test_retry_step_rejects_missing_pipeline(self, tmp_path: Path) -> None:
+        engine, _ = self._make_engine(tmp_path)
+        with pytest.raises(ValueError, match=r"Pipeline.*not found"):
+            engine.retry_step("nope", "a")
+
+    def test_retry_step_rejects_missing_step(self, tmp_path: Path) -> None:
+        engine, _ = self._make_engine(tmp_path)
+        p = engine.create("no-step", steps=[PipelineStep(id="a", name="A")])
+        with pytest.raises(ValueError, match=r"Step.*not found"):
+            engine.retry_step(p.id, "ghost")
+
+
+# ---------------------------------------------------------------------------
+# P3: route-level checks for the retry endpoint — status-code mapping.
+# ---------------------------------------------------------------------------
+
+
+class TestRetryRoute:
+    """Verify the route handler maps engine ValueErrors onto 404 / 409.
+
+    We build a minimal aiohttp app with just the pipelines router and a
+    stub `daemon` exposing the engine — avoids the heavyweight daemon
+    fixture in test_api.py while still exercising the real handler.
+    """
+
+    def _make_app(self, tmp_path: Path):
+        from types import SimpleNamespace
+
+        from aiohttp import web
+
+        from swarm.pipelines.engine import PipelineEngine
+        from swarm.server.routes import pipelines as pipeline_routes
+
+        engine = PipelineEngine(
+            store=PipelineStore(path=tmp_path / "pipelines.json"),
+            task_board=TaskBoard(),
+        )
+        app = web.Application()
+        app["daemon"] = SimpleNamespace(pipeline_engine=engine)
+        pipeline_routes.register(app)
+        return app, engine
+
+    @pytest.mark.asyncio
+    async def test_retry_returns_ok_and_reset_list(self, tmp_path: Path) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        app, engine = self._make_app(tmp_path)
+        p = engine.create("ok", steps=[PipelineStep(id="a", name="A")])
+        engine.start_pipeline(p.id)
+        engine.fail_step(p.id, "a")
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.post(f"/api/pipelines/{p.id}/steps/a/retry")
+            assert resp.status == 200
+            data = await resp.json()
+            assert data["ok"] is True
+            assert data["reset"] == ["a"]
+
+    @pytest.mark.asyncio
+    async def test_retry_returns_404_for_unknown_pipeline(self, tmp_path: Path) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        app, _ = self._make_app(tmp_path)
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.post("/api/pipelines/ghost/steps/a/retry")
+            assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_retry_returns_404_for_unknown_step(self, tmp_path: Path) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        app, engine = self._make_app(tmp_path)
+        p = engine.create("no-step", steps=[PipelineStep(id="a", name="A")])
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.post(f"/api/pipelines/{p.id}/steps/ghost/retry")
+            assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_retry_returns_409_for_non_failed_step(self, tmp_path: Path) -> None:
+        from aiohttp.test_utils import TestClient, TestServer
+
+        app, engine = self._make_app(tmp_path)
+        p = engine.create("not-failed", steps=[PipelineStep(id="a", name="A")])
+        engine.start_pipeline(p.id)  # step is IN_PROGRESS, not FAILED
+        async with TestClient(TestServer(app)) as client:
+            resp = await client.post(f"/api/pipelines/{p.id}/steps/a/retry")
+            assert resp.status == 409
+
 
 # ---------------------------------------------------------------------------
 # Schedule matching
