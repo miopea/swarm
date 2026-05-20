@@ -103,6 +103,12 @@ class Pipeline:
     updated_at: float = field(default_factory=time.time)
     completed_at: float | None = None
     tags: list[str] = field(default_factory=list)
+    # Per-pipeline IANA timezone (e.g. "America/New_York"). Empty string =
+    # evaluate schedules in server-local time (legacy behaviour). Added in
+    # P2 of the editor-UX series so an operator who moves machines (or
+    # whose worker fleet straddles time zones) gets the cron firing they
+    # expect regardless of where the daemon happens to run.
+    timezone: str = ""
 
     def get_step(self, step_id: str) -> PipelineStep | None:
         for step in self.steps:
@@ -181,6 +187,7 @@ class Pipeline:
             "updated_at": self.updated_at,
             "completed_at": self.completed_at,
             "tags": self.tags,
+            "timezone": self.timezone,
             "steps": [_step_to_dict(s) for s in self.steps],
         }
 
@@ -247,4 +254,5 @@ def pipeline_from_dict(d: dict[str, Any]) -> Pipeline:
         updated_at=d.get("updated_at", 0.0),
         completed_at=d.get("completed_at"),
         tags=d.get("tags", []),
+        timezone=d.get("timezone", ""),
     )

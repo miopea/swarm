@@ -71,6 +71,7 @@ class PipelineEngine(EventEmitter):
         description: str = "",
         steps: list[PipelineStep] | None = None,
         tags: list[str] | None = None,
+        timezone: str = "",
     ) -> Pipeline:
         """Create a new pipeline in DRAFT status."""
         pipeline = Pipeline(
@@ -78,6 +79,7 @@ class PipelineEngine(EventEmitter):
             description=description,
             steps=steps or [],
             tags=tags or [],
+            timezone=timezone,
         )
         self._pipelines[pipeline.id] = pipeline
         self._persist()
@@ -117,13 +119,16 @@ class PipelineEngine(EventEmitter):
         description: str | None = None,
         tags: list[str] | None = None,
         steps: list[PipelineStep] | None = None,
+        timezone: str | None = None,
     ) -> Pipeline | None:
         """Update mutable fields on an existing pipeline. Returns None if not found.
 
         Step replacement is only permitted while the pipeline is in DRAFT or
         PAUSED state — once a pipeline is RUNNING/COMPLETED/FAILED, the step
         graph is locked. Callers should treat an attempted step edit on a
-        non-editable pipeline as a 409 conflict.
+        non-editable pipeline as a 409 conflict. The ``timezone`` field is
+        always editable so an operator can correct a misconfigured zone
+        without having to pause a running pipeline.
         """
         pipeline = self._pipelines.get(pipeline_id)
         if not pipeline:
@@ -134,6 +139,8 @@ class PipelineEngine(EventEmitter):
             pipeline.description = description
         if tags is not None:
             pipeline.tags = tags
+        if timezone is not None:
+            pipeline.timezone = timezone
         if steps is not None:
             if pipeline.status not in (PipelineStatus.DRAFT, PipelineStatus.PAUSED):
                 raise ValueError(
@@ -309,10 +316,11 @@ class PipelineEngine(EventEmitter):
     def check_scheduled_steps(self) -> list[PipelineStep]:
         """Check for READY steps with a schedule matching the current minute.
 
-        Returns steps that were started. Schedule format: ``HH:MM`` or
-        ``*:MM`` (every hour at MM) or ``HH:*`` (every minute of hour HH).
+        Each pipeline's ``timezone`` field (added P2) decides which tz the
+        cron expression is evaluated in. Empty timezone falls back to
+        server-local — the legacy behaviour, preserved so existing
+        pipelines keep firing on the same minute as before the migration.
         """
-        now = time.localtime()
         started: list[PipelineStep] = []
         for pipeline in self._pipelines.values():
             if pipeline.status != PipelineStatus.RUNNING:
@@ -320,7 +328,7 @@ class PipelineEngine(EventEmitter):
             for step in pipeline.steps:
                 if step.status not in (StepStatus.PENDING, StepStatus.READY) or not step.schedule:
                     continue
-                if self._schedule_matches(step.schedule, now):
+                if self._schedule_matches(step.schedule, tz=pipeline.timezone):
                     step.start()
                     self._create_tasks_for_steps(pipeline, [step])
                     started.append(step)
@@ -331,13 +339,24 @@ class PipelineEngine(EventEmitter):
         return started
 
     @staticmethod
-    def _schedule_matches(schedule: str, now: time.struct_time) -> bool:
-        """Check if a cron schedule matches the current time.
+    def _schedule_matches(
+        schedule: str,
+        now: time.struct_time | None = None,
+        *,
+        tz: str = "",
+    ) -> bool:
+        """Check if a cron schedule matches the current minute.
 
         Supported formats:
           - 5-field cron expression: ``"30 14 * * 1-5"`` (14:30 Mon–Fri)
           - Legacy ``HH:MM`` shorthand: ``"14:30"``, ``"*:30"``, ``"14:*"``,
             ``"*:*"`` — translated to cron internally for backward compat.
+
+        ``tz`` is an IANA zone name (e.g. ``"America/New_York"``). Empty
+        means server-local — preserves pre-P2 behaviour. ``now`` is
+        accepted only so existing tests that pass a fixed struct_time
+        keep working; in production the value is always the live wall
+        clock in the chosen zone.
         """
         schedule = schedule.strip()
         if not schedule:
@@ -353,15 +372,25 @@ class PipelineEngine(EventEmitter):
         except ImportError:
             return False
 
+        # Build the datetime to test against. Three sources, in priority:
+        #   1. Caller-provided struct_time (legacy test surface).
+        #   2. Caller-provided tz → live now in that zone.
+        #   3. Neither → server local now.
+        if now is not None:
+            dt = datetime(now.tm_year, now.tm_mon, now.tm_mday, now.tm_hour, now.tm_min, 0)
+        elif tz:
+            try:
+                from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+                dt = datetime.now(ZoneInfo(tz))
+            except (ZoneInfoNotFoundError, ImportError):
+                # Unknown zone → fall back to local rather than dropping the
+                # firing entirely; the operator still gets *some* schedule.
+                dt = datetime.now()
+        else:
+            dt = datetime.now()
+
         try:
-            dt = datetime(
-                now.tm_year,
-                now.tm_mon,
-                now.tm_mday,
-                now.tm_hour,
-                now.tm_min,
-                0,
-            )
             return croniter.match(schedule, dt)
         except (ValueError, KeyError, TypeError):
             return False

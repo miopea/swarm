@@ -1523,6 +1523,26 @@
     var _plServiceCache = null;    // [{name, description, example_config}, ...]
     var _plTaskTypes = ['chore', 'bug', 'feature', 'verify'];
 
+    // P2: schedule builder + timezone state.
+    var _plActivePreset = 'ondemand';     // which preset pane is showing
+    var _plPreviewTimer = null;           // debounce timer for live preview
+    var _plStepPreviewTimers = {};        // per-step debounce timers
+    // Curated common IANA zones — covers the bulk of operators. The
+    // dropdown ends with a literal "Other (type below)" option that
+    // unlocks a freeform input for anything we don't ship.
+    var _plCommonTimezones = [
+        '', 'UTC',
+        'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+        'America/Anchorage', 'America/Honolulu', 'America/Toronto', 'America/Mexico_City',
+        'America/Sao_Paulo', 'America/Buenos_Aires',
+        'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Madrid', 'Europe/Stockholm',
+        'Europe/Athens', 'Europe/Moscow',
+        'Africa/Cairo', 'Africa/Johannesburg',
+        'Asia/Dubai', 'Asia/Kolkata', 'Asia/Bangkok', 'Asia/Singapore', 'Asia/Hong_Kong',
+        'Asia/Tokyo', 'Asia/Seoul', 'Asia/Shanghai',
+        'Australia/Sydney', 'Australia/Perth', 'Pacific/Auckland',
+    ];
+
     function _plLoadCatalogs() {
         // Load workers + services in parallel on each open so the dropdowns
         // reflect the current swarm. Cached after first call; refreshed if
@@ -1555,6 +1575,170 @@
         return '<option value="' + escapeHtml(val) + '"'
             + (selected === val ? ' selected' : '') + '>'
             + escapeHtml(label || val) + '</option>';
+    }
+
+    // -------- P2: timezone select + schedule builder ----------------------
+
+    function _plPopulateTimezones(selected) {
+        var sel = document.getElementById('pl-timezone');
+        if (!sel) return;
+        var opts = _plCommonTimezones.map(function(tz) {
+            var label = tz === '' ? '— server local —' : tz;
+            return _plOption(tz, label, selected || '');
+        });
+        // If the operator's existing tz isn't in our curated list (likely
+        // because they typed something custom previously), add it as a
+        // sticky option so we don't silently lose it on save.
+        if (selected && _plCommonTimezones.indexOf(selected) === -1) {
+            opts.push(_plOption(selected, selected + ' (custom)', selected));
+        }
+        sel.innerHTML = opts.join('');
+        sel.value = selected || '';
+    }
+
+    function _plActivePresetButton() {
+        document.querySelectorAll('[data-action-preset]').forEach(function(b) {
+            b.classList.toggle('pl-preset-on', b.dataset.actionPreset === _plActivePreset);
+        });
+        document.querySelectorAll('.pl-preset-pane').forEach(function(p) { p.style.display = 'none'; });
+        var pane = document.getElementById('pl-preset-' + _plActivePreset);
+        if (pane) pane.style.display = '';
+    }
+
+    function _plBuildCronFromPreset() {
+        // Map the active preset's input controls onto a cron string. Empty
+        // string ⇒ on-demand (no schedule fires). The same shape goes
+        // into the hidden #pl-schedule input that submitPipeline reads.
+        var p = _plActivePreset;
+        if (p === 'ondemand') return '';
+        if (p === 'daily') {
+            var t = document.getElementById('pl-daily-time').value || '09:00';
+            var parts = t.split(':');
+            return parts[1] + ' ' + parts[0] + ' * * *';
+        }
+        if (p === 'weekly') {
+            var days = [];
+            document.querySelectorAll('#pl-weekly-days input:checked').forEach(function(c) { days.push(c.value); });
+            if (!days.length) return '';
+            var t2 = document.getElementById('pl-weekly-time').value || '09:00';
+            var parts2 = t2.split(':');
+            return parts2[1] + ' ' + parts2[0] + ' * * ' + days.sort().join(',');
+        }
+        if (p === 'weekdays') {
+            var t3 = document.getElementById('pl-weekdays-time').value || '09:00';
+            var parts3 = t3.split(':');
+            return parts3[1] + ' ' + parts3[0] + ' * * 1-5';
+        }
+        if (p === 'hourly') {
+            var m = parseInt(document.getElementById('pl-hourly-minute').value, 10);
+            if (isNaN(m) || m < 0 || m > 59) m = 0;
+            return m + ' * * * *';
+        }
+        if (p === 'cron') {
+            return (document.getElementById('pl-cron-input').value || '').trim();
+        }
+        return '';
+    }
+
+    function _plUpdateSchedulePreview() {
+        // Debounced live preview against /api/pipelines/schedule/preview.
+        // Writes the resolved cron into the hidden #pl-schedule input so
+        // submitPipeline reads exactly what the operator sees here.
+        var expr = _plBuildCronFromPreset();
+        var hidden = document.getElementById('pl-schedule');
+        if (hidden) hidden.value = expr;
+        var preview = document.getElementById('pl-schedule-preview');
+        var list = document.getElementById('pl-schedule-preview-list');
+        if (!preview || !list) return;
+        if (!expr) {
+            preview.style.color = 'var(--muted)';
+            preview.textContent = 'On-demand — no scheduled firings';
+            list.textContent = '';
+            return;
+        }
+        if (_plPreviewTimer) clearTimeout(_plPreviewTimer);
+        _plPreviewTimer = setTimeout(function() {
+            var tz = (document.getElementById('pl-timezone') || {}).value || '';
+            fetch('/api/pipelines/schedule/preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
+                body: JSON.stringify({ schedule: expr, timezone: tz, count: 5 }),
+            })
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    if (d.valid) {
+                        preview.style.color = 'var(--leaf)';
+                        preview.textContent = d.human || expr;
+                        list.textContent = (d.next || []).map(function(ts) { return '· ' + ts; }).join('\n');
+                    } else {
+                        preview.style.color = 'var(--poppy)';
+                        preview.textContent = d.error || 'Invalid schedule';
+                        list.textContent = '';
+                    }
+                })
+                .catch(function() {
+                    preview.style.color = 'var(--poppy)';
+                    preview.textContent = 'Preview unavailable';
+                    list.textContent = '';
+                });
+        }, 250);
+    }
+
+    function _plLoadPresetFromCron(expr) {
+        // Reverse the cron back into the matching preset + control
+        // values for edit-mode preload. Falls through to "cron" for any
+        // expression that doesn't match a known preset shape.
+        expr = (expr || '').trim();
+        if (!expr) { _plActivePreset = 'ondemand'; return; }
+        // Legacy HH:MM shorthand always maps to "daily".
+        var legacy = expr.match(/^(\*|\d{1,2}):(\*|\d{1,2})$/);
+        if (legacy) {
+            _plActivePreset = 'daily';
+            var hh = legacy[1] === '*' ? '0' : legacy[1];
+            var mm = legacy[2] === '*' ? '0' : legacy[2];
+            document.getElementById('pl-daily-time').value =
+                ('0' + hh).slice(-2) + ':' + ('0' + mm).slice(-2);
+            return;
+        }
+        var parts = expr.split(/\s+/);
+        if (parts.length === 5) {
+            var min = parts[0], hour = parts[1], dom = parts[2], mon = parts[3], dow = parts[4];
+            if (dom === '*' && mon === '*') {
+                // Hourly: any minute fixed, hour wild, dow wild.
+                if (hour === '*' && dow === '*' && /^\d+$/.test(min)) {
+                    _plActivePreset = 'hourly';
+                    document.getElementById('pl-hourly-minute').value = min;
+                    return;
+                }
+                if (dow === '*' && /^\d+$/.test(hour) && /^\d+$/.test(min)) {
+                    _plActivePreset = 'daily';
+                    document.getElementById('pl-daily-time').value =
+                        ('0' + hour).slice(-2) + ':' + ('0' + min).slice(-2);
+                    return;
+                }
+                if (dow === '1-5' && /^\d+$/.test(hour) && /^\d+$/.test(min)) {
+                    _plActivePreset = 'weekdays';
+                    document.getElementById('pl-weekdays-time').value =
+                        ('0' + hour).slice(-2) + ':' + ('0' + min).slice(-2);
+                    return;
+                }
+                // Weekly: dow is a comma-separated list of single digits.
+                if (/^\d(,\d)*$/.test(dow) && /^\d+$/.test(hour) && /^\d+$/.test(min)) {
+                    _plActivePreset = 'weekly';
+                    document.getElementById('pl-weekly-time').value =
+                        ('0' + hour).slice(-2) + ':' + ('0' + min).slice(-2);
+                    var set = {};
+                    dow.split(',').forEach(function(d) { set[d] = true; });
+                    document.querySelectorAll('#pl-weekly-days input').forEach(function(c) {
+                        c.checked = !!set[c.value];
+                    });
+                    return;
+                }
+            }
+        }
+        // Catch-all: drop the operator into the raw cron editor.
+        _plActivePreset = 'cron';
+        document.getElementById('pl-cron-input').value = expr;
     }
 
     function _plRenderStepCard(data) {
@@ -1783,13 +1967,27 @@
         document.getElementById('pipeline-modal').style.display = 'flex';
     }
 
+    function _plResetScheduleControls() {
+        // Wipe the per-preset inputs so each open is a clean slate.
+        var dt = document.getElementById('pl-daily-time'); if (dt) dt.value = '09:00';
+        var wt = document.getElementById('pl-weekly-time'); if (wt) wt.value = '09:00';
+        var wdt = document.getElementById('pl-weekdays-time'); if (wdt) wdt.value = '09:00';
+        var hm = document.getElementById('pl-hourly-minute'); if (hm) hm.value = '0';
+        var ci = document.getElementById('pl-cron-input'); if (ci) ci.value = '';
+        document.querySelectorAll('#pl-weekly-days input').forEach(function(c) { c.checked = false; });
+    }
+
     window.showCreatePipeline = function() {
         _plMode = 'create';
         _plEditingId = null;
         document.getElementById('pl-name').value = '';
         document.getElementById('pl-desc').value = '';
         document.getElementById('pl-tags').value = '';
-        document.getElementById('pl-schedule').value = '';
+        _plPopulateTimezones('');
+        _plActivePreset = 'ondemand';
+        _plResetScheduleControls();
+        _plActivePresetButton();
+        _plUpdateSchedulePreview();
         _plLoadCatalogs().then(function() {
             _plRenderSteps([]);
             _plOpenModal('New Pipeline', 'Create');
@@ -1808,7 +2006,15 @@
                 document.getElementById('pl-name').value = p.name || '';
                 document.getElementById('pl-desc').value = p.description || '';
                 document.getElementById('pl-tags').value = (p.tags || []).join(', ');
-                document.getElementById('pl-schedule').value = '';  // per-step in edit mode
+                _plPopulateTimezones(p.timezone || '');
+                _plResetScheduleControls();
+                // Try to reconstruct a preset from the FIRST step's schedule
+                // — pipeline-level "default schedule" is a create-time
+                // convenience; in edit mode every step holds its own value.
+                var firstSched = (p.steps && p.steps[0] && p.steps[0].schedule) || '';
+                _plLoadPresetFromCron(firstSched);
+                _plActivePresetButton();
+                _plUpdateSchedulePreview();
                 return _plLoadCatalogs().then(function() {
                     _plRenderSteps(p.steps || []);
                     _plOpenModal('Edit Pipeline — ' + (p.name || ''), 'Save');
@@ -1838,18 +2044,25 @@
             showToast(collected.errors[0], true);
             return;
         }
-        // Apply default schedule from the pipeline-level input to any step
-        // that didn't set its own. Only applied at create time — on edit we
-        // trust per-step values since the operator already saw them.
-        if (_plMode === 'create') {
-            var schedule = document.getElementById('pl-schedule').value.trim();
-            if (schedule) {
-                collected.steps.forEach(function(s) {
-                    if (!s.schedule) s.schedule = schedule;
-                });
-            }
+        // Pipeline-level schedule fills in for any step that didn't set its
+        // own — both at create time and edit time. The hidden #pl-schedule
+        // input was filled in by _plUpdateSchedulePreview from whichever
+        // preset is active, so the operator submits exactly what they saw
+        // in the live preview.
+        var schedule = (document.getElementById('pl-schedule').value || '').trim();
+        if (schedule) {
+            collected.steps.forEach(function(s) {
+                if (!s.schedule) s.schedule = schedule;
+            });
         }
-        var body = { name: name, description: desc, tags: tags, steps: collected.steps };
+        var timezone = (document.getElementById('pl-timezone').value || '').trim();
+        var body = {
+            name: name,
+            description: desc,
+            tags: tags,
+            steps: collected.steps,
+            timezone: timezone,
+        };
         var url = '/api/pipelines' + (_plMode === 'edit' ? '/' + _plEditingId : '');
         var method = _plMode === 'edit' ? 'PUT' : 'POST';
         fetch(url, {
@@ -1934,7 +2147,67 @@
         if (e.target.dataset && (e.target.dataset.field === 'id' || e.target.dataset.field === 'name')) {
             _plRenderDepChips();
         }
+        // Per-step schedule preview: debounced call to the same backend
+        // endpoint so the operator sees what they'll get.
+        if (e.target.dataset && e.target.dataset.field === 'schedule') {
+            _plScheduleStepPreview(e.target);
+        }
     });
+
+    function _plScheduleStepPreview(input) {
+        var card = input.closest('[data-pl-step]');
+        if (!card) return;
+        var stepId = card.dataset.plStep;
+        var existing = card.querySelector('.pl-step-preview');
+        if (!existing) {
+            existing = document.createElement('div');
+            existing.className = 'pl-step-preview';
+            input.parentElement.appendChild(existing);
+        }
+        var expr = (input.value || '').trim();
+        if (!expr) { existing.textContent = ''; existing.className = 'pl-step-preview'; return; }
+        if (_plStepPreviewTimers[stepId]) clearTimeout(_plStepPreviewTimers[stepId]);
+        _plStepPreviewTimers[stepId] = setTimeout(function() {
+            var tz = (document.getElementById('pl-timezone') || {}).value || '';
+            fetch('/api/pipelines/schedule/preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
+                body: JSON.stringify({ schedule: expr, timezone: tz, count: 2 }),
+            })
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    if (d.valid) {
+                        existing.className = 'pl-step-preview';
+                        existing.textContent = d.human + (d.next && d.next.length ? '  ·  next: ' + d.next[0] : '');
+                    } else {
+                        existing.className = 'pl-step-preview pl-step-preview-err';
+                        existing.textContent = d.error || 'Invalid schedule';
+                    }
+                })
+                .catch(function() {});
+        }, 250);
+    }
+
+    // P2: preset button + input listeners for the pipeline-level schedule
+    // builder. Any change funnels through _plUpdateSchedulePreview which
+    // both rebuilds the hidden cron AND requests a live preview.
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-action-preset]');
+        if (!btn) return;
+        _plActivePreset = btn.dataset.actionPreset;
+        _plActivePresetButton();
+        _plUpdateSchedulePreview();
+    });
+
+    ['pl-daily-time', 'pl-weekly-time', 'pl-weekdays-time', 'pl-hourly-minute', 'pl-cron-input'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener('input', _plUpdateSchedulePreview);
+    });
+    document.querySelectorAll('#pl-weekly-days input').forEach(function(c) {
+        c.addEventListener('change', _plUpdateSchedulePreview);
+    });
+    var _plTzSel = document.getElementById('pl-timezone');
+    if (_plTzSel) _plTzSel.addEventListener('change', _plUpdateSchedulePreview);
 
     window.showDecisionModal = function(idx) {
         var d = _decisionCache[idx];

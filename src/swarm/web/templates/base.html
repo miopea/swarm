@@ -200,6 +200,14 @@
         @media (max-width: 540px) {
             .pl-step-fields { grid-template-columns: 1fr; }
         }
+        .pl-preset-row { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+        .pl-preset-row .btn { font-size: 0.75rem; }
+        .pl-preset-row .btn.pl-preset-on { background: var(--lavender); color: var(--hive-bg); border-color: var(--lavender); }
+        .pl-preset-pane { padding: 0.4rem 0; }
+        .pl-dow-row { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; font-size: 0.8rem; }
+        .pl-dow-row label { cursor: pointer; user-select: none; }
+        .pl-step-preview { font-size: 0.7rem; color: var(--leaf); margin-top: 0.25rem; }
+        .pl-step-preview-err { color: var(--poppy); }
         /* --- Layout --- */
         .modal-padding { padding: 1rem; flex: 1; overflow-y: auto; min-height: 0; }
         .modal-footer {

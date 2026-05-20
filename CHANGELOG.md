@@ -10,6 +10,41 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.20.3] - 2026-05-20
+
+### Features
+
+- **Pipeline schedule builder + per-pipeline timezone — P2 of the editor
+  UX overhaul.** Replaces the free-form `HH:MM`/cron text input with a
+  preset picker (On-demand / Daily / Weekly / Weekdays / Hourly / Custom
+  cron) that emits the same cron string the engine reads, plus a live
+  preview wired to a new `POST /api/pipelines/schedule/preview` endpoint
+  — "Weekdays at 14:30" and the next five fire timestamps update as the
+  operator edits. Per-step `schedule` inputs gain the same inline
+  preview without the full builder so quick edits stay quick. Added a
+  curated 30-zone IANA timezone select to the Basics section (custom
+  values typed previously are preserved as a sticky option so saves
+  don't drop them). `Pipeline.timezone` is a new optional string field
+  — empty preserves legacy server-local evaluation; populated routes
+  through `zoneinfo.ZoneInfo` so cron expressions fire in the
+  operator's frame regardless of where the daemon happens to run.
+  Timezone is the only field freely editable while a pipeline is
+  RUNNING (steps still need DRAFT/PAUSED); fixing a misconfigured
+  zone shouldn't require pausing the work. New
+  `swarm.pipelines.schedule` module holds the normalize / humanize /
+  preview helpers and is pure-stdlib + croniter so the same code runs
+  the engine match path and the editor preview. Edit mode reverse-
+  engineers a saved cron back into the matching preset for visual
+  consistency; un-presettable expressions land in the Custom cron pane.
+  Persistence rides the existing JSON-blob column on the `pipelines`
+  table — no schema migration needed since `pipeline_from_dict`
+  tolerates the absent field on old rows. P3 in the series adds the
+  detail view + DAG visualization.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.20.2] - 2026-05-20
 
 ### Features

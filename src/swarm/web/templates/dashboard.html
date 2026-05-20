@@ -757,6 +757,8 @@
                 <textarea id="pl-desc" rows="2" placeholder="What does this pipeline do?" class="modal-textarea mb-md"></textarea>
                 <label class="form-label">Tags <span class="hint">(comma-separated)</span></label>
                 <input id="pl-tags" type="text" placeholder="content, weekly" class="modal-input mb-md">
+                <label class="form-label">Timezone <span class="hint">(used to evaluate schedules; empty = server local)</span></label>
+                <select id="pl-timezone" class="modal-select mb-md"></select>
             </div>
             <!-- Section: Steps -->
             <div class="pl-section">
@@ -767,12 +769,53 @@
                 <div id="pl-steps-list" class="mb-md"></div>
                 <div id="pl-validation" class="text-poppy text-sm mb-md" style="display:none"></div>
             </div>
-            <!-- Section: Schedule (P2 expands this into a builder) -->
+            <!-- Section: Schedule — preset builder + live preview (P2) -->
             <div class="pl-section">
                 <div class="pl-section-title">Schedule</div>
-                <label class="form-label">Default Schedule <span class="hint">(optional, HH:MM or 5-field cron — applied to every step that doesn't override)</span></label>
-                <input id="pl-schedule" type="text" placeholder="e.g. 09:00 or *:30 or  30 14 * * 1-5" class="modal-input mb-md">
-                <div class="text-muted text-xs">A richer schedule builder with timezone support is coming in P2. For now: <code>HH:MM</code>, <code>*:MM</code>, <code>HH:*</code>, or any 5-field cron expression.</div>
+                <div class="text-muted text-xs mb-sm">Default schedule for every step that doesn't override. Leave on "On-demand" to start the pipeline manually.</div>
+                <div class="pl-preset-row mb-sm">
+                    <button type="button" class="btn btn-xs btn-secondary" data-action-preset="ondemand">On-demand</button>
+                    <button type="button" class="btn btn-xs btn-secondary" data-action-preset="daily">Daily</button>
+                    <button type="button" class="btn btn-xs btn-secondary" data-action-preset="weekly">Weekly</button>
+                    <button type="button" class="btn btn-xs btn-secondary" data-action-preset="weekdays">Weekdays</button>
+                    <button type="button" class="btn btn-xs btn-secondary" data-action-preset="hourly">Hourly</button>
+                    <button type="button" class="btn btn-xs btn-secondary" data-action-preset="cron">Custom cron</button>
+                </div>
+                <!-- Per-preset detail panes; only one visible at a time. -->
+                <div id="pl-preset-daily" class="pl-preset-pane" style="display:none">
+                    <label class="form-label">Time of day</label>
+                    <input id="pl-daily-time" type="time" class="modal-input" value="09:00" style="max-width:160px">
+                </div>
+                <div id="pl-preset-weekly" class="pl-preset-pane" style="display:none">
+                    <label class="form-label">Days</label>
+                    <div id="pl-weekly-days" class="pl-dow-row mb-sm">
+                        <label><input type="checkbox" value="1"> Mon</label>
+                        <label><input type="checkbox" value="2"> Tue</label>
+                        <label><input type="checkbox" value="3"> Wed</label>
+                        <label><input type="checkbox" value="4"> Thu</label>
+                        <label><input type="checkbox" value="5"> Fri</label>
+                        <label><input type="checkbox" value="6"> Sat</label>
+                        <label><input type="checkbox" value="0"> Sun</label>
+                    </div>
+                    <label class="form-label">Time of day</label>
+                    <input id="pl-weekly-time" type="time" class="modal-input" value="09:00" style="max-width:160px">
+                </div>
+                <div id="pl-preset-weekdays" class="pl-preset-pane" style="display:none">
+                    <label class="form-label">Time of day (Mon–Fri)</label>
+                    <input id="pl-weekdays-time" type="time" class="modal-input" value="09:00" style="max-width:160px">
+                </div>
+                <div id="pl-preset-hourly" class="pl-preset-pane" style="display:none">
+                    <label class="form-label">Minute of each hour</label>
+                    <input id="pl-hourly-minute" type="number" min="0" max="59" class="modal-input" value="0" style="max-width:100px">
+                </div>
+                <div id="pl-preset-cron" class="pl-preset-pane" style="display:none">
+                    <label class="form-label">Cron expression <span class="hint">(5-field; e.g. 30 14 * * 1-5)</span></label>
+                    <input id="pl-cron-input" type="text" placeholder="* * * * *" class="modal-input">
+                </div>
+                <!-- Hidden output that submit reads from — the resolved cron expr. -->
+                <input id="pl-schedule" type="hidden" value="">
+                <div id="pl-schedule-preview" class="text-sm mt-sm" style="color:var(--leaf)"></div>
+                <div id="pl-schedule-preview-list" class="text-xs text-muted" style="font-family:monospace;white-space:pre-wrap"></div>
             </div>
             <div class="modal-footer modal-footer-flush">
                 <button class="btn btn-secondary" data-action="hidePipelineModal">Cancel</button>

@@ -447,6 +447,148 @@ class TestScheduleMatching:
         assert engine._schedule_matches("", now) is False
         assert engine._schedule_matches("   ", now) is False
 
+    def test_tz_kwarg_does_not_blow_up_with_unknown_zone(self, tmp_path):
+        """P2: an invalid timezone string must NOT crash the matcher —
+        operators can typo an IANA name and we degrade to local time."""
+        engine = self._make_engine(tmp_path)
+        # Truthy schedule + bogus tz: should not raise, should not match
+        # the current minute by accident either.
+        result = engine._schedule_matches("0 0 1 1 *", tz="Not/A/Zone")
+        assert isinstance(result, bool)
+
+
+# ---------------------------------------------------------------------------
+# Schedule helpers (P2 — preview endpoint + builder support)
+# ---------------------------------------------------------------------------
+
+
+class TestScheduleHelpers:
+    def test_normalize_hhmm(self):
+        from swarm.pipelines.schedule import normalize_schedule
+
+        assert normalize_schedule("14:30") == "30 14 * * *"
+        assert normalize_schedule("*:30") == "30 * * * *"
+        assert normalize_schedule("14:*") == "* 14 * * *"
+
+    def test_normalize_passes_cron_through(self):
+        from swarm.pipelines.schedule import normalize_schedule
+
+        assert normalize_schedule("30 14 * * 1-5") == "30 14 * * 1-5"
+        assert normalize_schedule("") == ""
+
+    def test_humanize_daily(self):
+        from swarm.pipelines.schedule import humanize_schedule
+
+        assert humanize_schedule("14:30") == "Daily at 14:30"
+        assert humanize_schedule("30 14 * * *") == "Daily at 14:30"
+
+    def test_humanize_weekdays(self):
+        from swarm.pipelines.schedule import humanize_schedule
+
+        assert humanize_schedule("30 14 * * 1-5") == "Weekdays at 14:30"
+
+    def test_humanize_weekends(self):
+        from swarm.pipelines.schedule import humanize_schedule
+
+        assert humanize_schedule("0 9 * * 0,6") == "Weekends at 09:00"
+
+    def test_humanize_specific_day(self):
+        from swarm.pipelines.schedule import humanize_schedule
+
+        assert humanize_schedule("0 9 * * 1") == "Every Mon at 09:00"
+
+    def test_humanize_custom_fallback(self):
+        from swarm.pipelines.schedule import humanize_schedule
+
+        # Day-of-month rule isn't covered by the preset builder, so we
+        # gracefully fall through to "Custom: <expr>" rather than lie.
+        assert humanize_schedule("0 9 15 * *").startswith("Custom: ")
+
+    def test_preview_returns_valid_for_legacy_hhmm(self):
+        from swarm.pipelines.schedule import preview_schedule
+
+        out = preview_schedule("14:30")
+        assert out["valid"] is True
+        assert out["human"] == "Daily at 14:30"
+        assert len(out["next"]) == 5
+
+    def test_preview_returns_valid_for_cron(self):
+        from swarm.pipelines.schedule import preview_schedule
+
+        out = preview_schedule("30 14 * * 1-5", tz="America/New_York")
+        assert out["valid"] is True
+        assert out["human"] == "Weekdays at 14:30"
+        # Sanity check the tz-offset survives — every ISO string should
+        # carry an offset, not just a naive datetime.
+        for ts in out["next"]:
+            assert "-" in ts[10:] or "+" in ts[10:]
+
+    def test_preview_rejects_invalid_cron(self):
+        from swarm.pipelines.schedule import preview_schedule
+
+        out = preview_schedule("not a schedule")
+        assert out["valid"] is False
+        assert "Invalid" in out["error"]
+
+    def test_preview_rejects_unknown_timezone(self):
+        from swarm.pipelines.schedule import preview_schedule
+
+        out = preview_schedule("30 14 * * *", tz="Not/A/Zone")
+        assert out["valid"] is False
+        assert "Unknown timezone" in out["error"]
+
+
+# ---------------------------------------------------------------------------
+# Pipeline.timezone — round-trips through create/update/store
+# ---------------------------------------------------------------------------
+
+
+class TestPipelineTimezone:
+    def _make_engine(self, tmp_path: Path):
+        from swarm.pipelines.engine import PipelineEngine
+
+        store = PipelineStore(path=tmp_path / "pipelines.json")
+        return PipelineEngine(store=store, task_board=TaskBoard())
+
+    def test_create_with_timezone(self, tmp_path: Path) -> None:
+        engine = self._make_engine(tmp_path)
+        p = engine.create("tz-test", timezone="America/New_York")
+        assert p.timezone == "America/New_York"
+        # to_dict includes it so the API surface stays consistent.
+        assert p.to_dict()["timezone"] == "America/New_York"
+
+    def test_update_timezone(self, tmp_path: Path) -> None:
+        engine = self._make_engine(tmp_path)
+        p = engine.create("tz-test", timezone="UTC")
+        result = engine.update(p.id, timezone="America/Los_Angeles")
+        assert result is not None
+        assert result.timezone == "America/Los_Angeles"
+
+    def test_update_timezone_allowed_while_running(self, tmp_path: Path) -> None:
+        """Timezone updates aren't gated on status — the operator should
+        be able to fix a misconfigured zone without pausing first."""
+        engine = self._make_engine(tmp_path)
+        p = engine.create("tz-test", steps=[PipelineStep(id="a", name="A")])
+        engine.start_pipeline(p.id)
+        result = engine.update(p.id, timezone="Europe/London")
+        assert result is not None
+        assert result.timezone == "Europe/London"
+
+    def test_timezone_survives_store_roundtrip(self, tmp_path: Path) -> None:
+        from swarm.pipelines.engine import PipelineEngine
+
+        store = PipelineStore(path=tmp_path / "pipelines.json")
+        engine1 = PipelineEngine(store=store, task_board=TaskBoard())
+        engine1.create("persistent", timezone="Asia/Tokyo")
+        # Fresh engine reads from disk — timezone field must survive.
+        engine2 = PipelineEngine(
+            store=PipelineStore(path=tmp_path / "pipelines.json"),
+            task_board=TaskBoard(),
+        )
+        loaded = list(engine2.list_all())
+        assert len(loaded) == 1
+        assert loaded[0].timezone == "Asia/Tokyo"
+
 
 # ---------------------------------------------------------------------------
 # Template tests

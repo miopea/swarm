@@ -20,6 +20,9 @@ def register(app: web.Application) -> None:
     # dropdown. Listed BEFORE the {pipeline_id} routes so "/services" isn't
     # consumed as a pipeline id by aiohttp's URL dispatcher.
     app.router.add_get("/api/pipelines/services", handle_services)
+    # Schedule preview backs the P2 cron builder — same ordering caveat as
+    # /services above.
+    app.router.add_post("/api/pipelines/schedule/preview", handle_schedule_preview)
     app.router.add_get("/api/pipelines/{pipeline_id}", handle_get)
     app.router.add_put("/api/pipelines/{pipeline_id}", handle_update)
     app.router.add_delete("/api/pipelines/{pipeline_id}", handle_delete)
@@ -70,6 +73,23 @@ async def handle_services(request: web.Request) -> web.Response:
     if registry is None:
         return web.json_response({"services": []})
     return web.json_response({"services": registry.describe()})
+
+
+async def handle_schedule_preview(request: web.Request) -> web.Response:
+    """Project a cron expression into a human description + next firings.
+
+    Backs the P2 schedule builder so the operator sees "Daily at 14:30"
+    and the next 5 fire timestamps as they edit — no client-side cron
+    library required, and the preview lines up with what the engine will
+    actually fire on because it shares the same croniter/zoneinfo path.
+    """
+    body = await request.json() if request.can_read_body else {}
+    expr = (body.get("schedule") or "").strip()
+    tz = (body.get("timezone") or "").strip()
+    count = int(body.get("count") or 5)
+    from swarm.pipelines.schedule import preview_schedule
+
+    return web.json_response(preview_schedule(expr, tz=tz, count=count))
 
 
 async def handle_get(request: web.Request) -> web.Response:
@@ -127,6 +147,7 @@ async def handle_create(request: web.Request) -> web.Response:
         description=body.get("description", ""),
         steps=steps,
         tags=body.get("tags", []),
+        timezone=(body.get("timezone") or "").strip(),
     )
     return web.json_response(pipeline.to_dict(), status=201)
 
@@ -175,6 +196,7 @@ async def handle_update(request: web.Request) -> web.Response:
             description=body.get("description"),
             tags=body.get("tags"),
             steps=steps_arg,
+            timezone=body.get("timezone"),
         )
     except ValueError as e:
         return json_error(str(e), 409)
