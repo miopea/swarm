@@ -10,6 +10,26 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.20.12] - 2026-05-20
+
+### Features
+
+- **Spec: managed browser capability v1.** New
+  `docs/specs/managed-browser-v1.md` capturing the 4-round interview
+  decisions for the upcoming `swarm_browse` MCP tool. Scope covers
+  Playwright Python in-process, named persistent profiles + ephemeral
+  default, `swarm browser login <profile>` headed CLI for setup, five
+  v1 actions (`navigate` / `screenshot` / `extract_links` / `fill_form`
+  / `click`), per-call timeout, per-profile domain allowlist,
+  confirm-before-submit Queen escalation on sensitive forms, audit
+  log per call. Spec only — implementation downstream. Force-added
+  past the `docs/specs/` gitignore, matching the pattern used for the
+  P3 + post-overhaul-cleanup specs.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.20.11] - 2026-05-20
 
 ### Fixes
