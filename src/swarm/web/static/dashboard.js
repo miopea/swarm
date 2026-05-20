@@ -20,6 +20,10 @@
     let ws = null;
     var _restarting = false;
     var _restartRecoveryTimer = null;
+    // Queen cooldown timer — cleared on restart cleanup at ~L9383. Was
+    // referenced there without ever being declared, which threw
+    // ReferenceError on every page load (mobile QA caught it).
+    var queenCooldownTimer = null;
     let reconnectTimer = null;
     let reconnectDelay = 1000;
     const MAX_RECONNECT_DELAY = 30000;
@@ -621,7 +625,11 @@
                 notifyBrowser('Task complete', (data.task_title || 'Task') + ' — ' + (data.worker || ''));
                 break;
             case 'queen.health':
-                updateQueenHealthIndicator(data && data.state);
+                // updateQueenHealthIndicator lives in IIFE 2 (line ~10465);
+                // this dispatcher is in IIFE 1, so we go through window.
+                if (typeof window.updateQueenHealthIndicator === 'function') {
+                    window.updateQueenHealthIndicator(data && data.state);
+                }
                 break;
             case 'operator_terminal_approval':
                 showApproveAlwaysBanner(data);
@@ -10475,6 +10483,11 @@
         node.textContent = m.t;
         node.className = 'text-xs ' + m.c;
     }
+    // Expose so the WS handleEvent dispatcher in IIFE 1 can reach it.
+    // Was previously called as a bare reference from IIFE 1, which
+    // threw ReferenceError because the two IIFEs are separate scopes
+    // (mobile QA caught it).
+    window.updateQueenHealthIndicator = updateQueenHealthIndicator;
 
     function ccShowDashboard() {
         // Deselect any focused worker, hide the terminal, restore Command Center.

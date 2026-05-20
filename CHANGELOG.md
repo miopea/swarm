@@ -10,6 +10,46 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.20.10] - 2026-05-20
+
+### Features
+
+- **Mobile QA Playwright harness + first run's findings.** New
+  `scripts/mobile_qa.py` drives Chromium at iPhone-14 viewport
+  (390×844) through nine touch points across the dashboard — Command
+  Center default, Attention/Queen focus toggle, each bottom-panel
+  tab (Tasks / Decisions / Pipelines / Playbooks / Activity),
+  config General + Automation — and captures full-page screenshots
+  plus a `FINDINGS.md` scaffold listing any console errors or
+  pageerrors the page produced. Auth uses a session cookie minted
+  from the API password (gitignored `.env`). One-shot QA tool, not
+  a test suite — re-run with `uv run python scripts/mobile_qa.py`
+  after fixes to compare. Screenshots land in
+  `docs/qa-mobile-<timestamp>/` (gitignored — large PNG binaries,
+  easy to regenerate); the curated findings doc is at
+  `docs/qa-mobile-findings-2026-05-20.md`.
+
+### Changes
+
+### Fixes
+
+- **Two pre-existing JS reference errors uncovered by the QA harness.**
+  Both fired on every page load before; only surfaced now because
+  Playwright's pageerror listener doesn't swallow them like the
+  dashboard's defaults did.
+  - `queenCooldownTimer` was referenced in the unload cleanup at
+    `dashboard.js:9383` but never declared at module scope. Added
+    the missing `var queenCooldownTimer = null` next to the other
+    timer declarations in IIFE 1.
+  - `updateQueenHealthIndicator` is defined in IIFE 2 (line ~10465)
+    but called as a bare reference from the WS event dispatcher
+    in IIFE 1 (line 624). The two IIFEs are separate scopes —
+    fixed by exposing the function on `window` from IIFE 2 and
+    guarding the call site with `typeof window.X === 'function'`
+    so a future scope shuffle can't silently break it again.
+  Both fixes verified by re-running the QA harness: the
+  `pageerror` listener captured zero errors on the second run.
+
 ## [2026.5.20.9] - 2026-05-20
 
 ### Features

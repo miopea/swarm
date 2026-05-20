@@ -1,6 +1,6 @@
 [project]
 name = "swarm-ai"
-version = "2026.5.20.9"
+version = "2026.5.20.10"
 description = "A hive-mind for Claude Code agents — web orchestrator"
 readme = "README.md"
 license = "MIT"
@@ -97,3 +97,8 @@ max-complexity = 12
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["RUF059"]  # unused unpacked vars in test fixtures are intentional
+
+[dependency-groups]
+dev = [
+    "playwright>=1.60.0",
+]

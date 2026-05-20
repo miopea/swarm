@@ -37,3 +37,9 @@ Thumbs.db
 
 # uv
 uv.lock
+
+# Mobile QA Playwright screenshot runs — re-generate via
+# `uv run python scripts/mobile_qa.py`. Findings docs live under
+# `docs/qa-mobile-findings-<date>.md` and ARE committed; raw
+# screenshots are not (large PNG binaries, easily reproduced).
+docs/qa-mobile-*/
