@@ -10,6 +10,37 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.20.13] - 2026-05-20
+
+### Features
+
+- **Spec: No-AI-Slop content system v1.** New
+  `docs/specs/content-system-v1.md` captures the 4-round, 16-decision
+  interview for the content orchestration system the
+  `project_no_ai_slop_content_system` memory anticipated. Single-creator
+  with a `creator_id` hedge for future multi-tenancy. New
+  `content_ideas` + `content_pieces` tables (v12 schema). Eight-stage
+  enum (idea → planned → scripted → filming → edited → staged →
+  published → analyzed). Six target platforms (YouTube as anchor +
+  X / Instagram / TikTok / Pinterest / Facebook). API where available,
+  browser v2 as fallback. Source idea → platform-specific children
+  for repurposing. OneDrive integration via the existing Microsoft
+  Graph OAuth. Voice corpus warms over time (no day-1 corpus). Idea
+  capture nightly @ 2am from YouTube competitor scrape + new
+  `swarm_capture_idea` MCP tool + email forwarding to an `ideas@`
+  address. Weekly planning Queen brief Sunday @ 9am ingests captured
+  ideas + analytics snapshots. Analytics daily @ 6am scrape feeds
+  back into next week's planning. Dashboard "Content" tab (Ideas /
+  Pieces / Analytics sub-views) + Queen escalations for every HITL
+  gate. Ships as **4 phases** across ~12-15 weeks (A: idea capture
+  ~2w, B: planning + scripting ~2-3w, C: filming/editing/posting
+  ~6-8w, D: analytics feedback ~2w). v1 explicitly accepts the
+  months-scale commitment. Force-added past `docs/specs/` gitignore.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.20.12] - 2026-05-20
 
 ### Features
