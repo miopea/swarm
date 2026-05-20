@@ -137,7 +137,9 @@
         syncJira: function() { syncJira(); },
         showCreatePipeline: function() { showCreatePipeline(); },
         hidePipelineModal: function() { hidePipelineModal(); },
-        createPipeline: function() { createPipeline(); },
+        createPipeline: function() { submitPipeline(); },  // legacy alias
+        submitPipeline: function() { submitPipeline(); },
+        showEditPipeline: function(el) { showEditPipeline(el.dataset.pipelineId); },
         toggleResourcePopover: function(el, e) { e.stopPropagation(); toggleResourcePopover(); },
         toggleBottomPanel: function() { toggleBottomPanel(); },
         toggleFocusMode: function() { toggleFocusMode(); },
@@ -1351,6 +1353,10 @@
             } else if (p.status === 'paused') {
                 html += '<button class="btn btn-sm btn-approve" onclick="pipelineAction(\'resume\',\'' + p.id + '\')">Resume</button>';
             }
+            // Edit allowed while step graph is mutable (matches engine guard).
+            if (p.status === 'draft' || p.status === 'paused') {
+                html += '<button class="btn btn-sm btn-secondary" data-action="showEditPipeline" data-pipeline-id="' + p.id + '">Edit</button>';
+            }
             html += '<button class="btn btn-sm btn-secondary btn-log" onclick="pipelineAction(\'delete\',\'' + p.id + '\')">&#x2715;</button>';
             html += '</div>';
             if (p.steps && p.steps.length) {
@@ -1379,6 +1385,20 @@
                         html += ' <span class="text-lavender text-xs">' + escapeHtml(s.assigned_worker) + '</span>';
                     }
                     html += '</div>';
+                    // Surface failure details and result snippets — previously
+                    // hidden in the model, leaving operators blind to WHY a
+                    // step failed and what an automated step produced.
+                    if (s.error) {
+                        html += '<div class="text-xs text-poppy" style="padding-left:1.2rem;white-space:pre-wrap;word-break:break-word">'
+                            + escapeHtml(String(s.error).slice(0, 400)) + '</div>';
+                    }
+                    if (s.result && Object.keys(s.result).length) {
+                        var resPreview;
+                        try { resPreview = JSON.stringify(s.result).slice(0, 200); }
+                        catch (err) { resPreview = '[unserializable result]'; }
+                        html += '<div class="text-xs text-muted" style="padding-left:1.2rem;font-family:monospace">'
+                            + escapeHtml(resPreview) + '</div>';
+                    }
                 }
                 html += '</div>';
             }
@@ -1491,106 +1511,430 @@
             .catch(function() {});
     };
 
-    var _plStepCounter = 0;
+    // -----------------------------------------------------------------------
+    // Pipeline editor (P1 — create + edit, conditional step fields,
+    // dependency chip picker, worker + service dropdowns from server data).
+    // -----------------------------------------------------------------------
 
-    function _plAddStepRow(data) {
-        var list = document.getElementById('pl-steps-list');
+    var _plStepCounter = 0;
+    var _plMode = 'create';        // 'create' or 'edit'
+    var _plEditingId = null;       // pipeline id when editing
+    var _plWorkerCache = null;     // [{name}, ...] populated on first open
+    var _plServiceCache = null;    // [{name, description, example_config}, ...]
+    var _plTaskTypes = ['chore', 'bug', 'feature', 'verify'];
+
+    function _plLoadCatalogs() {
+        // Load workers + services in parallel on each open so the dropdowns
+        // reflect the current swarm. Cached after first call; refreshed if
+        // either fetch failed previously.
+        var workersP = _plWorkerCache
+            ? Promise.resolve(_plWorkerCache)
+            : fetch('/api/workers', { headers: { 'X-Requested-With': 'Dashboard' }})
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    var list = Array.isArray(d) ? d : (d && d.workers) || [];
+                    _plWorkerCache = list.map(function(w) {
+                        return { name: (w && (w.name || w.id)) || '' };
+                    }).filter(function(w) { return !!w.name; });
+                    return _plWorkerCache;
+                })
+                .catch(function() { return []; });
+        var servicesP = _plServiceCache
+            ? Promise.resolve(_plServiceCache)
+            : fetch('/api/pipelines/services', { headers: { 'X-Requested-With': 'Dashboard' }})
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    _plServiceCache = (d && d.services) || [];
+                    return _plServiceCache;
+                })
+                .catch(function() { return []; });
+        return Promise.all([workersP, servicesP]);
+    }
+
+    function _plOption(val, label, selected) {
+        return '<option value="' + escapeHtml(val) + '"'
+            + (selected === val ? ' selected' : '') + '>'
+            + escapeHtml(label || val) + '</option>';
+    }
+
+    function _plRenderStepCard(data) {
+        // Returns the HTML for one step. `data` may be partial — we fill
+        // defaults so an empty new row works the same as an edit row.
         _plStepCounter++;
         var idx = _plStepCounter;
-        var id = (data && data.id) || 'step' + idx;
-        var row = document.createElement('div');
-        row.className = 'config-section mb-sm';
-        row.dataset.plStep = idx;
-        row.innerHTML =
-            '<div class="flex-center gap-sm mb-sm">' +
-            '<input type="text" class="modal-input flex-1" placeholder="Step name" data-field="name" value="' + escapeHtml((data && data.name) || '') + '">' +
-            '<select class="modal-select" data-field="type" style="width:auto">' +
-            '<option value="agent"' + ((data && data.type) === 'agent' ? ' selected' : '') + '>Agent</option>' +
-            '<option value="human"' + ((data && data.type) === 'human' ? ' selected' : '') + '>Human</option>' +
-            '<option value="automated"' + ((data && data.type) === 'automated' ? ' selected' : '') + '>Automated</option>' +
-            '</select>' +
-            '<button type="button" class="btn btn-xs btn-secondary btn-remove" data-action-remove-step="' + idx + '" title="Remove step">&times;</button>' +
-            '</div>' +
-            '<div class="flex-center gap-sm">' +
-            '<input type="text" class="modal-input flex-1" placeholder="Step ID (auto)" data-field="id" value="' + escapeHtml(id) + '" style="max-width:120px">' +
-            '<input type="text" class="modal-input flex-1" placeholder="Depends on (comma IDs)" data-field="depends_on" value="' + escapeHtml((data && data.depends_on) || '') + '">' +
-            '<input type="text" class="modal-input" placeholder="Worker" data-field="assigned_worker" value="' + escapeHtml((data && data.assigned_worker) || '') + '" style="max-width:100px">' +
-            '<input type="text" class="modal-input" placeholder="HH:MM" data-field="schedule" value="' + escapeHtml((data && data.schedule) || '') + '" style="max-width:70px">' +
-            '</div>';
-        list.appendChild(row);
+        data = data || {};
+        var stepType = data.step_type || data.type || 'agent';
+        var workerOpts = '<option value="">— unassigned —</option>'
+            + (_plWorkerCache || []).map(function(w) {
+                return _plOption(w.name, w.name, data.assigned_worker || '');
+            }).join('');
+        var taskTypeOpts = _plTaskTypes.map(function(t) {
+            return _plOption(t, t, data.task_type || 'chore');
+        }).join('');
+        var serviceOpts = '<option value="">— pick a service —</option>'
+            + (_plServiceCache || []).map(function(s) {
+                return _plOption(s.name, s.name, data.service || '');
+            }).join('');
+        var configText = '';
+        if (data.config && Object.keys(data.config).length) {
+            try { configText = JSON.stringify(data.config, null, 2); } catch (e) { configText = ''; }
+        }
+        // Conditional sections — `data-show-when` lists the step types that
+        // reveal this block. Switched by _plUpdateConditionals on type change.
+        return ''
+            + '<div class="pl-step-card" data-pl-step="' + idx + '">'
+            +   '<div class="pl-step-header">'
+            +     '<input type="text" class="modal-input" placeholder="Step name" data-field="name" value="' + escapeHtml(data.name || '') + '">'
+            +     '<select class="modal-select" data-field="step_type" style="width:auto">'
+            +       _plOption('agent', 'Agent', stepType)
+            +       _plOption('human', 'Human', stepType)
+            +       _plOption('automated', 'Automated', stepType)
+            +     '</select>'
+            +     '<button type="button" class="btn btn-xs btn-secondary" data-action-remove-step="' + idx + '" title="Remove step">&times;</button>'
+            +   '</div>'
+            +   '<div class="pl-step-fields">'
+            +     '<div>'
+            +       '<label class="form-label">Step ID <span class="hint">(referenced by deps)</span></label>'
+            +       '<input type="text" class="modal-input" data-field="id" value="' + escapeHtml(data.id || ('step' + idx)) + '">'
+            +     '</div>'
+            +     '<div>'
+            +       '<label class="form-label">Schedule <span class="hint">(optional)</span></label>'
+            +       '<input type="text" class="modal-input" data-field="schedule" placeholder="HH:MM or cron" value="' + escapeHtml(data.schedule || '') + '">'
+            +     '</div>'
+            +     '<div class="pl-full">'
+            +       '<label class="form-label">Description</label>'
+            +       '<textarea rows="2" class="modal-textarea" data-field="description" placeholder="What does this step do?">' + escapeHtml(data.description || '') + '</textarea>'
+            +     '</div>'
+            +     '<div class="pl-full" data-show-when="agent,human">'
+            +       '<label class="form-label">Depends on <span class="hint">(other steps that must finish first)</span></label>'
+            +       '<div class="pl-chip-picker" data-field="depends_on" data-deps="' + escapeHtml((data.depends_on || []).join(',')) + '"></div>'
+            +     '</div>'
+            +     '<div data-show-when="agent">'
+            +       '<label class="form-label">Assigned worker</label>'
+            +       '<select class="modal-select" data-field="assigned_worker">' + workerOpts + '</select>'
+            +     '</div>'
+            +     '<div data-show-when="agent">'
+            +       '<label class="form-label">Task type</label>'
+            +       '<select class="modal-select" data-field="task_type">' + taskTypeOpts + '</select>'
+            +     '</div>'
+            +     '<div data-show-when="automated">'
+            +       '<label class="form-label">Service</label>'
+            +       '<select class="modal-select" data-field="service">' + serviceOpts + '</select>'
+            +       '<div class="text-muted text-xs mt-sm" data-role="service-desc"></div>'
+            +     '</div>'
+            +     '<div data-show-when="automated">'
+            +       '<label class="form-label">Config <button type="button" class="btn btn-xs btn-secondary" data-action-fill-example="' + idx + '">Use example</button></label>'
+            +       '<textarea rows="4" class="modal-textarea" data-field="config" placeholder=\'{"key": "value"}\' style="font-family:monospace;font-size:0.75rem">' + escapeHtml(configText) + '</textarea>'
+            +       '<div class="text-muted text-xs" data-role="config-error" style="color:var(--poppy);display:none"></div>'
+            +     '</div>'
+            +   '</div>'
+            + '</div>';
+    }
+
+    function _plUpdateConditionals(card) {
+        // Show/hide fields based on the step_type select on this card.
+        var type = (card.querySelector('[data-field="step_type"]') || {}).value || 'agent';
+        card.querySelectorAll('[data-show-when]').forEach(function(el) {
+            var allowed = (el.dataset.showWhen || '').split(',');
+            el.style.display = allowed.indexOf(type) >= 0 ? '' : 'none';
+        });
+    }
+
+    function _plUpdateServiceDesc(card) {
+        // When the service dropdown changes, surface the handler's
+        // description so the operator knows what they picked.
+        var sel = card.querySelector('[data-field="service"]');
+        if (!sel) return;
+        var hint = card.querySelector('[data-role="service-desc"]');
+        if (!hint) return;
+        var svc = (_plServiceCache || []).find(function(s) { return s.name === sel.value; });
+        hint.textContent = (svc && svc.description) || '';
+    }
+
+    function _plRenderDepChips() {
+        // Each step's dep picker shows chips for every OTHER defined step,
+        // with the currently-selected deps highlighted. Re-rendered whenever
+        // a step is added, removed, or its ID changes.
+        var cards = document.querySelectorAll('#pl-steps-list [data-pl-step]');
+        var all = [];
+        cards.forEach(function(c) {
+            var id = (c.querySelector('[data-field="id"]') || {}).value || '';
+            var name = (c.querySelector('[data-field="name"]') || {}).value || '';
+            if (id) all.push({ id: id, label: name ? (id + ': ' + name) : id });
+        });
+        cards.forEach(function(c) {
+            var picker = c.querySelector('[data-field="depends_on"]');
+            if (!picker) return;
+            var ownId = (c.querySelector('[data-field="id"]') || {}).value || '';
+            var selected = (picker.dataset.deps || '').split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+            var others = all.filter(function(s) { return s.id !== ownId; });
+            if (!others.length) {
+                picker.innerHTML = '<span class="pl-chip-empty">Add more steps first</span>';
+                return;
+            }
+            picker.innerHTML = others.map(function(s) {
+                var on = selected.indexOf(s.id) >= 0;
+                return '<span class="pl-chip' + (on ? ' pl-chip-on' : '')
+                    + '" data-action-toggle-dep="' + escapeHtml(s.id) + '">'
+                    + escapeHtml(s.label) + '</span>';
+            }).join('');
+        });
     }
 
     function _plCollectSteps() {
+        // Walk every step card, validate, and assemble the wire payload.
+        // Returns { steps, errors }; caller decides whether to submit.
         var steps = [];
-        document.querySelectorAll('#pl-steps-list [data-pl-step]').forEach(function(row) {
-            var step = {};
-            row.querySelectorAll('[data-field]').forEach(function(el) {
-                var val = el.value.trim();
-                if (el.dataset.field === 'depends_on') {
-                    step.depends_on = val ? val.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [];
-                } else if (val) {
-                    step[el.dataset.field] = val;
+        var errors = [];
+        var seenIds = Object.create(null);
+        var cards = document.querySelectorAll('#pl-steps-list [data-pl-step]');
+        cards.forEach(function(card) {
+            var step = { config: {}, depends_on: [] };
+            card.querySelectorAll('[data-field]').forEach(function(el) {
+                var key = el.dataset.field;
+                if (key === 'depends_on') {
+                    step.depends_on = (el.dataset.deps || '').split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                    return;
                 }
+                if (key === 'config') {
+                    var raw = (el.value || '').trim();
+                    var err = card.querySelector('[data-role="config-error"]');
+                    if (err) { err.style.display = 'none'; err.textContent = ''; }
+                    if (!raw) return;
+                    try { step.config = JSON.parse(raw); }
+                    catch (parseErr) {
+                        if (err) {
+                            err.textContent = 'Invalid JSON: ' + parseErr.message;
+                            err.style.display = '';
+                        }
+                        errors.push('Step ' + (step.id || '?') + ': invalid JSON config');
+                    }
+                    return;
+                }
+                var v = (el.value || '').trim();
+                if (v) step[key] = v;
             });
-            if (step.name) {
-                if (!step.id) step.id = 'step' + (steps.length + 1);
-                steps.push(step);
+            if (!step.name) return;  // silently drop empty step rows
+            if (!step.id) {
+                errors.push('Step "' + step.name + '" needs an ID');
+                return;
             }
+            if (seenIds[step.id]) {
+                errors.push('Duplicate step ID: ' + step.id);
+                return;
+            }
+            seenIds[step.id] = true;
+            // Type defaulting + per-type validation.
+            step.step_type = step.step_type || 'agent';
+            if (step.step_type === 'automated' && !step.service) {
+                errors.push('Automated step "' + step.id + '" needs a service');
+            }
+            steps.push(step);
         });
-        return steps;
+        // Circular-dep check (DFS).
+        if (!errors.length && steps.length) {
+            var byId = {};
+            steps.forEach(function(s) { byId[s.id] = s; });
+            // Drop deps pointing at steps that no longer exist — silently
+            // cleaning these is friendlier than blocking the save.
+            steps.forEach(function(s) {
+                s.depends_on = (s.depends_on || []).filter(function(d) { return !!byId[d]; });
+            });
+            var WHITE = 0, GRAY = 1, BLACK = 2;
+            var color = {};
+            steps.forEach(function(s) { color[s.id] = WHITE; });
+            function dfs(id) {
+                if (color[id] === GRAY) return true;  // cycle
+                if (color[id] === BLACK) return false;
+                color[id] = GRAY;
+                var deps = (byId[id] && byId[id].depends_on) || [];
+                for (var i = 0; i < deps.length; i++) {
+                    if (dfs(deps[i])) return true;
+                }
+                color[id] = BLACK;
+                return false;
+            }
+            for (var k = 0; k < steps.length; k++) {
+                if (dfs(steps[k].id)) { errors.push('Circular dependency involving step ' + steps[k].id); break; }
+            }
+        }
+        return { steps: steps, errors: errors };
     }
 
-    document.getElementById('pl-add-step').addEventListener('click', function() {
-        _plAddStepRow();
-    });
+    function _plRenderSteps(existingSteps) {
+        var list = document.getElementById('pl-steps-list');
+        list.innerHTML = '';
+        _plStepCounter = 0;
+        var arr = existingSteps && existingSteps.length ? existingSteps : [{}];
+        var html = arr.map(_plRenderStepCard).join('');
+        list.innerHTML = html;
+        list.querySelectorAll('[data-pl-step]').forEach(function(c) {
+            _plUpdateConditionals(c);
+            _plUpdateServiceDesc(c);
+        });
+        _plRenderDepChips();
+    }
 
-    document.getElementById('pl-steps-list').addEventListener('click', function(e) {
-        var btn = e.target.closest('[data-action-remove-step]');
-        if (btn) {
-            var row = btn.closest('[data-pl-step]');
-            if (row) row.remove();
-        }
-    });
+    function _plOpenModal(title, submitLabel) {
+        document.getElementById('pl-modal-title').textContent = title;
+        document.getElementById('pl-submit-btn').textContent = submitLabel;
+        var v = document.getElementById('pl-validation');
+        if (v) { v.style.display = 'none'; v.textContent = ''; }
+        document.getElementById('pipeline-modal').style.display = 'flex';
+    }
 
     window.showCreatePipeline = function() {
+        _plMode = 'create';
+        _plEditingId = null;
         document.getElementById('pl-name').value = '';
         document.getElementById('pl-desc').value = '';
-        document.getElementById('pl-steps-list').innerHTML = '';
+        document.getElementById('pl-tags').value = '';
         document.getElementById('pl-schedule').value = '';
-        _plStepCounter = 0;
-        _plAddStepRow();  // Start with one empty step
-        document.getElementById('pipeline-modal').style.display = 'flex';
+        _plLoadCatalogs().then(function() {
+            _plRenderSteps([]);
+            _plOpenModal('New Pipeline', 'Create');
+        });
+    };
+
+    window.showEditPipeline = function(pipelineId) {
+        _plMode = 'edit';
+        _plEditingId = pipelineId;
+        fetch('/api/pipelines/' + pipelineId, { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) {
+                if (!r.ok) throw new Error('not found');
+                return r.json();
+            })
+            .then(function(p) {
+                document.getElementById('pl-name').value = p.name || '';
+                document.getElementById('pl-desc').value = p.description || '';
+                document.getElementById('pl-tags').value = (p.tags || []).join(', ');
+                document.getElementById('pl-schedule').value = '';  // per-step in edit mode
+                return _plLoadCatalogs().then(function() {
+                    _plRenderSteps(p.steps || []);
+                    _plOpenModal('Edit Pipeline — ' + (p.name || ''), 'Save');
+                });
+            })
+            .catch(function() { showToast('Could not load pipeline', true); });
     };
 
     window.hidePipelineModal = function() {
         document.getElementById('pipeline-modal').style.display = 'none';
     };
 
-    window.createPipeline = function() {
+    window.submitPipeline = function() {
         var name = document.getElementById('pl-name').value.trim();
+        var validationEl = document.getElementById('pl-validation');
+        if (validationEl) { validationEl.style.display = 'none'; validationEl.textContent = ''; }
         if (!name) { showToast('Name required', true); return; }
         var desc = document.getElementById('pl-desc').value.trim();
-        var steps = _plCollectSteps();
-        var schedule = (document.getElementById('pl-schedule') || {}).value || '';
-        if (schedule.trim() && steps.length) {
-            for (var si = 0; si < steps.length; si++) {
-                if (!steps[si].schedule) steps[si].schedule = schedule.trim();
+        var tagsRaw = document.getElementById('pl-tags').value.trim();
+        var tags = tagsRaw ? tagsRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean) : [];
+        var collected = _plCollectSteps();
+        if (collected.errors.length) {
+            if (validationEl) {
+                validationEl.textContent = collected.errors.join('  ·  ');
+                validationEl.style.display = '';
+            }
+            showToast(collected.errors[0], true);
+            return;
+        }
+        // Apply default schedule from the pipeline-level input to any step
+        // that didn't set its own. Only applied at create time — on edit we
+        // trust per-step values since the operator already saw them.
+        if (_plMode === 'create') {
+            var schedule = document.getElementById('pl-schedule').value.trim();
+            if (schedule) {
+                collected.steps.forEach(function(s) {
+                    if (!s.schedule) s.schedule = schedule;
+                });
             }
         }
-        var body = { name: name, description: desc, steps: steps };
-        fetch('/api/pipelines', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' }, body: JSON.stringify(body) })
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (data.id) {
-                    showToast('Pipeline created');
+        var body = { name: name, description: desc, tags: tags, steps: collected.steps };
+        var url = '/api/pipelines' + (_plMode === 'edit' ? '/' + _plEditingId : '');
+        var method = _plMode === 'edit' ? 'PUT' : 'POST';
+        fetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
+            body: JSON.stringify(body),
+        })
+            .then(function(r) {
+                return r.json().then(function(data) { return { ok: r.ok, status: r.status, data: data }; });
+            })
+            .then(function(resp) {
+                if (resp.ok && (resp.data.id || resp.data.ok)) {
+                    showToast(_plMode === 'edit' ? 'Pipeline saved' : 'Pipeline created');
                     hidePipelineModal();
                     refreshPipelines();
                 } else {
-                    showToast(data.error || 'Failed', true);
+                    var msg = (resp.data && resp.data.error) || ('HTTP ' + resp.status);
+                    showToast(msg, true);
+                    if (validationEl) {
+                        validationEl.textContent = msg;
+                        validationEl.style.display = '';
+                    }
                 }
             })
-            .catch(function() { showToast('Failed to create pipeline', true); });
+            .catch(function() {
+                showToast(_plMode === 'edit' ? 'Save failed' : 'Create failed', true);
+            });
     };
+
+    // Step-list event delegation: add, remove, toggle deps, fill example,
+    // switch type, edit step ID (re-renders deps so chips stay valid).
+    document.getElementById('pl-add-step').addEventListener('click', function() {
+        var list = document.getElementById('pl-steps-list');
+        list.insertAdjacentHTML('beforeend', _plRenderStepCard({}));
+        var newCard = list.lastElementChild;
+        _plUpdateConditionals(newCard);
+        _plRenderDepChips();
+    });
+
+    document.getElementById('pl-steps-list').addEventListener('click', function(e) {
+        var rm = e.target.closest('[data-action-remove-step]');
+        if (rm) {
+            var card = rm.closest('[data-pl-step]');
+            if (card) { card.remove(); _plRenderDepChips(); }
+            return;
+        }
+        var dep = e.target.closest('[data-action-toggle-dep]');
+        if (dep) {
+            var picker = dep.closest('[data-field="depends_on"]');
+            if (!picker) return;
+            var current = (picker.dataset.deps || '').split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+            var depId = dep.dataset.actionToggleDep;
+            var pos = current.indexOf(depId);
+            if (pos >= 0) current.splice(pos, 1); else current.push(depId);
+            picker.dataset.deps = current.join(',');
+            _plRenderDepChips();
+            return;
+        }
+        var ex = e.target.closest('[data-action-fill-example]');
+        if (ex) {
+            var c = ex.closest('[data-pl-step]');
+            var svcSel = c && c.querySelector('[data-field="service"]');
+            if (!svcSel || !svcSel.value) { showToast('Pick a service first', true); return; }
+            var svc = (_plServiceCache || []).find(function(s) { return s.name === svcSel.value; });
+            if (!svc) return;
+            var ta = c.querySelector('[data-field="config"]');
+            if (ta) ta.value = JSON.stringify(svc.example_config || {}, null, 2);
+        }
+    });
+
+    document.getElementById('pl-steps-list').addEventListener('change', function(e) {
+        var card = e.target.closest('[data-pl-step]');
+        if (!card) return;
+        if (e.target.dataset.field === 'step_type') _plUpdateConditionals(card);
+        if (e.target.dataset.field === 'service') _plUpdateServiceDesc(card);
+        if (e.target.dataset.field === 'id') _plRenderDepChips();
+    });
+
+    document.getElementById('pl-steps-list').addEventListener('input', function(e) {
+        // Re-render dep chips as the operator types step names so the label
+        // ("step1: Build") stays in sync. Cheap — just rewrites innerHTML.
+        if (e.target.dataset && (e.target.dataset.field === 'id' || e.target.dataset.field === 'name')) {
+            _plRenderDepChips();
+        }
+    });
 
     window.showDecisionModal = function(idx) {
         var d = _decisionCache[idx];

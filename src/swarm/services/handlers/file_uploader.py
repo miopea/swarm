@@ -8,7 +8,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import aiohttp
 
@@ -79,6 +79,14 @@ async def _get_access_token(
 @dataclass
 class FileUploader:
     """Upload a local file to Google Drive via service account."""
+
+    description = "Upload a local file to Google Drive via a service account."
+    example_config: ClassVar[dict[str, Any]] = {
+        "credentials_path": "/path/to/sa.json",
+        "file_path": "/path/to/file.pdf",
+        "mime_type": "application/pdf",
+        "folder_id": "",
+    }
 
     async def execute(
         self,

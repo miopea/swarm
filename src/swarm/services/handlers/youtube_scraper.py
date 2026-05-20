@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import aiohttp
 
@@ -32,6 +32,13 @@ async def _fetch_json(
 @dataclass
 class YouTubeScraper:
     """Fetch recent videos from YouTube channels via the Data API v3."""
+
+    description = "Fetch recent videos from YouTube channels (Data API v3)."
+    example_config: ClassVar[dict[str, Any]] = {
+        "api_key": "",
+        "channels": ["UC_x5XG1OV2P6uZZ5FSM9Ttw"],
+        "max_results": 10,
+    }
 
     async def execute(
         self,

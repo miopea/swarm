@@ -172,6 +172,34 @@
             border: 1px solid var(--border); border-radius: 4px;
             padding: 0.4rem; font-family: inherit; font-size: 0.85rem;
         }
+        /* --- Pipeline editor — added P1, styled to match existing modal idiom --- */
+        .pl-section { margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--border); }
+        .pl-section:last-child { border-bottom: none; }
+        .pl-section-title { color: var(--honey); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.5rem; font-weight: 600; }
+        .pl-step-card {
+            background: rgba(255,255,255,0.02); border: 1px solid var(--border);
+            border-radius: 6px; padding: 0.6rem; margin-bottom: 0.5rem;
+        }
+        .pl-step-card .pl-step-header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+        .pl-step-card .pl-step-header input[type="text"] { flex: 1; min-width: 0; }
+        .pl-step-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+        .pl-step-fields .pl-full { grid-column: 1 / -1; }
+        .pl-chip-picker {
+            display: flex; flex-wrap: wrap; gap: 0.3rem; padding: 0.3rem;
+            border: 1px dashed var(--border); border-radius: 4px; min-height: 32px;
+            background: var(--hive-bg);
+        }
+        .pl-chip {
+            display: inline-flex; align-items: center; gap: 0.25rem;
+            background: var(--panel); border: 1px solid var(--border); color: var(--lavender);
+            padding: 0.1rem 0.4rem; border-radius: 10px; font-size: 0.7rem; cursor: pointer;
+            user-select: none;
+        }
+        .pl-chip.pl-chip-on { background: var(--lavender); color: var(--hive-bg); border-color: var(--lavender); }
+        .pl-chip-empty { color: var(--muted); font-size: 0.7rem; font-style: italic; padding: 0.1rem 0.3rem; }
+        @media (max-width: 540px) {
+            .pl-step-fields { grid-template-columns: 1fr; }
+        }
         /* --- Layout --- */
         .modal-padding { padding: 1rem; flex: 1; overflow-y: auto; min-height: 0; }
         .modal-footer {

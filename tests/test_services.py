@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 
@@ -47,6 +47,31 @@ class TestServiceRegistry:
         assert reg.unregister("echo")
         assert not reg.has("echo")
         assert not reg.unregister("echo")
+
+    def test_describe_returns_metadata(self) -> None:
+        """P1: describe() feeds the pipeline-editor service dropdown — must
+        return name/description/example_config for every registered handler,
+        defaulting empty strings/dicts when the handler doesn't expose them.
+        """
+
+        class _RichHandler:
+            description = "A handler with metadata."
+            example_config: ClassVar[dict[str, Any]] = {"foo": "bar"}
+
+            async def execute(
+                self, config: dict[str, Any], context: ServiceContext
+            ) -> ServiceResult:
+                return ServiceResult(success=True)
+
+        reg = ServiceRegistry()
+        reg.register("rich", _RichHandler())
+        reg.register("bare", _EchoHandler())
+        described = {entry["name"]: entry for entry in reg.describe()}
+        assert described["rich"]["description"] == "A handler with metadata."
+        assert described["rich"]["example_config"] == {"foo": "bar"}
+        # Backward-compat: handler without the optional attrs gets empties.
+        assert described["bare"]["description"] == ""
+        assert described["bare"]["example_config"] == {}
 
     @pytest.mark.asyncio
     async def test_execute_success(self) -> None:

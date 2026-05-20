@@ -16,6 +16,10 @@ if TYPE_CHECKING:
 def register(app: web.Application) -> None:
     app.router.add_get("/api/pipelines", handle_list)
     app.router.add_post("/api/pipelines", handle_create)
+    # Service catalog endpoint feeds the pipeline-editor's "Automated step"
+    # dropdown. Listed BEFORE the {pipeline_id} routes so "/services" isn't
+    # consumed as a pipeline id by aiohttp's URL dispatcher.
+    app.router.add_get("/api/pipelines/services", handle_services)
     app.router.add_get("/api/pipelines/{pipeline_id}", handle_get)
     app.router.add_put("/api/pipelines/{pipeline_id}", handle_update)
     app.router.add_delete("/api/pipelines/{pipeline_id}", handle_delete)
@@ -51,6 +55,21 @@ async def handle_list(request: web.Request) -> web.Response:
     engine = _get_engine(request)
     pipelines = engine.list_all()
     return web.json_response([p.to_dict() for p in pipelines])
+
+
+async def handle_services(request: web.Request) -> web.Response:
+    """List registered automated-step services with example configs.
+
+    Feeds the pipeline editor's automated-step UI so the operator can pick
+    a service from a dropdown and pre-fill a sensible config skeleton —
+    closing the gap where the type=automated path was effectively unusable
+    from the dashboard.
+    """
+    daemon = get_daemon(request)
+    registry = getattr(daemon, "service_registry", None)
+    if registry is None:
+        return web.json_response({"services": []})
+    return web.json_response({"services": registry.describe()})
 
 
 async def handle_get(request: web.Request) -> web.Response:
@@ -116,12 +135,49 @@ async def handle_update(request: web.Request) -> web.Response:
     engine = _get_engine(request)
     pipeline_id = request.match_info["pipeline_id"]
     body = await request.json()
-    result = engine.update(
-        pipeline_id,
-        name=body.get("name"),
-        description=body.get("description"),
-        tags=body.get("tags"),
-    )
+
+    # Optional step replacement — only allowed when the pipeline is DRAFT or
+    # PAUSED. The engine raises ValueError if the status forbids edits; we
+    # surface that as 409 so the UI can show a useful message without
+    # making the operator guess at why their save bounced.
+    steps_payload = body.get("steps")
+    steps_arg: list[PipelineStep] | None = None
+    if steps_payload is not None:
+        steps_arg = []
+        for sd in steps_payload:
+            step_id = (sd.get("id") or "").strip()
+            step_name = (sd.get("name") or "").strip()
+            if not step_id or not step_name:
+                return json_error("each step needs id and name")
+            try:
+                step_type = StepType(sd.get("step_type") or sd.get("type") or "agent")
+            except ValueError:
+                return json_error(f"invalid step_type for step {step_id!r}")
+            steps_arg.append(
+                PipelineStep(
+                    id=step_id,
+                    name=step_name,
+                    step_type=step_type,
+                    description=sd.get("description", ""),
+                    depends_on=sd.get("depends_on", []),
+                    task_type=sd.get("task_type", "chore"),
+                    assigned_worker=sd.get("assigned_worker"),
+                    service=sd.get("service", ""),
+                    config=sd.get("config", {}),
+                    schedule=sd.get("schedule", ""),
+                )
+            )
+
+    try:
+        result = engine.update(
+            pipeline_id,
+            name=body.get("name"),
+            description=body.get("description"),
+            tags=body.get("tags"),
+            steps=steps_arg,
+        )
+    except ValueError as e:
+        return json_error(str(e), 409)
     if not result:
         return json_error("Pipeline not found", 404)
     return web.json_response(result.to_dict())

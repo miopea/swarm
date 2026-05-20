@@ -116,8 +116,15 @@ class PipelineEngine(EventEmitter):
         name: str | None = None,
         description: str | None = None,
         tags: list[str] | None = None,
+        steps: list[PipelineStep] | None = None,
     ) -> Pipeline | None:
-        """Update mutable fields on an existing pipeline. Returns None if not found."""
+        """Update mutable fields on an existing pipeline. Returns None if not found.
+
+        Step replacement is only permitted while the pipeline is in DRAFT or
+        PAUSED state — once a pipeline is RUNNING/COMPLETED/FAILED, the step
+        graph is locked. Callers should treat an attempted step edit on a
+        non-editable pipeline as a 409 conflict.
+        """
         pipeline = self._pipelines.get(pipeline_id)
         if not pipeline:
             return None
@@ -127,6 +134,16 @@ class PipelineEngine(EventEmitter):
             pipeline.description = description
         if tags is not None:
             pipeline.tags = tags
+        if steps is not None:
+            if pipeline.status not in (PipelineStatus.DRAFT, PipelineStatus.PAUSED):
+                raise ValueError(
+                    f"Pipeline {pipeline_id} is {pipeline.status.value} — "
+                    "steps can only be edited while draft or paused"
+                )
+            pipeline.steps = steps
+            # New step list may reference task IDs from prior steps — wipe the
+            # map and rebuild from whatever survived the replacement.
+            self._rebuild_task_step_map()
         pipeline.updated_at = time.time()
         self._persist()
         self.emit("change")

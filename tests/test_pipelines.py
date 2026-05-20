@@ -315,6 +315,36 @@ class TestPipelineEngine:
         assert result.description == "keep this"
         assert result.tags == ["new-tag"]
 
+    def test_update_steps_when_draft(self, tmp_path: Path) -> None:
+        """P1: editing the step graph is allowed while the pipeline is DRAFT."""
+        engine, _ = self._make_engine(tmp_path)
+        p = engine.create("editable", steps=[PipelineStep(id="a", name="A")])
+        new_steps = [
+            PipelineStep(id="x", name="X"),
+            PipelineStep(id="y", name="Y", depends_on=["x"]),
+        ]
+        result = engine.update(p.id, steps=new_steps)
+        assert result is not None
+        assert [s.id for s in result.steps] == ["x", "y"]
+
+    def test_update_steps_when_paused(self, tmp_path: Path) -> None:
+        """P1: editing the step graph is allowed while the pipeline is PAUSED."""
+        engine, _ = self._make_engine(tmp_path)
+        p = engine.create("pausable", steps=[PipelineStep(id="a", name="A")])
+        engine.start_pipeline(p.id)
+        engine.pause_pipeline(p.id)
+        result = engine.update(p.id, steps=[PipelineStep(id="b", name="B")])
+        assert result is not None
+        assert [s.id for s in result.steps] == ["b"]
+
+    def test_update_steps_rejected_when_running(self, tmp_path: Path) -> None:
+        """P1: step edits are forbidden once the pipeline is RUNNING."""
+        engine, _ = self._make_engine(tmp_path)
+        p = engine.create("locked", steps=[PipelineStep(id="a", name="A")])
+        engine.start_pipeline(p.id)
+        with pytest.raises(ValueError, match="can only be edited"):
+            engine.update(p.id, steps=[PipelineStep(id="b", name="B")])
+
 
 # ---------------------------------------------------------------------------
 # Schedule matching

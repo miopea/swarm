@@ -6,7 +6,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from swarm.logging import get_logger
 from swarm.services.registry import ServiceContext, ServiceResult
@@ -24,6 +24,15 @@ class HeadlessClaude:
     NOT a Worker subclass — this is a service handler.  Results appear in
     the pipeline view, not the worker sidebar.
     """
+
+    description = "Run a one-shot headless Claude/Gemini/Codex subprocess."
+    example_config: ClassVar[dict[str, Any]] = {
+        "prompt": "Summarize the work shipped today.",
+        "provider": "claude",
+        "output_format": "json",
+        "max_turns": 5,
+        "timeout": 120,
+    }
 
     async def execute(
         self,

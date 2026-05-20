@@ -740,25 +740,43 @@
         </div>
     </div>
 </div>
-<!-- Pipeline create modal (hidden) -->
+<!-- Pipeline create/edit modal (hidden) -->
 <div id="pipeline-modal" class="modal-overlay" style="display:none" data-modal-dismiss="hidePipelineModal">
-    <div class="modal-box modal-md" role="dialog" aria-modal="true">
+    <div class="modal-box modal-lg" role="dialog" aria-modal="true">
         <div class="panel-header">
-            <span>New Pipeline</span>
+            <span id="pl-modal-title">New Pipeline</span>
             <button class="btn btn-sm btn-secondary" data-action="hidePipelineModal">Close</button>
         </div>
-        <div class="modal-padding">
-            <label class="form-label">Name</label>
-            <input id="pl-name" type="text" placeholder="e.g. content-pipeline" class="modal-input mb-md">
-            <label class="form-label">Description</label>
-            <textarea id="pl-desc" rows="2" placeholder="Pipeline description" class="modal-textarea mb-md"></textarea>
-            <label class="form-label">Steps <button class="btn btn-xs btn-secondary" id="pl-add-step" type="button" style="margin-left:0.5rem">+ Add Step</button></label>
-            <div id="pl-steps-list" class="mb-md"></div>
-            <label class="form-label">Default Schedule <span class="hint">(optional, HH:MM — * for wildcard)</span></label>
-            <input id="pl-schedule" type="text" placeholder="e.g. 09:00 or *:30" class="modal-input mb-md">
+        <div class="modal-padding modal-body-scroll">
+            <!-- Section: Basics -->
+            <div class="pl-section">
+                <div class="pl-section-title">Basics</div>
+                <label class="form-label">Name</label>
+                <input id="pl-name" type="text" placeholder="e.g. content-pipeline" class="modal-input mb-md">
+                <label class="form-label">Description</label>
+                <textarea id="pl-desc" rows="2" placeholder="What does this pipeline do?" class="modal-textarea mb-md"></textarea>
+                <label class="form-label">Tags <span class="hint">(comma-separated)</span></label>
+                <input id="pl-tags" type="text" placeholder="content, weekly" class="modal-input mb-md">
+            </div>
+            <!-- Section: Steps -->
+            <div class="pl-section">
+                <div class="pl-section-title flex-center gap-sm">
+                    <span>Steps</span>
+                    <button class="btn btn-xs btn-secondary" id="pl-add-step" type="button">+ Add Step</button>
+                </div>
+                <div id="pl-steps-list" class="mb-md"></div>
+                <div id="pl-validation" class="text-poppy text-sm mb-md" style="display:none"></div>
+            </div>
+            <!-- Section: Schedule (P2 expands this into a builder) -->
+            <div class="pl-section">
+                <div class="pl-section-title">Schedule</div>
+                <label class="form-label">Default Schedule <span class="hint">(optional, HH:MM or 5-field cron — applied to every step that doesn't override)</span></label>
+                <input id="pl-schedule" type="text" placeholder="e.g. 09:00 or *:30 or  30 14 * * 1-5" class="modal-input mb-md">
+                <div class="text-muted text-xs">A richer schedule builder with timezone support is coming in P2. For now: <code>HH:MM</code>, <code>*:MM</code>, <code>HH:*</code>, or any 5-field cron expression.</div>
+            </div>
             <div class="modal-footer modal-footer-flush">
                 <button class="btn btn-secondary" data-action="hidePipelineModal">Cancel</button>
-                <button class="btn" data-action="createPipeline">Create</button>
+                <button class="btn" id="pl-submit-btn" data-action="submitPipeline">Create</button>
             </div>
         </div>
     </div>

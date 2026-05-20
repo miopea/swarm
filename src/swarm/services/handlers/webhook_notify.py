@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, ClassVar
 
 import aiohttp
 
@@ -16,6 +16,13 @@ _TIMEOUT = 10
 
 class WebhookNotify:
     """POST JSON to a configured URL when a pipeline step executes."""
+
+    description = "POST a JSON payload to a configured URL."
+    example_config: ClassVar[dict[str, Any]] = {
+        "url": "https://example.com/hook",
+        "headers": {"X-Auth": "token"},
+        "extra": {"source": "swarm"},
+    }
 
     async def execute(self, config: dict[str, Any], context: ServiceContext) -> ServiceResult:
         url = config.get("url", "")

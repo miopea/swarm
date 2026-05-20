@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, ClassVar
 
 from swarm.logging import get_logger
 from swarm.services.registry import ServiceContext, ServiceResult
@@ -14,6 +14,13 @@ _DEFAULT_TIMEOUT = 60
 
 class ShellCommand:
     """Execute a shell command as an automated pipeline step."""
+
+    description = "Run a shell command and capture stdout/stderr."
+    example_config: ClassVar[dict[str, Any]] = {
+        "command": "echo hello",
+        "timeout": 60,
+        "cwd": "",
+    }
 
     async def execute(self, config: dict[str, Any], context: ServiceContext) -> ServiceResult:
         command = config.get("command", "")

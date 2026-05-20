@@ -23,7 +23,7 @@ import asyncio
 import hashlib
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from swarm.logging import get_logger
 from swarm.services.registry import ServiceContext, ServiceResult
@@ -46,6 +46,13 @@ _SEVERITY_TO_PRIORITY: dict[str, str] = {
 
 class ClaudeCodeSecurity:
     """Run ``claude code security scan`` and return deduplicated findings."""
+
+    description = "Run Claude Code Security scan; emit deduped findings."
+    example_config: ClassVar[dict[str, Any]] = {
+        "target_dir": "/path/to/repo",
+        "timeout": 600,
+        "severity_filter": ["high", "critical"],
+    }
 
     async def execute(self, config: dict[str, Any], context: ServiceContext) -> ServiceResult:
         target_dir = config.get("target_dir", "")

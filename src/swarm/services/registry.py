@@ -30,7 +30,14 @@ class ServiceResult:
 
 
 class ServiceHandler(Protocol):
-    """Protocol for async service handlers."""
+    """Protocol for async service handlers.
+
+    Handlers MAY expose ``description`` and ``example_config`` class
+    attributes — the registry surfaces these via ``describe()`` so the
+    pipeline editor UI can offer a "Use example config" affordance and a
+    short one-liner about each service. Missing attributes default to
+    empty/empty-dict and are silently tolerated for backward compat.
+    """
 
     async def execute(
         self,
@@ -62,6 +69,25 @@ class ServiceRegistry:
     @property
     def names(self) -> list[str]:
         return sorted(self._handlers.keys())
+
+    def describe(self) -> list[dict[str, Any]]:
+        """Return service metadata for UI consumption.
+
+        Each entry: ``{"name": str, "description": str, "example_config": dict}``
+        Sorted by name. Handlers without ``description`` / ``example_config``
+        attributes get empty defaults — never raises.
+        """
+        out: list[dict[str, Any]] = []
+        for name in sorted(self._handlers.keys()):
+            handler = self._handlers[name]
+            out.append(
+                {
+                    "name": name,
+                    "description": getattr(handler, "description", "") or "",
+                    "example_config": getattr(handler, "example_config", {}) or {},
+                }
+            )
+        return out
 
     def has(self, name: str) -> bool:
         return name in self._handlers

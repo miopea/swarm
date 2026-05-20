@@ -10,6 +10,36 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.20.2] - 2026-05-20
+
+### Features
+
+- **Pipeline editor — P1 of the multi-phase UX overhaul.** Replaces the
+  single-modal create flow that couldn't reach automated steps with a
+  sectioned editor (Basics / Steps / Schedule). Each step gets a card
+  layout; conditional fields appear by step type — Agent shows worker +
+  task_type dropdowns plus description; Human shows description; Automated
+  finally surfaces a Service dropdown (populated from the new
+  `GET /api/pipelines/services` endpoint) and a JSON config field with a
+  "Use example" button that pre-fills the registered handler's
+  `example_config`. Dependencies became a chip picker over already-defined
+  steps; cycles and duplicate IDs are rejected client-side before submit.
+  Step rows on the list now surface `error` and `result` text (previously
+  hidden in the model), and pipelines in DRAFT/PAUSED show an **Edit**
+  button that re-opens the same modal pre-filled and submits via
+  `PUT /api/pipelines/{id}` — `PipelineEngine.update()` was extended to
+  accept a `steps=` list under the DRAFT/PAUSED guardrail, raising
+  `ValueError` that the route handler maps to 409 once a pipeline is
+  RUNNING. Built-in handlers (`shell_command`, `webhook_notify`,
+  `headless_claude`, `file_uploader`, `youtube_scraper`,
+  `claude_code_security`) now advertise `description` + `example_config`
+  attrs that feed the dropdown via `ServiceRegistry.describe()`. P2 in the
+  series replaces the still-text-only schedule input with a cron builder.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.20] - 2026-05-20
 
 ### Features
