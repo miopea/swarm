@@ -380,6 +380,143 @@ class PlaybookStore(BaseStore):
             return pb
         return None
 
+    # -- analytics (P4) ------------------------------------------------
+    #
+    # The dashboard's Playbooks tab needs more than a flat list: aggregate
+    # counts by status/scope, top movers by usage and winrate, recent
+    # event timeline per playbook, and total event volume in a rolling
+    # window. Everything below is read-only and rides the existing
+    # (playbook_id, ts) index on playbook_events — no schema changes.
+
+    def get_events_for_playbook(
+        self,
+        playbook_id: str,
+        *,
+        limit: int = 100,
+    ) -> list[dict[str, object]]:
+        """Recent events for one playbook, newest first."""
+        rows = self._db.fetchall(
+            "SELECT event, ts, task_id, worker, detail "
+            "FROM playbook_events WHERE playbook_id = ? "
+            "ORDER BY ts DESC LIMIT ?",
+            (playbook_id, max(1, min(limit, 1000))),
+        )
+        return [
+            {
+                "event": r["event"],
+                "ts": float(r["ts"] or 0.0),
+                "task_id": r["task_id"] or "",
+                "worker": r["worker"] or "",
+                "detail": r["detail"] or "",
+            }
+            for r in rows
+        ]
+
+    def get_analytics(self, *, since_ts: float | None = None) -> dict[str, object]:
+        """Aggregate counts + top movers for the dashboard analytics pane.
+
+        Returns a dict with:
+          - ``totals`` — count by status (active, candidate, retired)
+          - ``scope_breakdown`` — per-scope-prefix count / uses / winrate
+          - ``event_counts`` — events recorded since ``since_ts``
+            (defaults to last 24h) grouped by event type
+          - ``top_by_uses`` — 5 most-used playbooks (any status)
+          - ``top_by_winrate`` — 5 highest-winrate playbooks with
+            ``uses >= 3`` (so a single lucky win doesn't dominate)
+
+        Pure aggregation queries — no per-playbook fanout, so this runs
+        in O(playbooks + events_in_window) regardless of fleet size.
+        """
+        if since_ts is None:
+            since_ts = time.time() - 24 * 3600
+
+        # Status totals — straightforward GROUP BY.
+        totals = {"active": 0, "candidate": 0, "retired": 0}
+        for row in self._db.fetchall("SELECT status, COUNT(*) AS n FROM playbooks GROUP BY status"):
+            status = row["status"] or "candidate"
+            totals[status] = int(row["n"])
+
+        # Scope breakdown: each playbook scope is either "global" or
+        # something like "project:rcg-hub" / "worker:nexus". We bucket by
+        # the prefix-before-colon so the operator sees totals per family.
+        scope_breakdown: dict[str, dict[str, float]] = {}
+        for row in self._db.fetchall("SELECT scope, uses, wins, losses FROM playbooks"):
+            scope = row["scope"] or "global"
+            prefix = scope.split(":", 1)[0]
+            bucket = scope_breakdown.setdefault(
+                prefix, {"count": 0.0, "uses": 0.0, "wins": 0.0, "losses": 0.0}
+            )
+            bucket["count"] += 1
+            bucket["uses"] += int(row["uses"] or 0)
+            bucket["wins"] += int(row["wins"] or 0)
+            bucket["losses"] += int(row["losses"] or 0)
+        # Derive winrate per scope. winrate = wins / (wins + losses);
+        # NULL when no attribution recorded yet so the UI can render "—".
+        for bucket in scope_breakdown.values():
+            attributed = bucket["wins"] + bucket["losses"]
+            bucket["winrate"] = bucket["wins"] / attributed if attributed > 0 else -1.0
+
+        # Event counts in the window.
+        event_counts: dict[str, int] = {}
+        for row in self._db.fetchall(
+            "SELECT event, COUNT(*) AS n FROM playbook_events WHERE ts >= ? GROUP BY event",
+            (since_ts,),
+        ):
+            event_counts[row["event"]] = int(row["n"])
+
+        # Top by uses — straight ORDER BY. Excludes retired so the list
+        # tracks what the fleet is *actively leaning on*.
+        top_by_uses: list[dict[str, object]] = []
+        for row in self._db.fetchall(
+            "SELECT name, title, scope, uses, wins, losses, status "
+            "FROM playbooks WHERE status != 'retired' "
+            "ORDER BY uses DESC LIMIT 5"
+        ):
+            wins = int(row["wins"] or 0)
+            losses = int(row["losses"] or 0)
+            attributed = wins + losses
+            top_by_uses.append(
+                {
+                    "name": row["name"],
+                    "title": row["title"] or row["name"],
+                    "scope": row["scope"] or "global",
+                    "status": row["status"],
+                    "uses": int(row["uses"] or 0),
+                    "winrate": (wins / attributed) if attributed > 0 else -1.0,
+                }
+            )
+
+        # Top by winrate — same shape, gated on uses >= 3 so a 1-win-0-loss
+        # candidate doesn't outrank a 50-and-10 active.
+        top_by_winrate: list[dict[str, object]] = []
+        for row in self._db.fetchall(
+            "SELECT name, title, scope, uses, wins, losses, status FROM playbooks "
+            "WHERE status != 'retired' AND uses >= 3 AND (wins + losses) > 0 "
+            "ORDER BY (1.0 * wins / (wins + losses)) DESC, uses DESC LIMIT 5"
+        ):
+            wins = int(row["wins"] or 0)
+            losses = int(row["losses"] or 0)
+            attributed = wins + losses
+            top_by_winrate.append(
+                {
+                    "name": row["name"],
+                    "title": row["title"] or row["name"],
+                    "scope": row["scope"] or "global",
+                    "status": row["status"],
+                    "uses": int(row["uses"] or 0),
+                    "winrate": (wins / attributed) if attributed > 0 else -1.0,
+                }
+            )
+
+        return {
+            "totals": totals,
+            "scope_breakdown": scope_breakdown,
+            "event_counts": event_counts,
+            "since_ts": since_ts,
+            "top_by_uses": top_by_uses,
+            "top_by_winrate": top_by_winrate,
+        }
+
     # -- helpers -------------------------------------------------------
 
     @staticmethod

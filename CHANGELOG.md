@@ -10,6 +10,37 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.20.5] - 2026-05-20
+
+### Features
+
+- **Playbooks analytics — P4a of the editor UX series.** The Playbooks
+  tab gains a summary band at the top showing per-status totals
+  (active / candidate / retired) and a rolling 24-hour event window
+  (applied / wins / losses), plus a movers panel: top 5 by uses, top 5
+  by winrate (gated on `uses >= 3` so a single lucky win can't dominate
+  a 50-and-10 active), and a per-scope breakdown (global / project / worker
+  with totals and derived winrate). The flat list below gains status
+  chips (All / Active / Candidate / Retired) and a scope dropdown that
+  filters client-side from a single fetch. Clicking a playbook title
+  (or a row in the movers panel) opens a new event-timeline modal
+  rendering the `playbook_events` rows newest-first, color-coded by
+  event type (synthesized / applied / win / loss / promoted / retired /
+  consolidated) with the task ID / worker / detail on each row. Two new
+  PlaybookStore methods (`get_events_for_playbook` + `get_analytics`)
+  power two new endpoints (`GET /api/playbooks/{name}/events`,
+  `GET /api/playbooks/analytics?since_hours=N`). Pure aggregation — no
+  schema changes, rides the existing `(playbook_id, ts)` index on
+  `playbook_events`. Winrate is `-1.0` when no outcomes have been
+  attributed yet so the UI can render "—" instead of misleading "0%".
+  Config tuning UI for `PlaybookConfig` was split off as P4b — the
+  config-save-chain wiring is risky enough (silent-drop bug class lives
+  there) to deserve its own pass rather than getting bundled.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.20.4] - 2026-05-20
 
 ### Features

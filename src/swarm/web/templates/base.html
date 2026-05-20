@@ -239,6 +239,38 @@
             0% { background: var(--lavender); }
             100% { background: transparent; }
         }
+        /* P4: Playbooks analytics summary + filter */
+        .pb-analytics { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
+        .pb-stat-row { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+        .pb-stat { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 0.4rem 0.6rem; min-width: 70px; text-align: center; }
+        .pb-stat-num { font-size: 1.1rem; font-weight: 600; color: var(--honey); }
+        .pb-stat-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+        .pb-analytics-detail { margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.75rem; }
+        .pb-mover-list { flex: 1; min-width: 240px; }
+        .pb-mover-title { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.2rem; }
+        .pb-mover-row { display: flex; justify-content: space-between; padding: 0.15rem 0; }
+        .pb-mover-name { color: var(--lavender); cursor: pointer; }
+        .pb-mover-name:hover { text-decoration: underline; }
+        .pb-mover-meta { color: var(--muted); }
+        .pb-scope-table { font-size: 0.75rem; width: 100%; }
+        .pb-scope-table td { padding: 0.1rem 0.4rem 0.1rem 0; }
+        .pb-scope-table .pb-scope-cell { color: var(--lavender); }
+        .filter-label { font-size: 0.7rem; color: var(--muted); align-self: center; }
+        /* Event timeline */
+        .pb-event-row { display: flex; gap: 0.5rem; padding: 0.2rem 0; border-bottom: 1px solid var(--border); font-size: 0.75rem; }
+        .pb-event-row:last-child { border-bottom: none; }
+        .pb-event-ts { color: var(--muted); flex: 0 0 auto; min-width: 130px; font-family: monospace; font-size: 0.7rem; }
+        .pb-event-type { flex: 0 0 80px; font-weight: 600; }
+        .pb-event-type-applied { color: var(--lavender); }
+        .pb-event-type-win { color: var(--leaf); }
+        .pb-event-type-loss { color: var(--poppy); }
+        .pb-event-type-promoted { color: var(--honey); }
+        .pb-event-type-retired { color: var(--muted); }
+        .pb-event-type-synthesized { color: var(--sage); }
+        .pb-event-type-consolidated { color: var(--amber); }
+        .pb-event-meta { color: var(--muted); flex: 1; }
+        .pb-playbook-row .task-title { cursor: pointer; }
+        .pb-playbook-row .task-title:hover { text-decoration: underline; }
         /* --- Layout --- */
         .modal-padding { padding: 1rem; flex: 1; overflow-y: auto; min-height: 0; }
         .modal-footer {

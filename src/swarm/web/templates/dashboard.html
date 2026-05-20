@@ -328,8 +328,42 @@
             </div>
             <!-- Playbooks tab (#404): self-improving procedural memory -->
             <div class="tab-content" id="tab-playbooks" role="tabpanel" aria-labelledby="tab-playbooks-btn">
+                <!-- P4: analytics summary band -->
+                <div id="pb-analytics" class="pb-analytics" style="display:none">
+                    <div class="pb-stat-row">
+                        <div class="pb-stat"><div class="pb-stat-num" id="pb-stat-active">—</div><div class="pb-stat-label">active</div></div>
+                        <div class="pb-stat"><div class="pb-stat-num" id="pb-stat-candidate">—</div><div class="pb-stat-label">candidate</div></div>
+                        <div class="pb-stat"><div class="pb-stat-num" id="pb-stat-retired">—</div><div class="pb-stat-label">retired</div></div>
+                        <div class="pb-stat"><div class="pb-stat-num" id="pb-stat-applied-24h">—</div><div class="pb-stat-label">applied/24h</div></div>
+                        <div class="pb-stat"><div class="pb-stat-num" id="pb-stat-wins-24h">—</div><div class="pb-stat-label">wins/24h</div></div>
+                        <div class="pb-stat"><div class="pb-stat-num" id="pb-stat-losses-24h">—</div><div class="pb-stat-label">losses/24h</div></div>
+                    </div>
+                    <div class="pb-analytics-detail" id="pb-analytics-detail"></div>
+                </div>
+                <!-- P4: filter bar -->
+                <div class="filter-bar" id="pb-filter-bar">
+                    <span class="filter-label">Status:</span>
+                    <button class="filter-chip active" data-pb-status="all" data-action="switchPlaybookFilter">All</button>
+                    <button class="filter-chip" data-pb-status="active" data-action="switchPlaybookFilter">Active</button>
+                    <button class="filter-chip" data-pb-status="candidate" data-action="switchPlaybookFilter">Candidate</button>
+                    <button class="filter-chip" data-pb-status="retired" data-action="switchPlaybookFilter">Retired</button>
+                    <span class="filter-label" style="margin-left:0.75rem">Scope:</span>
+                    <select id="pb-filter-scope" class="modal-select" style="max-width:180px"></select>
+                </div>
                 <div class="panel-body" id="playbook-list">
                     <div class="empty-state"><div class="mt-sm">No playbooks yet</div><div class="text-muted text-sm mt-sm">Synthesized from successful tasks — candidates are vetted by outcome before going fleet-active</div></div>
+                </div>
+            </div>
+            <!-- P4: Playbook event-timeline modal -->
+            <div id="pb-events-modal" class="modal-overlay" style="display:none" data-modal-dismiss="hidePlaybookEvents">
+                <div class="modal-box modal-md" role="dialog" aria-modal="true">
+                    <div class="panel-header">
+                        <span id="pb-events-title">Events</span>
+                        <button class="btn btn-sm btn-secondary" data-action="hidePlaybookEvents">Close</button>
+                    </div>
+                    <div class="modal-padding modal-body-scroll" id="pb-events-body">
+                        <div class="empty-state">Loading…</div>
+                    </div>
                 </div>
             </div>
             <!-- Activity — unified swarm event log (renamed from Buzz Log in Ship A.5) -->

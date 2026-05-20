@@ -18,6 +18,10 @@ _log = get_logger("server.routes.playbooks")
 
 def register(app: web.Application) -> None:
     app.router.add_get("/api/playbooks", handle_list_playbooks)
+    # /analytics MUST come before /{name}/... routes so it isn't shadowed
+    # by aiohttp's URL dispatcher matching "analytics" as a playbook name.
+    app.router.add_get("/api/playbooks/analytics", handle_analytics)
+    app.router.add_get("/api/playbooks/{name}/events", handle_playbook_events)
     app.router.add_post("/api/playbooks/{name}/promote", handle_promote_playbook)
     app.router.add_post("/api/playbooks/{name}/retire", handle_retire_playbook)
 
@@ -64,6 +68,47 @@ async def handle_promote_playbook(request: web.Request) -> web.Response:
         return json_error("playbook not found or already active", 404)
     _log.info("operator promoted playbook %s", name)
     return web.json_response({"promoted": True})
+
+
+@handle_errors
+async def handle_analytics(request: web.Request) -> web.Response:
+    """Aggregate playbook stats for the dashboard analytics pane (P4).
+
+    Optional ``?since_hours=N`` (default 24) bounds the event-count
+    window. Returns ``totals`` / ``scope_breakdown`` / ``event_counts`` /
+    ``top_by_uses`` / ``top_by_winrate`` — see ``PlaybookStore.get_analytics``.
+    """
+    import time as _time
+
+    d = get_daemon(request)
+    store = getattr(d, "playbook_store", None)
+    if store is None:
+        return json_error("playbook store unavailable", 503)
+    try:
+        since_hours = float(request.query.get("since_hours", "24"))
+    except ValueError:
+        since_hours = 24.0
+    since_ts = _time.time() - max(0.0, since_hours) * 3600.0
+    return web.json_response(store.get_analytics(since_ts=since_ts))
+
+
+@handle_errors
+async def handle_playbook_events(request: web.Request) -> web.Response:
+    """Recent event timeline for one playbook (P4)."""
+    d = get_daemon(request)
+    store = getattr(d, "playbook_store", None)
+    if store is None:
+        return json_error("playbook store unavailable", 503)
+    name = request.match_info["name"]
+    pb = store.get(name)
+    if pb is None:
+        return json_error(f"playbook {name!r} not found", 404)
+    try:
+        limit = min(int(request.query.get("limit", "100")), 500)
+    except ValueError:
+        limit = 100
+    events = store.get_events_for_playbook(pb.id, limit=limit)
+    return web.json_response({"name": name, "events": events})
 
 
 @handle_errors

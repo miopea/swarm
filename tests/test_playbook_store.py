@@ -162,3 +162,105 @@ def test_list_filters(store):
     )
     assert {p.name for p in st.list(status=PlaybookStatus.ACTIVE)} == {"g1"}
     assert {p.name for p in st.list(scope="project:swarm")} == {"p1"}
+
+
+# --- P4: analytics + per-playbook events --------------------------------
+
+
+def test_get_events_for_playbook_returns_newest_first(store):
+    st, _ = store
+    pb = st.create(Playbook(name="evtbook", body="trace events"))
+    st.record_event(pb.id, "applied", task_id="t1", worker="alice")
+    st.record_event(pb.id, "win", task_id="t1")
+    events = st.get_events_for_playbook(pb.id)
+    # Newest first — win was recorded after applied.
+    assert [e["event"] for e in events[:2]] == ["win", "applied"]
+    # Worker / task_id round-trip on the applied row.
+    applied = next(e for e in events if e["event"] == "applied")
+    assert applied["task_id"] == "t1"
+    assert applied["worker"] == "alice"
+
+
+def test_get_events_for_playbook_respects_limit(store):
+    st, _ = store
+    pb = st.create(Playbook(name="limited", body="cap test"))
+    for i in range(5):
+        st.record_event(pb.id, "applied", task_id=f"t{i}")
+    assert len(st.get_events_for_playbook(pb.id, limit=3)) == 3
+
+
+def test_get_analytics_totals_by_status(store):
+    st, _ = store
+    st.create(Playbook(name="a1", body="x", status=PlaybookStatus.ACTIVE))
+    st.create(Playbook(name="a2", body="y", status=PlaybookStatus.ACTIVE))
+    st.create(Playbook(name="c1", body="z", status=PlaybookStatus.CANDIDATE))
+    analytics = st.get_analytics()
+    assert analytics["totals"]["active"] == 2
+    assert analytics["totals"]["candidate"] == 1
+
+
+def test_get_analytics_scope_breakdown(store):
+    """Per-scope-prefix bucketing + winrate derivation."""
+    st, _ = store
+    g = st.create(Playbook(name="g", body="g", scope="global"))
+    p = st.create(Playbook(name="p", body="p", scope=project_scope("swarm")))
+    # Give the global one 2 wins / 1 loss, project one 1 win / 1 loss.
+    for _ in range(2):
+        st.record_outcome(g.id, win=True)
+    st.record_outcome(g.id, win=False)
+    st.record_outcome(p.id, win=True)
+    st.record_outcome(p.id, win=False)
+    bd = st.get_analytics()["scope_breakdown"]
+    assert bd["global"]["count"] == 1
+    assert bd["global"]["winrate"] == pytest.approx(2 / 3)
+    assert bd["project"]["count"] == 1
+    assert bd["project"]["winrate"] == pytest.approx(0.5)
+
+
+def test_get_analytics_event_counts_window(store):
+    """Events outside the since_ts window are excluded."""
+    import time as _time
+
+    st, _ = store
+    pb = st.create(Playbook(name="window", body="time test"))
+    st.record_event(pb.id, "applied")
+    # Look back only the next 60s — all events should be in.
+    analytics = st.get_analytics(since_ts=_time.time() - 60)
+    assert analytics["event_counts"].get("applied", 0) >= 1
+    # Looking forward (past all events) — counts should be empty.
+    analytics_future = st.get_analytics(since_ts=_time.time() + 3600)
+    assert analytics_future["event_counts"].get("applied", 0) == 0
+
+
+def test_get_analytics_top_by_uses_excludes_retired(store):
+    st, _ = store
+    a = st.create(Playbook(name="busy", body="busy"))
+    r = st.create(Playbook(name="oldretire", body="r", status=PlaybookStatus.RETIRED))
+    # Give both lots of uses.
+    for _ in range(5):
+        st.mark_applied(a.id, task_id="t", worker="w")
+        st.mark_applied(r.id, task_id="t", worker="w")
+    top = st.get_analytics()["top_by_uses"]
+    names = [row["name"] for row in top]
+    assert "busy" in names
+    assert "oldretire" not in names
+
+
+def test_get_analytics_top_by_winrate_min_uses_gate(store):
+    """uses < 3 are excluded so a 1-win-0-loss candidate doesn't dominate."""
+    st, _ = store
+    lucky = st.create(Playbook(name="lucky", body="lucky"))
+    proven = st.create(Playbook(name="proven", body="proven"))
+    # Lucky: 1 use, 1 win, 0 loss → 100% but only 1 use.
+    st.mark_applied(lucky.id, task_id="t", worker="w")
+    st.record_outcome(lucky.id, win=True)
+    # Proven: 4 uses, 3 wins, 1 loss → 75% with 4 uses.
+    for _ in range(4):
+        st.mark_applied(proven.id, task_id="t", worker="w")
+    for _ in range(3):
+        st.record_outcome(proven.id, win=True)
+    st.record_outcome(proven.id, win=False)
+    top = st.get_analytics()["top_by_winrate"]
+    names = [row["name"] for row in top]
+    assert "proven" in names
+    assert "lucky" not in names  # gated on uses >= 3

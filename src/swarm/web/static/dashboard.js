@@ -146,6 +146,9 @@
         retryStep: function(el) { retryStep(el.dataset.pipelineId, el.dataset.stepId); },
         openLinkedTask: function(el) { openLinkedTask(el.dataset.taskId); },
         copyStepResult: function(el) { copyStepResult(el.dataset.stepId); },
+        switchPlaybookFilter: function(el) { switchPlaybookFilter(el.dataset.pbStatus); },
+        showPlaybookEvents: function(el) { showPlaybookEvents(el.dataset.pbName); },
+        hidePlaybookEvents: function() { hidePlaybookEvents(); },
         toggleResourcePopover: function(el, e) { e.stopPropagation(); toggleResourcePopover(); },
         toggleBottomPanel: function() { toggleBottomPanel(); },
         toggleFocusMode: function() { toggleFocusMode(); },
@@ -1440,31 +1443,131 @@
     };
 
     // --- Playbooks (#404: operator surface for the playbook-synth loop) ---
+    //
+    // P4 adds analytics: per-status totals + recent event counts up top,
+    // status + scope filters, top-by-uses / top-by-winrate movers, and a
+    // per-playbook event-timeline modal so the operator can see what
+    // actually happened to each one over time.
+
+    var _pbStatusFilter = 'all';   // all | active | candidate | retired
+    var _pbScopeFilter = '';       // '' = all
+    var _pbAllPlaybooks = [];      // last server response (for client-side filter)
+
     function refreshPlaybooks() {
-        fetch('/api/playbooks', { headers: { 'X-Requested-With': 'Dashboard' }})
-            .then(function(r) { return r.json(); })
-            .then(function(d) { renderPlaybooks((d && d.playbooks) || []); })
+        // Always fetch ALL statuses; filters are client-side so chip flips
+        // are instant and we get the right totals for the summary band.
+        Promise.all([
+            fetch('/api/playbooks', { headers: { 'X-Requested-With': 'Dashboard' }})
+                .then(function(r) { return r.json(); }),
+            fetch('/api/playbooks/analytics', { headers: { 'X-Requested-With': 'Dashboard' }})
+                .then(function(r) { return r.json(); })
+                .catch(function() { return null; }),
+        ])
+            .then(function(both) {
+                _pbAllPlaybooks = (both[0] && both[0].playbooks) || [];
+                _pbPopulateScopeFilter(_pbAllPlaybooks);
+                _pbRenderAnalytics(both[1]);
+                renderPlaybooks();
+            })
             .catch(function() {});
     }
 
-    function renderPlaybooks(playbooks) {
+    function _pbPopulateScopeFilter(playbooks) {
+        var sel = document.getElementById('pb-filter-scope');
+        if (!sel) return;
+        var scopes = {};
+        playbooks.forEach(function(p) { scopes[p.scope || 'global'] = true; });
+        var options = ['<option value="">— all —</option>'];
+        Object.keys(scopes).sort().forEach(function(s) {
+            options.push('<option value="' + escapeHtml(s) + '"'
+                + (_pbScopeFilter === s ? ' selected' : '')
+                + '>' + escapeHtml(s) + '</option>');
+        });
+        sel.innerHTML = options.join('');
+    }
+
+    function _pbRenderAnalytics(data) {
+        var box = document.getElementById('pb-analytics');
+        if (!box || !data) return;
+        box.style.display = '';
+        var t = data.totals || {};
+        document.getElementById('pb-stat-active').textContent = t.active || 0;
+        document.getElementById('pb-stat-candidate').textContent = t.candidate || 0;
+        document.getElementById('pb-stat-retired').textContent = t.retired || 0;
+        var ev = data.event_counts || {};
+        document.getElementById('pb-stat-applied-24h').textContent = ev.applied || 0;
+        document.getElementById('pb-stat-wins-24h').textContent = ev.win || 0;
+        document.getElementById('pb-stat-losses-24h').textContent = ev.loss || 0;
+        // Movers + scope breakdown below the stats row.
+        var detail = document.getElementById('pb-analytics-detail');
+        if (!detail) return;
+        var html = '';
+        html += '<div class="pb-mover-list">';
+        html += '<div class="pb-mover-title">Top by uses</div>';
+        (data.top_by_uses || []).forEach(function(row) {
+            html += '<div class="pb-mover-row">'
+                + '<span class="pb-mover-name" data-action="showPlaybookEvents" data-pb-name="' + escapeHtml(row.name) + '">' + escapeHtml(row.title) + '</span>'
+                + '<span class="pb-mover-meta">' + row.uses + ' uses · ' + _pbWinrateLabel(row.winrate) + '</span>'
+                + '</div>';
+        });
+        if (!(data.top_by_uses || []).length) html += '<div class="text-muted text-xs">No usage yet</div>';
+        html += '</div>';
+        html += '<div class="pb-mover-list">';
+        html += '<div class="pb-mover-title">Top by winrate <span class="text-muted">(min 3 uses)</span></div>';
+        (data.top_by_winrate || []).forEach(function(row) {
+            html += '<div class="pb-mover-row">'
+                + '<span class="pb-mover-name" data-action="showPlaybookEvents" data-pb-name="' + escapeHtml(row.name) + '">' + escapeHtml(row.title) + '</span>'
+                + '<span class="pb-mover-meta">' + _pbWinrateLabel(row.winrate) + ' · ' + row.uses + ' uses</span>'
+                + '</div>';
+        });
+        if (!(data.top_by_winrate || []).length) html += '<div class="text-muted text-xs">Not enough attributed outcomes yet</div>';
+        html += '</div>';
+        html += '<div class="pb-mover-list">';
+        html += '<div class="pb-mover-title">By scope</div>';
+        html += '<table class="pb-scope-table">';
+        var scopeKeys = Object.keys(data.scope_breakdown || {}).sort();
+        scopeKeys.forEach(function(k) {
+            var s = data.scope_breakdown[k];
+            html += '<tr>'
+                + '<td class="pb-scope-cell">' + escapeHtml(k) + '</td>'
+                + '<td>' + Math.round(s.count) + ' pb</td>'
+                + '<td>' + Math.round(s.uses) + ' uses</td>'
+                + '<td>' + _pbWinrateLabel(s.winrate) + '</td>'
+                + '</tr>';
+        });
+        if (!scopeKeys.length) html += '<tr><td class="text-muted text-xs">No playbooks yet</td></tr>';
+        html += '</table>';
+        html += '</div>';
+        detail.innerHTML = html;
+    }
+
+    function _pbWinrateLabel(wr) {
+        // -1 = no attribution yet; render as em dash so the operator
+        // doesn't read "0%" as "all losses."
+        if (wr == null || wr < 0) return '—';
+        return Math.round(wr * 100) + '%';
+    }
+
+    function renderPlaybooks() {
         var el = document.getElementById('playbook-list');
         if (!el) return;
-        if (!playbooks.length) {
-            el.innerHTML = '<div class="empty-state"><div class="mt-sm">No playbooks yet</div>'
-                + '<div class="text-muted text-sm mt-sm">Synthesized from successful tasks — '
+        var filtered = _pbAllPlaybooks.filter(function(p) {
+            if (_pbStatusFilter !== 'all' && p.status !== _pbStatusFilter) return false;
+            if (_pbScopeFilter && (p.scope || 'global') !== _pbScopeFilter) return false;
+            return true;
+        });
+        if (!filtered.length) {
+            el.innerHTML = '<div class="empty-state"><div class="mt-sm">'
+                + (_pbAllPlaybooks.length ? 'No playbooks match the current filters' : 'No playbooks yet')
+                + '</div><div class="text-muted text-sm mt-sm">Synthesized from successful tasks — '
                 + 'candidates are vetted by outcome before going fleet-active</div></div>';
             return;
         }
-        // Active first, then candidates, then retired — operator scans the
-        // fleet-live set first; candidates are clearly distinguished.
         var order = { active: 0, candidate: 1, retired: 2 };
-        playbooks.sort(function(a, b) {
-            return (order[a.status] || 3) - (order[b.status] || 3);
-        });
+        filtered.sort(function(a, b) { return (order[a.status] || 3) - (order[b.status] || 3); });
         var html = '';
-        for (var i = 0; i < playbooks.length; i++) {
-            var p = playbooks[i];
+        for (var i = 0; i < filtered.length; i++) {
+            var p = filtered[i];
             var sc = p.status === 'active' ? 'text-leaf'
                 : p.status === 'candidate' ? 'text-amber'
                 : 'text-muted';
@@ -1472,10 +1575,11 @@
                 : p.status === 'candidate' ? '○'
                 : '⊘';
             var prov = (p.provenance_task_ids || []).length;
-            html += '<div class="task-item" data-playbook="' + escapeHtml(p.name) + '">';
+            html += '<div class="task-item pb-playbook-row" data-playbook="' + escapeHtml(p.name) + '">';
             html += '<div class="flex-center gap-sm">';
             html += '<span class="' + sc + ' fw-bold">' + si + '</span>';
-            html += '<span class="task-title">' + escapeHtml(p.title || p.name) + '</span>';
+            // Title is now click-to-open-events-timeline.
+            html += '<span class="task-title" data-action="showPlaybookEvents" data-pb-name="' + escapeHtml(p.name) + '">' + escapeHtml(p.title || p.name) + '</span>';
             html += '<span class="conf-badge ' + sc + '" style="background:var(--panel);border:1px solid var(--border)">' + escapeHtml(p.status) + '</span>';
             html += '<span class="text-muted text-xs">' + escapeHtml(p.scope || 'global') + '</span>';
             html += '<span class="text-muted text-xs">win ' + Math.round((p.winrate || 0) * 100) + '% · uses ' + (p.uses || 0) + ' · prov ' + prov + '</span>';
@@ -1494,6 +1598,72 @@
         }
         el.innerHTML = html;
     }
+
+    window.switchPlaybookFilter = function(status) {
+        _pbStatusFilter = status || 'all';
+        // Sync the chip "active" class — same pattern as the buzz filter.
+        document.querySelectorAll('[data-pb-status]').forEach(function(c) {
+            c.classList.toggle('active', c.dataset.pbStatus === _pbStatusFilter);
+        });
+        renderPlaybooks();
+    };
+
+    // Wire the scope dropdown (idempotent — runs at module load).
+    var _pbScopeSel = document.getElementById('pb-filter-scope');
+    if (_pbScopeSel) {
+        _pbScopeSel.addEventListener('change', function() {
+            _pbScopeFilter = _pbScopeSel.value || '';
+            renderPlaybooks();
+        });
+    }
+
+    // -- Event timeline modal ------------------------------------------
+
+    function _pbFmtTime(epoch) {
+        if (!epoch) return '';
+        try { return new Date(epoch * 1000).toLocaleString(); }
+        catch (e) { return ''; }
+    }
+
+    window.showPlaybookEvents = function(name) {
+        document.getElementById('pb-events-title').textContent = 'Events — ' + name;
+        document.getElementById('pb-events-body').innerHTML = '<div class="empty-state">Loading…</div>';
+        document.getElementById('pb-events-modal').style.display = 'flex';
+        fetch('/api/playbooks/' + encodeURIComponent(name) + '/events', { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) {
+                if (!r.ok) throw new Error('not found');
+                return r.json();
+            })
+            .then(function(d) {
+                var body = document.getElementById('pb-events-body');
+                var events = (d && d.events) || [];
+                if (!events.length) {
+                    body.innerHTML = '<div class="empty-state">No events recorded yet</div>';
+                    return;
+                }
+                var html = '';
+                events.forEach(function(e) {
+                    var cls = 'pb-event-type pb-event-type-' + (e.event || '').replace(/[^a-z_]/g, '');
+                    var meta = [];
+                    if (e.task_id) meta.push('task ' + e.task_id);
+                    if (e.worker) meta.push('worker ' + e.worker);
+                    if (e.detail) meta.push(e.detail);
+                    html += '<div class="pb-event-row">'
+                        + '<span class="pb-event-ts">' + escapeHtml(_pbFmtTime(e.ts)) + '</span>'
+                        + '<span class="' + cls + '">' + escapeHtml(e.event) + '</span>'
+                        + '<span class="pb-event-meta">' + escapeHtml(meta.join(' · ')) + '</span>'
+                        + '</div>';
+                });
+                body.innerHTML = html;
+            })
+            .catch(function() {
+                document.getElementById('pb-events-body').innerHTML = '<div class="empty-state text-poppy">Playbook not found</div>';
+            });
+    };
+
+    window.hidePlaybookEvents = function() {
+        document.getElementById('pb-events-modal').style.display = 'none';
+    };
 
     window.playbookAction = function(action, name) {
         var body = '{}';
