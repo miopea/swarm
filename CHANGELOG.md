@@ -10,6 +10,20 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.20] - 2026-05-20
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Task editor accepts a literal `?` again.** The global `?`
+  keyboard-shortcut handler bailed on `INPUT`/`TEXTAREA`/`SELECT` but
+  not on `contenteditable`, and the task editor's description field is
+  a contenteditable div — so typing `?` opened the shortcuts modal and
+  swallowed the keystroke. Added an `isContentEditable` guard.
+
 ## [2026.5.19.4] - 2026-05-19
 
 ### Features

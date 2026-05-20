@@ -66,3 +66,22 @@ def test_dashboard_has_paste_interception():
     assert content.count("addEventListener('paste'") >= 2, (
         "dashboard.js must have capture-phase paste handlers"
     )
+
+
+def test_question_mark_shortcut_skips_contenteditable():
+    """The global ? help-shortcut handler must skip when the user is
+    typing in a contenteditable element — the task editor's description
+    field is a contenteditable div, and a missing isContentEditable
+    guard swallows the ? keystroke and pops the shortcuts modal instead
+    of letting the operator type a question mark.
+    """
+    js = (STATIC_DIR / "dashboard.js").read_text()
+    marker = "? key opens keyboard shortcut help"
+    i = js.find(marker)
+    assert i >= 0, "expected the ? shortcut handler block in dashboard.js"
+    # Inspect only the handler region (next ~900 chars after the comment).
+    block = js[i : i + 900]
+    assert "isContentEditable" in block, (
+        "the ? shortcut handler must guard on isContentEditable so the "
+        "task editor (contenteditable description) accepts a literal '?'"
+    )

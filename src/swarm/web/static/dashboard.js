@@ -8065,8 +8065,13 @@
         if (e.key !== '?' || e.altKey || e.ctrlKey || e.metaKey) return;
         if (document.getElementById('terminal-modal').style.display !== 'none') return;
         if (inlineTerm && inlineTerm.textarea && document.activeElement === inlineTerm.textarea) return;
-        var tag = document.activeElement && document.activeElement.tagName;
+        var ae = document.activeElement;
+        var tag = ae && ae.tagName;
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        // The task editor's description is a contenteditable div — without
+        // this guard the global ? would swallow the keystroke and pop the
+        // shortcuts modal instead of letting the operator type '?'.
+        if (ae && ae.isContentEditable) return;
         e.preventDefault();
         var m = document.getElementById('shortcuts-modal');
         m.style.display = m.style.display === 'none' ? 'flex' : 'none';
