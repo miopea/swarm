@@ -4907,6 +4907,13 @@
         btn.classList.add('active');
         btn.setAttribute('aria-selected', 'true');
         document.getElementById('tab-' + tab).classList.add('active');
+        // Per-tab visibility for the tab-header-utils action buttons. Each
+        // button declares `data-show-on-tab="<tab>"`; we toggle inline
+        // display based on whichever tab is now active. Buttons WITHOUT
+        // the attribute show on every tab (current behaviour preserved).
+        document.querySelectorAll('[data-show-on-tab]').forEach(function(el) {
+            el.style.display = el.dataset.showOnTab === tab ? '' : 'none';
+        });
         if (tab === 'decisions') {
             refreshProposals();
             refreshDecisions();

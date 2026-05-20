@@ -230,10 +230,11 @@
                     </button>
                 </div>
                 <span class="tab-header-utils flex-center gap-sm">
-                    <button class="btn btn-sm" data-action="previewJiraSync" title="Preview what Jira sync would import">Preview Jira</button>
-                    <button class="btn btn-sm" data-action="syncJira" title="Import issues from Jira now">Sync Jira</button>
-                    <button class="btn btn-sm" data-action="showCreateTask">+ New Task</button>
-                    <label class="btn btn-sm btn-secondary hide-desktop" title="Upload .eml/.msg file to create a task" style="cursor:pointer">Upload <input type="file" id="mobile-email-upload" accept=".eml,.msg" style="display:none" data-input-action="mobileEmailUpload"></label>
+                    <button class="btn btn-sm" data-action="previewJiraSync" data-show-on-tab="tasks" title="Preview what Jira sync would import">Preview Jira</button>
+                    <button class="btn btn-sm" data-action="syncJira" data-show-on-tab="tasks" title="Import issues from Jira now">Sync Jira</button>
+                    <button class="btn btn-sm" data-action="showCreateTask" data-show-on-tab="tasks">+ New Task</button>
+                    <button class="btn btn-sm" data-action="showCreatePipeline" data-show-on-tab="pipelines" style="display:none">+ New Pipeline</button>
+                    <label class="btn btn-sm btn-secondary hide-desktop" data-show-on-tab="tasks" title="Upload .eml/.msg file to create a task" style="cursor:pointer">Upload <input type="file" id="mobile-email-upload" accept=".eml,.msg" style="display:none" data-input-action="mobileEmailUpload"></label>
                 </span>
                 <button class="btn btn-sm tab-utils-mobile-btn" data-action="toggleTabUtils">+</button>
                 <span class="collapsed-label">Tasks / Decisions / Pipelines / Playbooks / Activity</span>
@@ -324,13 +325,11 @@
                     <div class="empty-state"><img src="/static/bees/queen.svg" class="bee-icon bee-hero" alt=""><div class="mt-sm">No decisions yet</div><div class="text-muted text-sm mt-sm">Queen proposals and their outcomes will appear here</div></div>
                 </div>
             </div>
-            <!-- Pipelines tab -->
+            <!-- Pipelines tab — "+ New Pipeline" lives in the tab-header
+                 utils row alongside "+ New Task" for visual consistency. -->
             <div class="tab-content" id="tab-pipelines" role="tabpanel" aria-labelledby="tab-pipelines-btn">
-                <div class="filter-bar">
-                    <button class="btn btn-sm" data-action="showCreatePipeline">+ New Pipeline</button>
-                </div>
                 <div class="panel-body" id="pipeline-list">
-                    <div class="empty-state"><div class="mt-sm">No pipelines yet</div><div class="text-muted text-sm mt-sm">Create a multi-step workflow with <strong>+ New Pipeline</strong> above</div></div>
+                    <div class="empty-state"><div class="mt-sm">No pipelines yet</div><div class="text-muted text-sm mt-sm">Create a multi-step workflow with the <strong>+ New Pipeline</strong> button at the top right</div></div>
                 </div>
             </div>
             <!-- Playbooks tab (#404): self-improving procedural memory -->

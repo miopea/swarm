@@ -10,6 +10,40 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.20.14] - 2026-05-20
+
+### Changes
+
+- **Per-tab action buttons in the bottom panel header.** The
+  tab-header utility buttons (Preview Jira / Sync Jira / + New
+  Task) used to show on every tab regardless of which one was
+  active, and "+ New Pipeline" lived in a separate row below the
+  tab nav — visual inconsistency the operator flagged with a
+  screenshot. P-fix: every button in `.tab-header-utils` now
+  declares `data-show-on-tab="<tab>"`; `switchTab` toggles inline
+  display so only the relevant actions for the current tab
+  appear. "+ New Pipeline" moved up into the same row as
+  "+ New Task" (Pipelines tab); the in-content `filter-bar`
+  wrapper around it is gone. Tasks tab → Preview Jira + Sync
+  Jira + New Task. Pipelines tab → New Pipeline. Playbooks /
+  Decisions / Activity → nothing (no creation action; playbooks
+  are auto-synthesized, decisions are inbound, activity is read-only).
+
+### Fixes
+
+- **Playbooks tab layout compacted.** Operator screenshot showed
+  the P4a analytics summary band consuming ~60% of the visible
+  bottom panel — stat tiles + 3-column movers each at 240+ px
+  pushed the filter chips and the actual playbook cards below
+  the fold. Tightened: `.pb-analytics` now uses a flex row that
+  floats movers next to the stat tiles instead of stacking;
+  stat tiles dropped from 70 px → 56 px min-width with smaller
+  font; mover lists clamp at 5.5 em with internal scroll instead
+  of growing unbounded; mover names ellipsis on overflow.
+  Result: filter chips + the first few playbook cards visible
+  on a typical bottom-panel height; no information lost, just
+  packed.
+
 ## [2026.5.20.13] - 2026-05-20
 
 ### Features

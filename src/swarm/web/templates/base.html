@@ -239,21 +239,30 @@
             0% { background: var(--lavender); }
             100% { background: transparent; }
         }
-        /* P4: Playbooks analytics summary + filter */
-        .pb-analytics { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
-        .pb-stat-row { display: flex; gap: 0.75rem; flex-wrap: wrap; }
-        .pb-stat { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 0.4rem 0.6rem; min-width: 70px; text-align: center; }
-        .pb-stat-num { font-size: 1.1rem; font-weight: 600; color: var(--honey); }
-        .pb-stat-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
-        .pb-analytics-detail { margin-top: 0.5rem; display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.75rem; }
-        .pb-mover-list { flex: 1; min-width: 240px; }
-        .pb-mover-title { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.2rem; }
-        .pb-mover-row { display: flex; justify-content: space-between; padding: 0.15rem 0; }
-        .pb-mover-name { color: var(--lavender); cursor: pointer; }
+        /* P4: Playbooks analytics summary + filter. Compacted after
+           the 2026-05-20 operator screenshot showed the analytics band
+           taking ~60% of the visible bottom panel and pushing the
+           actual playbook cards below the fold. */
+        .pb-analytics {
+            padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--border);
+            display: flex; gap: 0.75rem; align-items: flex-start; flex-wrap: wrap;
+        }
+        .pb-stat-row { display: flex; gap: 0.4rem; flex-wrap: wrap; flex: 0 0 auto; }
+        .pb-stat { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 0.25rem 0.45rem; min-width: 56px; text-align: center; }
+        .pb-stat-num { font-size: 0.95rem; font-weight: 600; color: var(--honey); line-height: 1.1; }
+        .pb-stat-label { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+        /* Analytics detail no longer takes its own row; it floats next to
+           the stat tiles on wide screens, wraps below on narrow. Much
+           shorter mover lists (top 3) keep the band height bounded. */
+        .pb-analytics-detail { display: flex; flex-wrap: wrap; gap: 0.75rem; font-size: 0.7rem; flex: 1 1 auto; min-width: 0; }
+        .pb-mover-list { flex: 1 1 180px; min-width: 0; max-height: 5.5em; overflow-y: auto; }
+        .pb-mover-title { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.15rem; }
+        .pb-mover-row { display: flex; justify-content: space-between; padding: 0.1rem 0; gap: 0.4rem; }
+        .pb-mover-name { color: var(--lavender); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
         .pb-mover-name:hover { text-decoration: underline; }
-        .pb-mover-meta { color: var(--muted); }
-        .pb-scope-table { font-size: 0.75rem; width: 100%; }
-        .pb-scope-table td { padding: 0.1rem 0.4rem 0.1rem 0; }
+        .pb-mover-meta { color: var(--muted); flex: 0 0 auto; white-space: nowrap; }
+        .pb-scope-table { font-size: 0.7rem; width: 100%; }
+        .pb-scope-table td { padding: 0.05rem 0.4rem 0.05rem 0; }
         .pb-scope-table .pb-scope-cell { color: var(--lavender); }
         .filter-label { font-size: 0.7rem; color: var(--muted); align-self: center; }
         /* Event timeline */
