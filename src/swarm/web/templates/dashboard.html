@@ -355,16 +355,26 @@
                     <button class="filter-chip" data-pb-status="retired" data-action="switchPlaybookFilter">Retired</button>
                     <span class="filter-label" style="margin-left:0.75rem">Scope:</span>
                     <select id="pb-filter-scope" class="modal-select" style="max-width:180px"></select>
+                    <button class="btn btn-sm btn-secondary" id="pb-bulk-toggle" data-action="togglePlaybookBulk" style="margin-left:auto">Select…</button>
+                </div>
+                <!-- Bulk action bar (visible when selection mode is active) -->
+                <div class="pb-bulk-bar" id="pb-bulk-bar">
+                    <span class="pb-bulk-count" id="pb-bulk-count">0 selected</span>
+                    <button class="btn btn-sm btn-approve" data-action="bulkPlaybookPromote">Promote selected</button>
+                    <button class="btn btn-sm btn-secondary" data-action="bulkPlaybookRetire">Retire selected</button>
+                    <button class="btn btn-sm btn-secondary" data-action="togglePlaybookBulk">Cancel</button>
                 </div>
                 <div class="panel-body" id="playbook-list">
                     <div class="empty-state"><div class="mt-sm">No playbooks yet</div><div class="text-muted text-sm mt-sm">Synthesized from successful tasks — candidates are vetted by outcome before going fleet-active</div></div>
                 </div>
             </div>
-            <!-- P4: Playbook event-timeline modal -->
+            <!-- Playbook detail modal — body / trigger / provenance / events.
+                 modal-lg gives the body block (which can be long markdown)
+                 room to breathe; modal-body-scroll handles overflow. -->
             <div id="pb-events-modal" class="modal-overlay" style="display:none" data-modal-dismiss="hidePlaybookEvents">
-                <div class="modal-box modal-md" role="dialog" aria-modal="true">
+                <div class="modal-box modal-lg" role="dialog" aria-modal="true">
                     <div class="panel-header">
-                        <span id="pb-events-title">Events</span>
+                        <span id="pb-events-title">Playbook</span>
                         <button class="btn btn-sm btn-secondary" data-action="hidePlaybookEvents">Close</button>
                     </div>
                     <div class="modal-padding modal-body-scroll" id="pb-events-body">

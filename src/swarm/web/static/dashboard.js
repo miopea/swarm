@@ -156,6 +156,9 @@
         switchPlaybookFilter: function(el) { switchPlaybookFilter(el.dataset.pbStatus); },
         showPlaybookEvents: function(el) { showPlaybookEvents(el.dataset.pbName); },
         hidePlaybookEvents: function() { hidePlaybookEvents(); },
+        togglePlaybookBulk: function() { togglePlaybookBulk(); },
+        bulkPlaybookPromote: function() { bulkPlaybookAction('promote'); },
+        bulkPlaybookRetire: function() { bulkPlaybookAction('retire'); },
         ccMobileFocus: function(el) { ccMobileFocus(el.dataset.ccFocus); },
         toggleResourcePopover: function(el, e) { e.stopPropagation(); toggleResourcePopover(); },
         toggleBottomPanel: function() { toggleBottomPanel(); },
@@ -1493,6 +1496,8 @@
     var _pbStatusFilter = 'all';   // all | active | candidate | retired
     var _pbScopeFilter = '';       // '' = all
     var _pbAllPlaybooks = [];      // last server response (for client-side filter)
+    var _pbBulkMode = false;       // checkbox column visible?
+    var _pbBulkSelected = {};      // name -> true
 
     function refreshPlaybooks() {
         // Always fetch ALL statuses; filters are client-side so chip flips
@@ -1624,6 +1629,10 @@
             html += '<div class="task-item pb-playbook-row" data-playbook="' + escapeHtml(p.name) + '">';
             html += '<div class="pb-row-inner">';
             html += '<span class="pb-row-left">';
+            // Bulk-select checkbox — display:none until bulk mode is on
+            // via togglePlaybookBulk(). Click toggles selection.
+            html += '<input type="checkbox" class="pb-row-cb' + (_pbBulkMode ? ' shown' : '') + '" data-pb-name="' + escapeHtml(p.name) + '"'
+                + (_pbBulkSelected[p.name] ? ' checked' : '') + '>';
             html += '<span class="' + sc + ' fw-bold">' + si + '</span> ';
             // Title click opens the events-timeline modal (P4a behaviour
             // preserved). Truncates with ellipsis when too long; full
@@ -1672,8 +1681,13 @@
         catch (e) { return ''; }
     }
 
+    // Operator-followup (2026-05-21): the modal used to show event-log
+    // only. With 0-uses candidates the modal was empty and operators
+    // had no way to see what a playbook actually CONTAINS before
+    // deciding to promote. Now shows the full body + trigger +
+    // provenance + actions, with the events list below.
     window.showPlaybookEvents = function(name) {
-        document.getElementById('pb-events-title').textContent = 'Events — ' + name;
+        document.getElementById('pb-events-title').textContent = name;
         document.getElementById('pb-events-body').innerHTML = '<div class="empty-state">Loading…</div>';
         document.getElementById('pb-events-modal').style.display = 'flex';
         fetch('/api/playbooks/' + encodeURIComponent(name) + '/events', { headers: { 'X-Requested-With': 'Dashboard' }})
@@ -1682,35 +1696,133 @@
                 return r.json();
             })
             .then(function(d) {
-                var body = document.getElementById('pb-events-body');
-                var events = (d && d.events) || [];
-                if (!events.length) {
-                    body.innerHTML = '<div class="empty-state">No events recorded yet</div>';
-                    return;
-                }
-                var html = '';
-                events.forEach(function(e) {
-                    var cls = 'pb-event-type pb-event-type-' + (e.event || '').replace(/[^a-z_]/g, '');
-                    var meta = [];
-                    if (e.task_id) meta.push('task ' + e.task_id);
-                    if (e.worker) meta.push('worker ' + e.worker);
-                    if (e.detail) meta.push(e.detail);
-                    html += '<div class="pb-event-row">'
-                        + '<span class="pb-event-ts">' + escapeHtml(_pbFmtTime(e.ts)) + '</span>'
-                        + '<span class="' + cls + '">' + escapeHtml(e.event) + '</span>'
-                        + '<span class="pb-event-meta">' + escapeHtml(meta.join(' · ')) + '</span>'
-                        + '</div>';
-                });
-                body.innerHTML = html;
+                _pbRenderDetailModal(d, name);
             })
             .catch(function() {
                 document.getElementById('pb-events-body').innerHTML = '<div class="empty-state text-poppy">Playbook not found</div>';
             });
     };
 
+    function _pbRenderDetailModal(d, name) {
+        var body = document.getElementById('pb-events-body');
+        var pb = (d && d.playbook) || {};
+        var events = (d && d.events) || [];
+        var sc = pb.status === 'active' ? 'text-leaf'
+            : pb.status === 'candidate' ? 'text-amber'
+            : 'text-muted';
+
+        // Header section: title (only if distinct from the modal's title
+        // bar — otherwise we'd render the name twice), status badge,
+        // scope, key stats.
+        var html = '<div class="pbd-section pbd-header">';
+        if (pb.title && pb.title !== name) {
+            html += '<div class="pbd-title">' + escapeHtml(pb.title) + '</div>';
+        }
+        html += '<div class="pbd-meta">';
+        html += '<span class="conf-badge ' + sc + '" style="background:var(--panel);border:1px solid var(--border)">' + escapeHtml(pb.status || '?') + '</span>';
+        html += '<span class="text-muted text-xs">scope: <span class="text-lavender">' + escapeHtml(pb.scope || 'global') + '</span></span>';
+        html += '<span class="text-muted text-xs">uses: <strong>' + (pb.uses || 0) + '</strong></span>';
+        html += '<span class="text-muted text-xs">winrate: <strong>' + Math.round((pb.winrate || 0) * 100) + '%</strong></span>';
+        html += '<span class="text-muted text-xs">version: ' + (pb.version || 1) + '</span>';
+        if (pb.last_used_at) html += '<span class="text-muted text-xs">last used: ' + escapeHtml(_pbFmtTime(pb.last_used_at)) + '</span>';
+        if (pb.retired_reason) html += '<span class="text-poppy text-xs">retired: ' + escapeHtml(pb.retired_reason) + '</span>';
+        html += '</div>';
+        // Action buttons in the modal itself (no need to dismiss + find
+        // the row to act).
+        html += '<div class="pbd-actions">';
+        if (pb.status === 'candidate') {
+            html += '<button class="btn btn-sm btn-approve" data-action-pb-modal="promote" data-pb-name="' + escapeHtml(name) + '">Promote to Active</button>';
+        }
+        if (pb.status !== 'retired') {
+            html += '<button class="btn btn-sm btn-secondary" data-action-pb-modal="retire" data-pb-name="' + escapeHtml(name) + '">Retire</button>';
+        }
+        html += '</div>';
+        html += '</div>';
+
+        // Trigger — what conditions tell a worker this playbook applies.
+        if (pb.trigger) {
+            html += '<div class="pbd-section">';
+            html += '<div class="pbd-section-label">Trigger</div>';
+            html += '<div class="pbd-trigger">' + escapeHtml(pb.trigger) + '</div>';
+            html += '</div>';
+        }
+
+        // Body — the playbook's instructions. Rendered as preformatted
+        // text so markdown-ish structure (bullets, indents) survives.
+        if (pb.body) {
+            html += '<div class="pbd-section">';
+            html += '<div class="pbd-section-label">Body <span class="text-muted text-xs">(what the worker sees if this gets injected)</span></div>';
+            html += '<pre class="pbd-body">' + escapeHtml(pb.body) + '</pre>';
+            html += '</div>';
+        }
+
+        // Provenance — which tasks produced this playbook. Chips link to
+        // the task editor via the cleanup-batch openLinkedTask flow.
+        var prov = pb.provenance_task_ids || [];
+        if (prov.length) {
+            html += '<div class="pbd-section">';
+            html += '<div class="pbd-section-label">Provenance <span class="text-muted text-xs">(tasks that contributed)</span></div>';
+            html += '<div class="pbd-prov">';
+            prov.forEach(function(tid) {
+                html += '<span class="pld-task-chip" data-action="openLinkedTask" data-task-id="' + escapeHtml(tid) + '" title="Jump to task">#' + escapeHtml(tid) + '</span>';
+            });
+            html += '</div>';
+            html += '</div>';
+        }
+
+        // Source worker (which worker the playbook synthesized from).
+        if (pb.source_worker) {
+            html += '<div class="pbd-section pbd-meta-row">';
+            html += '<span class="text-muted text-xs">source worker: <span class="text-lavender">' + escapeHtml(pb.source_worker) + '</span></span>';
+            html += '<span class="text-muted text-xs">created: ' + escapeHtml(_pbFmtTime(pb.created_at)) + '</span>';
+            html += '<span class="text-muted text-xs">updated: ' + escapeHtml(_pbFmtTime(pb.updated_at)) + '</span>';
+            html += '</div>';
+        }
+
+        // Events timeline (was previously the whole modal).
+        html += '<div class="pbd-section">';
+        html += '<div class="pbd-section-label">Events';
+        if (!events.length) html += ' <span class="text-muted text-xs">(none yet — playbook hasn\'t been applied to a task)</span>';
+        html += '</div>';
+        if (events.length) {
+            html += '<div class="pbd-events">';
+            events.forEach(function(e) {
+                var cls = 'pb-event-type pb-event-type-' + (e.event || '').replace(/[^a-z_]/g, '');
+                var meta = [];
+                if (e.task_id) meta.push('task ' + e.task_id);
+                if (e.worker) meta.push('worker ' + e.worker);
+                if (e.detail) meta.push(e.detail);
+                html += '<div class="pb-event-row">'
+                    + '<span class="pb-event-ts">' + escapeHtml(_pbFmtTime(e.ts)) + '</span>'
+                    + '<span class="' + cls + '">' + escapeHtml(e.event) + '</span>'
+                    + '<span class="pb-event-meta">' + escapeHtml(meta.join(' · ')) + '</span>'
+                    + '</div>';
+            });
+            html += '</div>';
+        }
+        html += '</div>';
+
+        body.innerHTML = html;
+    }
+
     window.hidePlaybookEvents = function() {
         document.getElementById('pb-events-modal').style.display = 'none';
     };
+
+    // Delegated handler for the in-modal Promote / Retire buttons. After
+    // the action lands, refresh the modal contents so the operator sees
+    // the new status without having to close + reopen.
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-action-pb-modal]');
+        if (!btn) return;
+        var action = btn.dataset.actionPbModal;
+        var name = btn.dataset.pbName;
+        if (!action || !name) return;
+        playbookAction(action, name);
+        // Re-fetch + re-render so the modal reflects the new state
+        // (button hides if newly retired, status badge updates, etc.).
+        setTimeout(function() { showPlaybookEvents(name); }, 200);
+    });
 
     window.playbookAction = function(action, name) {
         var body = '{}';
@@ -1731,6 +1843,78 @@
             .then(function() { showToast('Playbook ' + action + 'd: ' + name); refreshPlaybooks(); })
             .catch(function(e) { showToast('Playbook ' + action + ' failed: ' + (e && e.message || 'error'), true); });
     };
+
+    // Bulk select (operator follow-up 2026-05-21: 23 candidates,
+    // one-at-a-time clicking was painful). Toggle reveals checkboxes
+    // on every row + a bulk action bar.
+    function togglePlaybookBulk() {
+        _pbBulkMode = !_pbBulkMode;
+        _pbBulkSelected = {};
+        var bar = document.getElementById('pb-bulk-bar');
+        if (bar) bar.classList.toggle('active', _pbBulkMode);
+        var toggle = document.getElementById('pb-bulk-toggle');
+        if (toggle) toggle.textContent = _pbBulkMode ? 'Done' : 'Select…';
+        document.querySelectorAll('.pb-row-cb').forEach(function(cb) {
+            cb.classList.toggle('shown', _pbBulkMode);
+            cb.checked = false;
+        });
+        _pbUpdateBulkCount();
+    }
+
+    function _pbUpdateBulkCount() {
+        var n = Object.keys(_pbBulkSelected).length;
+        var el = document.getElementById('pb-bulk-count');
+        if (el) el.textContent = n + ' selected';
+    }
+
+    // Click any pb-row-cb to update the in-memory selection set + count.
+    document.body.addEventListener('change', function(e) {
+        if (!e.target.matches('.pb-row-cb')) return;
+        var name = e.target.dataset.pbName;
+        if (!name) return;
+        if (e.target.checked) _pbBulkSelected[name] = true;
+        else delete _pbBulkSelected[name];
+        _pbUpdateBulkCount();
+    });
+
+    function bulkPlaybookAction(action) {
+        var names = Object.keys(_pbBulkSelected);
+        if (!names.length) {
+            showToast('No playbooks selected', true);
+            return;
+        }
+        var body = '{}';
+        if (action === 'retire') {
+            var reason = window.prompt('Retire reason for ' + names.length + ' playbook(s):', 'operator-bulk-retired');
+            if (reason === null) return;
+            body = JSON.stringify({ reason: reason || 'operator-bulk-retired' });
+        }
+        var label = action === 'promote' ? 'Promoting' : 'Retiring';
+        showToast(label + ' ' + names.length + ' playbook(s)…');
+        // Parallel POSTs; track success/failure for the summary toast.
+        Promise.all(names.map(function(name) {
+            return fetch('/api/playbooks/' + encodeURIComponent(name) + '/' + action, {
+                method: 'POST',
+                headers: { 'X-Requested-With': 'Dashboard', 'Content-Type': 'application/json' },
+                body: body,
+            }).then(function(r) { return { name: name, ok: r.ok }; });
+        }))
+            .then(function(results) {
+                var ok = results.filter(function(r) { return r.ok; }).length;
+                var fail = results.length - ok;
+                if (fail) {
+                    showToast(label.replace('ing', 'ed') + ' ' + ok + ', ' + fail + ' failed', true);
+                } else {
+                    showToast(label.replace('ing', 'ed') + ' ' + ok + ' playbook(s)');
+                }
+                _pbBulkSelected = {};
+                _pbUpdateBulkCount();
+                refreshPlaybooks();
+            })
+            .catch(function() {
+                showToast('Bulk ' + action + ' failed', true);
+            });
+    }
 
     window.completeStep = function(pipelineId, stepId) {
         fetch('/api/pipelines/' + pipelineId + '/steps/' + stepId + '/complete', { method: 'POST', headers: { 'X-Requested-With': 'Dashboard', 'Content-Type': 'application/json' }, body: '{}' })

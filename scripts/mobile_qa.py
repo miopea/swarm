@@ -146,6 +146,30 @@ TOUCH_POINTS: list[tuple[str, str, str]] = [
         # P4b: switch to the automation tab (which co-displays playbooks).
         "document.querySelector('[data-tab=\"automation\"]')?.click();",
     ),
+    (
+        "10-playbook-detail-modal",
+        "/",
+        # Open the playbooks tab, then click the first playbook title to
+        # open the detail modal. 2026-05-21 follow-up — verifies the
+        # enriched modal (body + trigger + provenance + events).
+        "document.querySelector('[data-action=\"toggleBottomPanel\"]')?.click();"
+        "setTimeout(() => document.querySelector('[data-tab=\"playbooks\"]')?.click(), 200);"
+        "setTimeout(() => document.querySelector('.pb-playbook-row .task-title')?.click(), 1200);",
+    ),
+    (
+        "11-playbook-bulk-select",
+        "/",
+        # Open playbooks tab + flip bulk-select mode on + check the first
+        # two rows so the bulk action bar shows '2 selected'.
+        "document.querySelector('[data-action=\"toggleBottomPanel\"]')?.click();"
+        "setTimeout(() => document.querySelector('[data-tab=\"playbooks\"]')?.click(), 200);"
+        "setTimeout(() => document.getElementById('pb-bulk-toggle')?.click(), 1200);"
+        "setTimeout(() => {"
+        "  var cbs = document.querySelectorAll('.pb-row-cb');"
+        "  if (cbs[0]) { cbs[0].click(); }"
+        "  if (cbs[1]) { cbs[1].click(); }"
+        "}, 1500);",
+    ),
 ]
 
 

@@ -94,7 +94,15 @@ async def handle_analytics(request: web.Request) -> web.Response:
 
 @handle_errors
 async def handle_playbook_events(request: web.Request) -> web.Response:
-    """Recent event timeline for one playbook (P4)."""
+    """Full detail for one playbook: body + metadata + event timeline.
+
+    Was originally events-only (P4a). Enriched to also return the full
+    Playbook so the dashboard's detail modal can show the body, trigger,
+    provenance, etc. in one round-trip. Operators with playbooks at
+    uses=0 (the common case before promotion) were seeing an empty
+    modal because there were no events to show; now they see what the
+    playbook actually CONTAINS regardless of usage history.
+    """
     d = get_daemon(request)
     store = getattr(d, "playbook_store", None)
     if store is None:
@@ -108,7 +116,7 @@ async def handle_playbook_events(request: web.Request) -> web.Response:
     except ValueError:
         limit = 100
     events = store.get_events_for_playbook(pb.id, limit=limit)
-    return web.json_response({"name": name, "events": events})
+    return web.json_response({"name": name, "playbook": pb.to_api(), "events": events})
 
 
 @handle_errors

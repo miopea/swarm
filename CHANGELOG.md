@@ -10,6 +10,51 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.21] - 2026-05-21
+
+### Features
+
+- **Playbook detail modal — body, trigger, provenance, actions, events all
+  in one place.** Previous version showed events-only, which left
+  operators with empty modals on every candidate (uses=0 → no events).
+  Operator couldn't see what a playbook actually CONTAINS before
+  deciding whether to promote.
+
+  Modal now renders:
+  - Title + status badge + scope / uses / winrate / version / last-used
+  - **Promote to Active** (candidates) + **Retire** (anything non-retired)
+    buttons inside the modal — no need to dismiss + find the row
+  - **Trigger** — what conditions tell a worker this playbook applies
+  - **Body** — the actual playbook content in a monospace `<pre>` block,
+    scrollable at max-height 320px; this is what a worker would see
+    if the playbook got injected at task dispatch
+  - **Provenance** — task chips that link to the linked-task editor
+    (uses the cleanup-batch's `openLinkedTask` flow)
+  - **Source worker + timestamps** for context
+  - **Events** timeline (was previously the only content) below; if
+    empty, shows "(none yet — playbook hasn't been applied to a task)"
+    so operators understand why it's blank instead of assuming the
+    modal is broken
+
+  Modal sized up from `modal-md` (550px) to `modal-lg` (650px) for the
+  longer body content. Title de-duplicated when `pb.title` matches the
+  slug. `GET /api/playbooks/{name}/events` enriched to return the
+  playbook itself alongside the events array; clients get everything
+  in one fetch.
+
+- **Bulk select on the playbook list.** Operator follow-up: 23
+  candidates one-at-a-time was painful. New **Select…** button in the
+  filter bar flips bulk mode on; each row gets a checkbox; a bulk
+  action bar appears showing the selected count plus **Promote
+  selected** / **Retire selected** / **Cancel**. Promote-selected
+  parallel-POSTs to `/api/playbooks/{name}/promote` for every checked
+  row; retire-selected prompts once for a reason and applies it across
+  the batch. Summary toast names success + failure counts.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.20.15] - 2026-05-20
 
 ### Fixes

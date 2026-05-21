@@ -296,6 +296,35 @@
             .pb-row-title { white-space: normal; overflow: visible; text-overflow: clip; }
             .pb-row-right { width: 100%; justify-content: flex-end; }
         }
+        /* Playbook detail modal (2026-05-21 follow-up — was events-only) */
+        .pbd-section { padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+        .pbd-section:last-child { border-bottom: none; }
+        .pbd-section-label { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin-bottom: 0.3rem; }
+        .pbd-title { font-size: 1rem; font-weight: 600; color: var(--beeswax); margin-bottom: 0.3rem; word-break: break-word; }
+        .pbd-meta { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; align-items: center; margin-bottom: 0.4rem; }
+        .pbd-meta strong { color: var(--honey); }
+        .pbd-actions { display: flex; gap: 0.4rem; }
+        .pbd-trigger {
+            background: var(--hive-bg); border: 1px solid var(--border); border-radius: 4px;
+            padding: 0.4rem 0.6rem; font-size: 0.8rem; color: var(--beeswax);
+            font-style: italic; word-break: break-word;
+        }
+        .pbd-body {
+            background: var(--hive-bg); border: 1px solid var(--border); border-radius: 4px;
+            padding: 0.6rem; font-size: 0.78rem; line-height: 1.45;
+            color: var(--beeswax); white-space: pre-wrap; word-break: break-word;
+            max-height: 320px; overflow-y: auto;
+            font-family: ui-monospace, "SF Mono", monospace;
+        }
+        .pbd-prov { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+        .pbd-meta-row { display: flex; flex-wrap: wrap; gap: 0.5rem 0.75rem; }
+        .pbd-events { display: flex; flex-direction: column; gap: 0; max-height: 240px; overflow-y: auto; }
+        /* Playbook bulk-select bar (2026-05-21 — 23 candidates one-at-a-time was painful) */
+        .pb-bulk-bar { display: none; align-items: center; gap: 0.4rem; padding: 0.3rem 0.6rem; border-bottom: 1px solid var(--border); background: rgba(216, 160, 61, 0.05); }
+        .pb-bulk-bar.active { display: flex; }
+        .pb-bulk-count { font-size: 0.75rem; color: var(--honey); font-weight: 600; }
+        .pb-row-cb { margin-right: 0.3rem; display: none; }
+        .pb-row-cb.shown { display: inline-block; }
         /* --- Layout --- */
         .modal-padding { padding: 1rem; flex: 1; overflow-y: auto; min-height: 0; }
         .modal-footer {
