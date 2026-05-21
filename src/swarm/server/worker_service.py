@@ -165,15 +165,29 @@ class WorkerService:
             self._pty_locks[name] = asyncio.Lock()
         return self._pty_locks[name]
 
-    async def send_to_worker(self, name: str, message: str, *, _log_operator: bool = True) -> None:
-        """Send text to a worker's process (serialized per-worker)."""
+    async def send_to_worker(
+        self,
+        name: str,
+        message: str,
+        *,
+        enter: bool = True,
+        _log_operator: bool = True,
+    ) -> None:
+        """Send text to a worker's process (serialized per-worker).
+
+        ``enter=False`` types the message into the PTY input buffer
+        without submitting — used by the Web Share Target flow so the
+        operator can add context (or edit the auto-inserted path)
+        before hitting Enter themselves. Default stays True to preserve
+        the long-standing semantics of `/api/workers/<name>/send`.
+        """
         worker = self.require_worker(name)
         self._require_process(worker)
         pilot = self._get_pilot()
         if pilot:
             pilot.wake_worker(name)
         async with self._pty_lock(name):
-            await worker.process.send_keys(message)
+            await worker.process.send_keys(message, enter=enter)
         if _log_operator:
             self._drone_log.add(
                 DroneAction.OPERATOR, name, "sent message", category=LogCategory.OPERATOR

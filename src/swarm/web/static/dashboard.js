@@ -10046,11 +10046,30 @@
     // Route a share into the active worker's PTY. The message is the
     // bracketed file path(s) + any shared text/url. Claude Code reads
     // each [/abs/path] token as an image attachment.
+    //
+    // `enter: false` so the path lands in the worker's input buffer
+    // WITHOUT being submitted. Operator follow-up (2026-05-21): the
+    // first iteration of this flow auto-pressed Enter, which on
+    // mobile shipped a half-thought message before the operator
+    // could add context. Now the path types in, operator reviews,
+    // adds prose, hits Enter themselves.
+    //
+    // Also drop the shared URL when it points at the dashboard host —
+    // the OS share sheet auto-attaches the page URL when you share
+    // FROM the PWA itself, and that's noise next to a path.
     function _shareSendToWorker(workerName, files, share) {
         var parts = files.map(function (p) { return '[' + p + ']'; });
         if (share.title) parts.push(share.title);
         if (share.text) parts.push(share.text);
-        if (share.url) parts.push(share.url);
+        if (share.url) {
+            var u = share.url;
+            var selfUrl = false;
+            try {
+                var parsed = new URL(u);
+                selfUrl = parsed.host === window.location.host;
+            } catch (_) {}
+            if (!selfUrl) parts.push(u);
+        }
         var message = parts.join(' ').trim();
         fetch('/api/workers/' + encodeURIComponent(workerName) + '/send', {
             method: 'POST',
@@ -10058,16 +10077,16 @@
                 'Content-Type': 'application/json',
                 'X-Requested-With': 'Dashboard',
             },
-            body: JSON.stringify({ message: message }),
+            body: JSON.stringify({ message: message, enter: false }),
         })
             .then(function (r) {
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 return r.json();
             })
             .then(function () {
-                showToast('Sent ' + files.length + ' attachment(s) to ' + workerName);
+                showToast('Attached ' + files.length + ' to ' + workerName + ' — add context + press Enter');
                 // Switch focus to the worker so the operator sees the
-                // result land in the PTY immediately.
+                // path in the input buffer and can type alongside it.
                 if (typeof selectWorker === 'function') selectWorker(workerName);
             })
             .catch(function (e) {

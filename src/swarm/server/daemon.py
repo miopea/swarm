@@ -1867,9 +1867,20 @@ class SwarmDaemon(EventEmitter):
 
     # --- Per-worker operations ---
 
-    async def send_to_worker(self, name: str, message: str, *, _log_operator: bool = True) -> None:
-        """Send text to a worker's process."""
-        await self.worker_svc.send_to_worker(name, message, _log_operator=_log_operator)
+    async def send_to_worker(
+        self,
+        name: str,
+        message: str,
+        *,
+        enter: bool = True,
+        _log_operator: bool = True,
+    ) -> None:
+        """Send text to a worker's process. Pass ``enter=False`` to type
+        the message into the input buffer without submitting (used by
+        the Web Share Target flow)."""
+        await self.worker_svc.send_to_worker(
+            name, message, enter=enter, _log_operator=_log_operator
+        )
 
     async def continue_worker(self, name: str) -> None:
         """Send Enter to a worker's process."""

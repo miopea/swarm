@@ -207,9 +207,16 @@ async def handle_worker_send(request: web.Request) -> web.Response:
     if isinstance(result, web.Response):
         return result
     message = result
+    # Optional `enter: false` types the message without pressing Enter —
+    # used by the Web Share Target flow so the operator can add context
+    # before submitting. Default True preserves prior semantics for
+    # every existing caller.
+    enter = body.get("enter", True)
+    if not isinstance(enter, bool):
+        enter = True
 
-    await d.send_to_worker(name, message)
-    return web.json_response({"status": "sent", "worker": name})
+    await d.send_to_worker(name, message, enter=enter)
+    return web.json_response({"status": "sent", "worker": name, "enter": enter})
 
 
 async def handle_worker_continue(request: web.Request) -> web.Response:

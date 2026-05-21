@@ -10,6 +10,39 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.21.6] - 2026-05-21
+
+### Fixes
+
+- **Web Share Target into worker: don't auto-press Enter.** Operator
+  follow-up — the screenshot shared into a worker submitted before
+  they could add context. Mobile typing is slow; auto-Enter shipped
+  the path without prose.
+
+  Threaded an `enter` kwarg through `daemon.send_to_worker` →
+  `worker_service.send_to_worker` → `PTY.send_keys(enter=...)`.
+  `POST /api/workers/<name>/send` now accepts an optional
+  `"enter": false` in the JSON body (default True preserves the
+  prior contract for every existing caller). The share-target JS
+  passes `enter: false` so the bracketed `[/path/to/file]` lands in
+  the PTY's input buffer, focus switches to the worker, and the
+  operator can add prose before pressing Enter themselves. Toast
+  updated: "Attached N to <worker> — add context + press Enter."
+
+- **Dashboard URL no longer pasted alongside the path.** Same flow:
+  when sharing FROM the PWA, the OS share sheet auto-attaches the
+  current page URL as the `url` field — which is the dashboard's
+  own host. That ended up in the worker's input buffer as noise.
+  JS now drops `share.url` when it parses to the same host as
+  `window.location.host`. Cross-app shares (e.g. sharing a tweet,
+  a video URL, an article) still include the URL as expected.
+
+### Features
+
+### Changes
+
+### Fixes
+
 ## [2026.5.21.5] - 2026-05-21
 
 ### Changes
