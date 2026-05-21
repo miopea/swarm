@@ -10,6 +10,54 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.21.3] - 2026-05-21
+
+### Features
+
+- **PWA Web Share Target — share screenshots from phone to Swarm.** When
+  the dashboard PWA is installed on iOS (Safari ≥ 16.4) or Android
+  (Chrome), "Swarm" now appears in the OS share sheet alongside Mail /
+  Messages / Notes / etc. Take a screenshot, tap Share, pick Swarm →
+  the screenshot lands as an attachment on a pre-filled New Task
+  modal in the dashboard. Title and any shared text/URL pre-populate
+  too. If the operator was last looking at a specific worker
+  (tracked in `localStorage.swarm.lastActiveWorker`), that worker is
+  pre-selected in the assignee dropdown so Submit → task auto-routes
+  to "whatever terminal was active."
+
+  Implementation:
+  - PWA manifest declares `share_target` with `method: POST`,
+    `enctype: multipart/form-data`, file accept covers `image/*`,
+    `text/*`, `application/pdf`.
+  - New `POST /share-receive` endpoint accepts the OS multipart POST,
+    saves attachments via the existing `daemon.save_attachment` path
+    (lands in `~/.swarm/uploads/`), stashes the payload + filenames
+    in an in-process cache, 303-redirects to `/?share=<id>`.
+  - `GET /share/<id>` is single-shot — first caller gets the payload,
+    subsequent calls 404. 5-minute TTL keeps interrupted shares from
+    lingering.
+  - Dashboard JS detects `?share=<id>` on load, fetches the payload,
+    opens the New Task modal pre-filled with title + description +
+    attached file thumbnails via the existing `taskModalAttachmentPaths`
+    + `addThumbnail` path (same flow the email-drop already uses).
+    Query string cleaned via `history.replaceState` so refresh
+    doesn't re-trigger.
+  - `selectWorker()` now also writes `localStorage.swarm.lastActiveWorker`
+    alongside the existing sessionStorage entry — sessionStorage
+    doesn't survive the OS share-sheet → browser bounce; localStorage
+    does. The share landing reads localStorage to pre-select the
+    assignee.
+
+  Verification: `scripts/check_share_target.py` simulates a Web Share
+  Target POST via Playwright's request context, follows the redirect,
+  asserts the modal opens with the title / description / thumbnail
+  populated and the URL cleaned. Captures
+  `docs/qa-share-target.png` for the record.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.21.2] - 2026-05-21
 
 ### Fixes

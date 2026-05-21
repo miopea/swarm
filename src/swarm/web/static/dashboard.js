@@ -4711,6 +4711,12 @@
     window.selectWorker = function(name) {
         selectedWorker = name;
         try { sessionStorage.setItem('swarm_selected_worker', name); } catch(e) {}
+        // localStorage variant survives across sessions — picked up by
+        // the Web Share Target landing flow so a shared screenshot can
+        // pre-fill the New Task assignee with the worker the operator
+        // was last using. sessionStorage doesn't carry across the OS
+        // share sheet → browser bounce; localStorage does.
+        try { if (name) localStorage.setItem('swarm.lastActiveWorker', name); } catch(e) {}
         // Operator is addressing this worker — clear any queen/escalation
         // banners tied to it so they don't linger after the issue is handled.
         if (typeof removeQueenBannersForWorker === 'function') removeQueenBannersForWorker(name);
@@ -9982,6 +9988,88 @@
                 el.classList.remove('dragging', 'drag-over-top', 'drag-over-bottom');
             });
         }
+    })();
+
+    // ----- Web Share Target landing (2026-05-21) -----
+    //
+    // When the PWA is installed and the operator selects "Swarm" from
+    // the iOS / Android share sheet, the server captures the payload
+    // at POST /share-receive and 303-redirects to /?share=<id>. This
+    // block detects that query param on load, fetches the stashed
+    // payload, and opens the New Task modal with the shared file as
+    // a pre-attached image + the shared text/title as description.
+    // Empties the query string after pickup so refresh doesn't
+    // re-trigger.
+    (function checkShareIntent() {
+        var match = window.location.search.match(/[?&]share=([A-Za-z0-9]+)/);
+        if (!match) return;
+        var shareId = match[1];
+        // Strip the share param from the URL so a refresh doesn't
+        // try to claim an already-consumed share.
+        try {
+            var url = new URL(window.location.href);
+            url.searchParams.delete('share');
+            window.history.replaceState({}, '', url.pathname + (url.search || '') + url.hash);
+        } catch (_) {}
+        // Wait one tick so the modal helpers (openTaskModal, addThumbnail,
+        // taskModalAttachmentPaths) are definitely defined.
+        setTimeout(function () {
+            fetch('/share/' + encodeURIComponent(shareId), {
+                headers: { 'X-Requested-With': 'Dashboard' },
+            })
+                .then(function (r) {
+                    if (!r.ok) throw new Error('share not found');
+                    return r.json();
+                })
+                .then(function (share) {
+                    var files = share.files || [];
+                    var names = share.filenames || [];
+                    var titleParts = [];
+                    if (share.title) titleParts.push(share.title);
+                    if (!titleParts.length && names.length) titleParts.push(names[0]);
+                    if (!titleParts.length) titleParts.push('Shared from mobile');
+                    var descParts = [];
+                    if (share.text) descParts.push(share.text);
+                    if (share.url) descParts.push(share.url);
+                    if (files.length) {
+                        descParts.push(
+                            '\n[Shared from mobile — ' + files.length + ' attachment(s)]'
+                        );
+                    }
+                    openTaskModal('create', {
+                        title: titleParts.join(' — ').slice(0, 200),
+                        desc: descParts.join('\n\n'),
+                    });
+                    // Pre-attach via the existing taskModalAttachmentPaths
+                    // mechanism (same path the email-drop flow uses).
+                    taskModalAttachmentPaths = files.slice();
+                    files.forEach(function (p) {
+                        try { addThumbnail(p); } catch (_) {}
+                    });
+                    // Pre-select the last-active worker (tracked in
+                    // localStorage when the operator focuses a worker).
+                    try {
+                        var lastWorker = localStorage.getItem('swarm.lastActiveWorker');
+                        var sel = document.getElementById('tm-worker');
+                        if (lastWorker && sel) {
+                            // The worker dropdown is populated async;
+                            // wait briefly then attempt the selection.
+                            setTimeout(function () {
+                                for (var i = 0; i < sel.options.length; i++) {
+                                    if (sel.options[i].value === lastWorker) {
+                                        sel.selectedIndex = i;
+                                        break;
+                                    }
+                                }
+                            }, 300);
+                        }
+                    } catch (_) {}
+                    showToast('Shared content ready — review and create');
+                })
+                .catch(function () {
+                    showToast('Share expired or already consumed', true);
+                });
+        }, 250);
     })();
 })();
 
