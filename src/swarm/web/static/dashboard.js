@@ -10023,16 +10023,25 @@
                 })
                 .then(function (share) {
                     var files = share.files || [];
-                    var lastWorker = null;
-                    try { lastWorker = localStorage.getItem('swarm.lastActiveWorker'); } catch (_) {}
-                    // Default route: into the currently-active worker's
-                    // PTY. Claude Code parses [/abs/path/to/file.png]
-                    // tokens as image attachments, so we type the file
-                    // path(s) wrapped in brackets followed by Enter.
-                    // Falls back to the New Task modal when there's no
-                    // last-active worker or when nothing was attached.
-                    if (lastWorker && files.length) {
-                        _shareSendToWorker(lastWorker, files, share);
+                    // Operator preference (2026-05-21): screenshots from
+                    // the share sheet ALWAYS route to the Queen. The
+                    // earlier heuristic (last-active-worker from
+                    // localStorage) was a guessing game — wrong often
+                    // enough that the operator had to re-route by hand.
+                    // Queen is the unambiguous front door: she can ask
+                    // for context and forward to the right worker via
+                    // queen_prompt_worker / swarm_send_message.
+                    //
+                    // Claude Code parses [/abs/path/to/file.png] tokens
+                    // as image attachments, so _shareSendToWorker types
+                    // the file path(s) wrapped in brackets into the
+                    // Queen's PTY without pressing Enter — operator
+                    // adds the "send to X" instruction and submits.
+                    //
+                    // Falls back to the New Task modal only when the
+                    // share has no file attachments (text/url shares).
+                    if (files.length) {
+                        _shareSendToWorker('queen', files, share);
                     } else {
                         _shareOpenTaskModal(share);
                     }
@@ -10118,15 +10127,16 @@
         files.forEach(function (p) {
             try { addThumbnail(p); } catch (_) {}
         });
-        // Pre-select the last-active worker as the assignee even in the
-        // fallback path so the operator's intent stays consistent.
+        // Pre-select the Queen as the assignee in the fallback path so
+        // it matches the share default — see checkShareIntent above for
+        // why screenshots/files always go to her. Operator can still
+        // change the dropdown before creating the task.
         try {
-            var lastWorker = localStorage.getItem('swarm.lastActiveWorker');
             var sel = document.getElementById('tm-worker');
-            if (lastWorker && sel) {
+            if (sel) {
                 setTimeout(function () {
                     for (var i = 0; i < sel.options.length; i++) {
-                        if (sel.options[i].value === lastWorker) {
+                        if (sel.options[i].value === 'queen') {
                             sel.selectedIndex = i;
                             break;
                         }
@@ -10973,17 +10983,12 @@
             var on = btn.dataset.ccFocus === focus;
             btn.setAttribute('aria-selected', on ? 'true' : 'false');
         });
-        // Operator follow-up (2026-05-21): the mobile focus toggle was
-        // not updating localStorage.swarm.lastActiveWorker, so a share
-        // taken while viewing the Queen panel ended up routing to
-        // whatever sidebar worker was last clicked (often 'swarm').
-        // Treat Queen-focus as "the Queen is now my active terminal"
-        // so the share-target flow routes screenshots into her PTY.
-        // Don't write anything for attention-focus — that surface
-        // spans all workers, so the last sidebar selection should win.
-        if (focus === 'queen') {
-            try { localStorage.setItem('swarm.lastActiveWorker', 'queen'); } catch (_) {}
-        }
+        // Note: the prior version of this toggle wrote
+        // localStorage.swarm.lastActiveWorker = 'queen' so the share-
+        // target flow would route screenshots into the Queen's PTY.
+        // That hack is no longer needed — shares now route to the Queen
+        // unconditionally (see checkShareIntent), so the toggle no
+        // longer has to second-guess which worker is "active."
     }
     window.ccMobileFocus = ccMobileFocus;
     // Initialize from prior choice (default attention) on page load —

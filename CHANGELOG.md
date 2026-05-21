@@ -10,6 +10,22 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.21.8] - 2026-05-21
+
+### Changes
+
+- **Shared screenshots always route to the Queen.** The Web Share Target
+  flow previously read `localStorage.swarm.lastActiveWorker` to decide
+  which worker's PTY should receive the shared file — a guessing game
+  that mis-routed often enough that the operator had to re-attach by
+  hand. Now `checkShareIntent` in `dashboard.js` sends straight to
+  `queen` whenever the share has files; the operator tells the Queen
+  which worker should pick it up (she can forward via
+  `queen_prompt_worker` / `swarm_send_message`). The fallback task
+  modal also defaults to Queen, and the `ccMobileFocus` Queen-focus
+  hack that wrote `lastActiveWorker = 'queen'` is gone — it was only
+  there to paper over the now-removed heuristic.
+
 ## [2026.5.21.7] - 2026-05-21
 
 ### Fixes
