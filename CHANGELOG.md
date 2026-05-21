@@ -10,6 +10,47 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.21.5] - 2026-05-21
+
+### Changes
+
+- **Share-target default behavior: route into the active worker's PTY,
+  not the New Task modal.** Operator follow-up after `.21.4`: "it
+  shared into the app but opens as a task, not just an image into the
+  open worker." The original `.21.3` design created a task; the
+  operator wanted the screenshot to land directly in whatever worker
+  was currently active. This release flips the default.
+
+  New flow when the share lands:
+  - Dashboard JS reads `localStorage.swarm.lastActiveWorker` (set by
+    `selectWorker()` whenever the operator focuses a worker).
+  - If that's set AND the share carries at least one file: build a
+    message of `[/abs/path/to/file]` tokens (Claude Code parses
+    those as image attachments) + any shared text/url, then POST to
+    `/api/workers/<name>/send`. Toast: "Sent N attachment(s) to
+    <worker>". Switches focus to the worker so the operator sees the
+    result land in the PTY immediately.
+  - If no last-active worker OR no file was shared: falls back to
+    the New Task modal pre-filled with attachments — the original
+    behavior, kept as a safety net.
+  - Any send-to-worker failure (HTTP error, worker not found,
+    transient state) also drops back to the task modal so the share
+    isn't lost — toast surfaces the underlying error.
+
+  Verification: `scripts/check_share_target.py` now exercises BOTH
+  paths in one run. With `localStorage.swarm.lastActiveWorker` set,
+  the task modal stays closed (`task-modal opened: False`); cleared,
+  the modal opens (`task-modal opened: True`). Live screenshot
+  capture confirms the toast "Sent 1 attachment(s) to
+  public-website" + the dashboard's focus switch to that worker.
+
+  Caught a test-script bug while verifying: the dashboard's boot
+  code at `dashboard.js:9667` restores the previously-selected
+  worker from sessionStorage via `selectWorker()`, which re-writes
+  `localStorage.swarm.lastActiveWorker`. To simulate a
+  never-selected state in the fallback test, both storages must
+  be cleared.
+
 ## [2026.5.21.4] - 2026-05-21
 
 ### Fixes

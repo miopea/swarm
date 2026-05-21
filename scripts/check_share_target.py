@@ -65,32 +65,30 @@ with sync_playwright() as pw:
     assert resp.status in (302, 303), f"expected redirect, got {resp.status}"
     assert location.startswith("/?share="), f"unexpected redirect: {location}"
 
-    # 2. Navigate to the redirect — the dashboard JS should see the
-    # share param, fetch the payload, and open the New Task modal.
+    # 2. Pre-seed localStorage with a 'last active worker' so the
+    # dashboard JS routes the share INTO that worker's PTY instead of
+    # opening the task modal. This is the post-2026-05-21 behaviour
+    # the operator asked for.
     page = ctx.new_page()
+    # Set localStorage on the dashboard origin before navigating to
+    # /?share=<id>. Workers like 'swarm' / 'platform' / 'admin' exist
+    # on the live daemon; pick 'public-website' since the existing
+    # synth playbook references it as a known worker.
+    page.goto("http://localhost:9090/", wait_until="domcontentloaded")
+    page.evaluate("localStorage.setItem('swarm.lastActiveWorker', 'public-website')")
+    # Now bounce to the share landing.
     page.goto("http://localhost:9090" + location, wait_until="domcontentloaded")
-    page.wait_for_timeout(2500)  # share fetch + modal open + thumbnail render
+    page.wait_for_timeout(2500)
 
-    # 3. Verify the task modal is now visible + pre-filled.
+    # 3. Verify the share routed into the worker (NOT the task modal).
+    # The task modal should remain hidden; the toast should mention
+    # 'Sent N attachment(s) to <worker>'.
     modal_open = page.evaluate(
         "document.getElementById('task-modal')?.style.display !== 'none'"
     )
-    title_value = page.evaluate("document.getElementById('tm-title')?.value || ''")
-    desc_value = page.evaluate("document.getElementById('tm-desc')?.value || ''")
-    thumbs = page.evaluate(
-        "document.querySelectorAll('#tm-attachments img, #tm-attachments .attachment-thumb').length"
-    )
-    attachment_paths = page.evaluate(
-        "typeof taskModalAttachmentPaths !== 'undefined' ? taskModalAttachmentPaths.length : -1"
-    )
+    print(f"task-modal opened (should be False for worker-route): {modal_open}")
 
-    print(f"task-modal display:none cleared: {modal_open}")
-    print(f"  tm-title: {title_value!r}")
-    print(f"  tm-desc:  {desc_value!r}")
-    print(f"  thumbnails: {thumbs}")
-    print(f"  taskModalAttachmentPaths.length: {attachment_paths}")
-
-    # 4. Confirm the URL was cleaned (no ?share= leftover).
+    # Confirm the URL was cleaned (no ?share= leftover).
     current_url = page.url
     print(f"current URL: {current_url}")
     assert "share=" not in current_url, f"share param not stripped: {current_url}"
@@ -99,6 +97,46 @@ with sync_playwright() as pw:
     out = Path("/home/bschleifer/projects/personal/swarm/docs/qa-share-target.png")
     page.screenshot(path=str(out), full_page=False)
     print(f"screenshot: {out.relative_to(out.parent.parent)}")
+
+    # 4. Now exercise the FALLBACK path: clear BOTH storages and
+    # re-trigger a share — should land in the task modal because no
+    # last-active worker is known. sessionStorage carries the
+    # previously-selected worker name and the dashboard's boot code
+    # re-restores it via selectWorker() (which re-writes localStorage),
+    # so clearing only localStorage isn't enough to simulate a
+    # never-selected state.
+    page.evaluate(
+        "localStorage.removeItem('swarm.lastActiveWorker');"
+        "sessionStorage.removeItem('swarm_selected_worker');"
+    )
+    img_bytes2 = (repo_root / "src/swarm/web/static/icon-192.png").read_bytes()
+    resp2 = api.post(
+        "http://localhost:9090/share-receive",
+        multipart={
+            "title": "Second share",
+            "text": "Fallback to modal",
+            "file": {
+                "name": "fallback.png",
+                "mimeType": "image/png",
+                "buffer": img_bytes2,
+            },
+        },
+        max_redirects=0,
+    )
+    location2 = resp2.headers.get("location") or resp2.headers.get("Location") or ""
+    page.goto("http://localhost:9090" + location2, wait_until="domcontentloaded")
+    page.wait_for_timeout(2500)
+    modal_open2 = page.evaluate(
+        "document.getElementById('task-modal')?.style.display !== 'none'"
+    )
+    ls_value = page.evaluate(
+        "localStorage.getItem('swarm.lastActiveWorker')"
+    )
+    print(f"task-modal opened (should be True for fallback-route): {modal_open2}")
+    print(f"  localStorage.swarm.lastActiveWorker after step 5: {ls_value!r}")
+    fb_shot = Path("/home/bschleifer/projects/personal/swarm/docs/qa-share-fallback.png")
+    page.screenshot(path=str(fb_shot), full_page=False)
+    print(f"  fallback screenshot: {fb_shot.relative_to(fb_shot.parent.parent)}")
 
     browser.close()
 

@@ -10023,54 +10023,101 @@
                 })
                 .then(function (share) {
                     var files = share.files || [];
-                    var names = share.filenames || [];
-                    var titleParts = [];
-                    if (share.title) titleParts.push(share.title);
-                    if (!titleParts.length && names.length) titleParts.push(names[0]);
-                    if (!titleParts.length) titleParts.push('Shared from mobile');
-                    var descParts = [];
-                    if (share.text) descParts.push(share.text);
-                    if (share.url) descParts.push(share.url);
-                    if (files.length) {
-                        descParts.push(
-                            '\n[Shared from mobile — ' + files.length + ' attachment(s)]'
-                        );
+                    var lastWorker = null;
+                    try { lastWorker = localStorage.getItem('swarm.lastActiveWorker'); } catch (_) {}
+                    // Default route: into the currently-active worker's
+                    // PTY. Claude Code parses [/abs/path/to/file.png]
+                    // tokens as image attachments, so we type the file
+                    // path(s) wrapped in brackets followed by Enter.
+                    // Falls back to the New Task modal when there's no
+                    // last-active worker or when nothing was attached.
+                    if (lastWorker && files.length) {
+                        _shareSendToWorker(lastWorker, files, share);
+                    } else {
+                        _shareOpenTaskModal(share);
                     }
-                    openTaskModal('create', {
-                        title: titleParts.join(' — ').slice(0, 200),
-                        desc: descParts.join('\n\n'),
-                    });
-                    // Pre-attach via the existing taskModalAttachmentPaths
-                    // mechanism (same path the email-drop flow uses).
-                    taskModalAttachmentPaths = files.slice();
-                    files.forEach(function (p) {
-                        try { addThumbnail(p); } catch (_) {}
-                    });
-                    // Pre-select the last-active worker (tracked in
-                    // localStorage when the operator focuses a worker).
-                    try {
-                        var lastWorker = localStorage.getItem('swarm.lastActiveWorker');
-                        var sel = document.getElementById('tm-worker');
-                        if (lastWorker && sel) {
-                            // The worker dropdown is populated async;
-                            // wait briefly then attempt the selection.
-                            setTimeout(function () {
-                                for (var i = 0; i < sel.options.length; i++) {
-                                    if (sel.options[i].value === lastWorker) {
-                                        sel.selectedIndex = i;
-                                        break;
-                                    }
-                                }
-                            }, 300);
-                        }
-                    } catch (_) {}
-                    showToast('Shared content ready — review and create');
                 })
                 .catch(function () {
                     showToast('Share expired or already consumed', true);
                 });
         }, 250);
     })();
+
+    // Route a share into the active worker's PTY. The message is the
+    // bracketed file path(s) + any shared text/url. Claude Code reads
+    // each [/abs/path] token as an image attachment.
+    function _shareSendToWorker(workerName, files, share) {
+        var parts = files.map(function (p) { return '[' + p + ']'; });
+        if (share.title) parts.push(share.title);
+        if (share.text) parts.push(share.text);
+        if (share.url) parts.push(share.url);
+        var message = parts.join(' ').trim();
+        fetch('/api/workers/' + encodeURIComponent(workerName) + '/send', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'Dashboard',
+            },
+            body: JSON.stringify({ message: message }),
+        })
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function () {
+                showToast('Sent ' + files.length + ' attachment(s) to ' + workerName);
+                // Switch focus to the worker so the operator sees the
+                // result land in the PTY immediately.
+                if (typeof selectWorker === 'function') selectWorker(workerName);
+            })
+            .catch(function (e) {
+                // Network / 404 / state-change — drop back to the task
+                // modal so the share isn't lost.
+                showToast('Send to ' + workerName + ' failed: ' + (e.message || 'error') + ' — opening task modal', true);
+                _shareOpenTaskModal(share);
+            });
+    }
+
+    function _shareOpenTaskModal(share) {
+        var files = share.files || [];
+        var names = share.filenames || [];
+        var titleParts = [];
+        if (share.title) titleParts.push(share.title);
+        if (!titleParts.length && names.length) titleParts.push(names[0]);
+        if (!titleParts.length) titleParts.push('Shared from mobile');
+        var descParts = [];
+        if (share.text) descParts.push(share.text);
+        if (share.url) descParts.push(share.url);
+        if (files.length) {
+            descParts.push('\n[Shared from mobile — ' + files.length + ' attachment(s)]');
+        }
+        openTaskModal('create', {
+            title: titleParts.join(' — ').slice(0, 200),
+            desc: descParts.join('\n\n'),
+        });
+        taskModalAttachmentPaths = files.slice();
+        files.forEach(function (p) {
+            try { addThumbnail(p); } catch (_) {}
+        });
+        // Pre-select the last-active worker as the assignee even in the
+        // fallback path so the operator's intent stays consistent.
+        try {
+            var lastWorker = localStorage.getItem('swarm.lastActiveWorker');
+            var sel = document.getElementById('tm-worker');
+            if (lastWorker && sel) {
+                setTimeout(function () {
+                    for (var i = 0; i < sel.options.length; i++) {
+                        if (sel.options[i].value === lastWorker) {
+                            sel.selectedIndex = i;
+                            break;
+                        }
+                    }
+                }, 300);
+            }
+        } catch (_) {}
+        showToast('Shared content ready — review and create');
+    }
+
 })();
 
 // ============================================================================
