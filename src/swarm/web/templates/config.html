@@ -976,6 +976,8 @@
                         <option value="escape" {{ 'selected' if btn.action == 'escape' else '' }}>Escape</option>
                         <option value="arrow_up" {{ 'selected' if btn.action == 'arrow_up' else '' }}>Arrow Up</option>
                         <option value="arrow_down" {{ 'selected' if btn.action == 'arrow_down' else '' }}>Arrow Down</option>
+                        <option value="arrow_right" {{ 'selected' if btn.action == 'arrow_right' else '' }}>Arrow Right</option>
+                        <option value="arrow_left" {{ 'selected' if btn.action == 'arrow_left' else '' }}>Arrow Left</option>
                         <option value="export" {{ 'selected' if btn.action == 'export' else '' }}>Export</option>
                         <option value="" {{ 'selected' if not btn.action else '' }}>Custom</option>
                     </select>
@@ -1563,8 +1565,23 @@
     }
 
     // --- Drag-and-drop reorder for button lists ---
+    // Supports both desktop (HTML5 native drag) and mobile (long-press
+    // touch). Mobile path is required because HTML5 `dragstart` doesn't
+    // fire on touch — iOS Safari and most Android browsers never emit
+    // it, so without touch handlers the rows look draggable but the
+    // operator can't actually reorder anything on a phone.
+    //
+    // Mobile contract: 250ms long-press on a row enters drag mode. Once
+    // in drag mode, touchmove is preventDefault'd so the page doesn't
+    // scroll; the row under the touch point gets the `drag-over` class
+    // and the drop on touchend reuses the same insert-before-vs-after
+    // midpoint logic as the mouse path. Touches starting on an input /
+    // select / textarea / button never start a drag — those edits stay
+    // tappable.
     function initDragReorder(listEl) {
         var dragRow = null;
+
+        // --- Desktop (HTML5 drag-and-drop) ---
         listEl.addEventListener('dragstart', function(e) {
             var row = e.target.closest('.approval-rule-row');
             if (!row) return;
@@ -1605,6 +1622,94 @@
             }
             markDirty();
         });
+
+        // --- Mobile (long-press → touch drag) ---
+        var pressTimer = null;
+        var touchStart = null; // { x, y, row }
+        var dragging = false;
+        var LONG_PRESS_MS = 250;
+        var CANCEL_DISTANCE_PX = 8;
+
+        function clearTimer() {
+            if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+        }
+        function cancelDrag() {
+            clearTimer();
+            if (dragRow) dragRow.classList.remove('dragging');
+            listEl.querySelectorAll('.drag-over').forEach(function(el) { el.classList.remove('drag-over'); });
+            dragRow = null;
+            touchStart = null;
+            dragging = false;
+        }
+        function isInteractive(el) {
+            // Skip drag-start when the operator touches an input / select /
+            // textarea / button so existing tap-to-edit behavior survives.
+            return !!(el && el.closest && el.closest('input, select, textarea, button, label'));
+        }
+
+        listEl.addEventListener('touchstart', function(e) {
+            if (e.touches.length !== 1) return;
+            var t = e.touches[0];
+            if (isInteractive(t.target)) return;
+            var row = t.target.closest && t.target.closest('.approval-rule-row');
+            if (!row || !listEl.contains(row)) return;
+            touchStart = { x: t.clientX, y: t.clientY, row: row };
+            clearTimer();
+            pressTimer = setTimeout(function() {
+                pressTimer = null;
+                if (!touchStart) return;
+                dragging = true;
+                dragRow = touchStart.row;
+                dragRow.classList.add('dragging');
+                if (navigator.vibrate) { try { navigator.vibrate(15); } catch (_) {} }
+            }, LONG_PRESS_MS);
+        }, { passive: true });
+
+        listEl.addEventListener('touchmove', function(e) {
+            if (e.touches.length !== 1) return;
+            var t = e.touches[0];
+            if (!touchStart) return;
+            // Cancel a pending drag if the finger leaves the press zone before
+            // the timer fires — treat that motion as a scroll.
+            if (!dragging) {
+                var dx = t.clientX - touchStart.x;
+                var dy = t.clientY - touchStart.y;
+                if (dx * dx + dy * dy > CANCEL_DISTANCE_PX * CANCEL_DISTANCE_PX) {
+                    cancelDrag();
+                }
+                return;
+            }
+            // Active drag: block scroll + update drop indicator.
+            if (e.cancelable) e.preventDefault();
+            var under = document.elementFromPoint(t.clientX, t.clientY);
+            var target = under && under.closest && under.closest('.approval-rule-row');
+            if (!target || target === dragRow || !listEl.contains(target)) return;
+            listEl.querySelectorAll('.drag-over').forEach(function(el) { el.classList.remove('drag-over'); });
+            target.classList.add('drag-over');
+        }, { passive: false });
+
+        listEl.addEventListener('touchend', function(e) {
+            if (!dragging || !dragRow) { cancelDrag(); return; }
+            // elementFromPoint at the final touch position to pick the drop target.
+            var t = (e.changedTouches && e.changedTouches[0]) || null;
+            var clientX = t ? t.clientX : 0;
+            var clientY = t ? t.clientY : 0;
+            var under = t ? document.elementFromPoint(clientX, clientY) : null;
+            var target = under && under.closest && under.closest('.approval-rule-row');
+            if (target && target !== dragRow && listEl.contains(target)) {
+                var rect = target.getBoundingClientRect();
+                var mid = rect.top + rect.height / 2;
+                if (clientY < mid) {
+                    listEl.insertBefore(dragRow, target);
+                } else {
+                    listEl.insertBefore(dragRow, target.nextSibling);
+                }
+                markDirty();
+            }
+            cancelDrag();
+        });
+
+        listEl.addEventListener('touchcancel', cancelDrag);
     }
 
     // Initialize drag-and-drop on button lists
@@ -1664,8 +1769,8 @@
         var row = document.createElement('div');
         row.className = 'approval-rule-row';
         row.draggable = true;
-        var actions = ['revive','refresh','kill','escape','arrow_up','arrow_down','export',''];
-        var actionLabels = ['Revive','Refresh','Kill','Escape','Arrow Up','Arrow Down','Export','Custom'];
+        var actions = ['revive','refresh','kill','escape','arrow_up','arrow_down','arrow_right','arrow_left','export',''];
+        var actionLabels = ['Revive','Refresh','Kill','Escape','Arrow Up','Arrow Down','Arrow Right','Arrow Left','Export','Custom'];
         var styles = ['secondary','queen','danger'];
         var styleLabels = ['Default','Queen','Danger'];
         var selAction = '';

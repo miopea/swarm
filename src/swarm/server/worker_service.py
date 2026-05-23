@@ -253,6 +253,24 @@ class WorkerService:
             pilot.wake_worker(name)
         await worker.process.send_arrow_down()
 
+    async def arrow_right_worker(self, name: str) -> None:
+        """Send Right Arrow to a worker's process."""
+        worker = self.require_worker(name)
+        self._require_process(worker)
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.wake_worker(name)
+        await worker.process.send_arrow_right()
+
+    async def arrow_left_worker(self, name: str) -> None:
+        """Send Left Arrow to a worker's process."""
+        worker = self.require_worker(name)
+        self._require_process(worker)
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.wake_worker(name)
+        await worker.process.send_arrow_left()
+
     async def redraw_worker(self, name: str) -> None:
         """Send SIGWINCH to force TUI redraw for a worker."""
         worker = self.require_worker(name)

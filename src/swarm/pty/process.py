@@ -441,6 +441,14 @@ class WorkerProcess:
         """Send Down Arrow (ANSI escape) to the worker's PTY."""
         await self._write(b"\x1b[B")
 
+    async def send_arrow_right(self) -> None:
+        """Send Right Arrow (ANSI escape) to the worker's PTY."""
+        await self._write(b"\x1b[C")
+
+    async def send_arrow_left(self) -> None:
+        """Send Left Arrow (ANSI escape) to the worker's PTY."""
+        await self._write(b"\x1b[D")
+
     async def send_sigwinch(self) -> None:
         """Send SIGWINCH to force TUI redraw."""
         await self._signal(signal.SIGWINCH)

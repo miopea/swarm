@@ -10,6 +10,47 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.23.2] - 2026-05-23
+
+### Features
+
+- **Right/Left arrow custom-button actions.** The worker action-button
+  picker (Config → Workers) already offered Arrow Up and Arrow Down for
+  navigating Claude Code's plan-mode approval prompts and other arrow-
+  driven TUIs. Right and Left are now in the same dropdown — useful for
+  TUIs that put choices on a horizontal axis (`Y/n` style approvals,
+  carousel pickers, file-tree navigation). End-to-end wiring follows
+  the existing pattern: ANSI escape (`\x1b[C` / `\x1b[D`) sent through
+  `PtyProcess.send_arrow_right` / `send_arrow_left` →
+  `WorkerService.arrow_right_worker` / `arrow_left_worker` → daemon
+  delegate → `POST /action/arrow-right/{name}` / `arrow-left/{name}` →
+  `sendSpecialKey('arrow-right' / 'arrow-left')` from the
+  `doAction(action, ...)` dispatcher. The config template (both
+  server-rendered options and the JS `buildActionBtnRow` factory) lists
+  both alongside the existing Arrow Up / Arrow Down options.
+
+### Changes
+
+### Fixes
+
+- **Drag-reorder for custom buttons now works on mobile.** The
+  drag-and-drop reorder on Config → Workers (Action Buttons, Task
+  Buttons, Tool Buttons) only wired HTML5 `dragstart` / `dragover` /
+  `drop`, which never fire on iOS Safari or most Android touch
+  browsers — the rows looked draggable but couldn't actually be
+  reordered from a phone. `initDragReorder` in `config.html` now
+  carries a touch path that mirrors the desktop flow: a 250 ms
+  long-press on a row enters drag mode (with haptic feedback if
+  `navigator.vibrate` is available); `touchmove` blocks scroll, uses
+  `document.elementFromPoint` to find the row under the finger, and
+  paints the same `drag-over` indicator; `touchend` reuses the
+  insert-before-vs-after midpoint logic to drop. Touches starting on
+  an `input` / `select` / `textarea` / `button` / `label` never
+  initiate a drag, so the row's editable fields stay tappable; a
+  finger that wanders more than 8 px before the long-press timer
+  fires cancels (treated as a scroll). Desktop drag behavior is
+  unchanged.
+
 ## [2026.5.23] - 2026-05-23
 
 ### Features

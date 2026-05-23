@@ -1921,6 +1921,14 @@ class SwarmDaemon(EventEmitter):
         """Send Down Arrow to a worker's process."""
         await self.worker_svc.arrow_down_worker(name)
 
+    async def arrow_right_worker(self, name: str) -> None:
+        """Send Right Arrow to a worker's process."""
+        await self.worker_svc.arrow_right_worker(name)
+
+    async def arrow_left_worker(self, name: str) -> None:
+        """Send Left Arrow to a worker's process."""
+        await self.worker_svc.arrow_left_worker(name)
+
     async def redraw_worker(self, name: str) -> None:
         """Send SIGWINCH to force TUI redraw."""
         await self.worker_svc.redraw_worker(name)

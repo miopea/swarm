@@ -91,6 +91,22 @@ async def handle_action_arrow_down(request: web.Request) -> web.Response:
 
 
 @handle_errors
+async def handle_action_arrow_right(request: web.Request) -> web.Response:
+    d = get_daemon(request)
+    name = request.match_info["name"]
+    await d.arrow_right_worker(name)
+    return web.json_response({"status": "arrow_right_sent", "worker": name})
+
+
+@handle_errors
+async def handle_action_arrow_left(request: web.Request) -> web.Response:
+    d = get_daemon(request)
+    name = request.match_info["name"]
+    await d.arrow_left_worker(name)
+    return web.json_response({"status": "arrow_left_sent", "worker": name})
+
+
+@handle_errors
 async def handle_action_redraw(request: web.Request) -> web.Response:
     d = get_daemon(request)
     name = request.match_info["name"]
@@ -234,6 +250,8 @@ def register(app: web.Application) -> None:
     app.router.add_post("/action/escape/{name}", handle_action_escape)
     app.router.add_post("/action/arrow-up/{name}", handle_action_arrow_up)
     app.router.add_post("/action/arrow-down/{name}", handle_action_arrow_down)
+    app.router.add_post("/action/arrow-right/{name}", handle_action_arrow_right)
+    app.router.add_post("/action/arrow-left/{name}", handle_action_arrow_left)
     app.router.add_post("/action/redraw/{name}", handle_action_redraw)
     app.router.add_post("/action/toggle-drones", handle_action_toggle_drones)
     app.router.add_post("/action/continue-all", handle_action_continue_all)

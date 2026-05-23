@@ -5360,6 +5360,8 @@
         if (action === 'escape') { sendSpecialKey('escape'); return; }
         if (action === 'arrow_up') { sendSpecialKey('arrow-up'); return; }
         if (action === 'arrow_down') { sendSpecialKey('arrow-down'); return; }
+        if (action === 'arrow_right') { sendSpecialKey('arrow-right'); return; }
+        if (action === 'arrow_left') { sendSpecialKey('arrow-left'); return; }
         if (action === 'export') { exportTerminal(); return; }
         // Custom button: send command or continue
         if (command) { sendToolCommand(command); } else { continueWorker(); }
