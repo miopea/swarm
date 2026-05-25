@@ -10,6 +10,43 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.25.2] - 2026-05-25
+
+### Features
+
+### Changes
+
+- **SwarmDaemon background-loop lifecycle hoisted into
+  `BackgroundLoopRunner`** (`src/swarm/server/loop_runner.py`). Before
+  this commit each periodic loop was wired inline: a
+  `self._foo_task = asyncio.create_task(self._foo_loop())` line in
+  `start()` and a matching entry in the cancellation tuple in
+  `_cancel_timers`. The two lists drifted whenever a loop was added
+  (resource, backup, db_maintenance, playbook_consolidation each
+  needed an edit in both sites), and a missed cancellation handle
+  would leak the task across `os.execv` reloads. The runner
+  centralises the lifecycle:
+  `register(name, factory, *, enabled=True)` collects loops;
+  `start_all()` materialises tasks (idempotent — already-live entries
+  are skipped); `start(name)` covers the late-enable path used by
+  `reload_config` for the resource monitor; `cancel_all()` cancels
+  every registered task and awaits them under
+  `gather(return_exceptions=True)` so shutdown never raises on a
+  worker that already errored. Loop *bodies* still live on
+  `SwarmDaemon` because they're tightly coupled to daemon state —
+  moving them would require plumbing ~25 closures into the runner
+  constructor and split one god class into two. The win that matters
+  is separating lifecycle plumbing from business logic; that's what
+  this module does. Backward-compat `@property` shims for
+  `_heartbeat_task` / `_usage_task` / `_mtime_task` keep the daemon
+  tests that directly assigned those attributes working without a
+  parallel rename pass. 14 new unit tests in
+  `tests/test_loop_runner.py` pin register / start / cancel semantics
+  including the idempotent-restart case, single-loop start,
+  done-task replacement, and exception-swallowing cancel.
+
+### Fixes
+
 ## [2026.5.25] - 2026-05-25
 
 ### Features

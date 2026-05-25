@@ -36,6 +36,7 @@ from swarm.server.broadcast import BroadcastHub
 from swarm.server.config_manager import ConfigManager
 from swarm.server.email_service import EmailService
 from swarm.server.jira_service import JiraService
+from swarm.server.loop_runner import BackgroundLoopRunner
 from swarm.server.proposals import ProposalManager
 from swarm.server.resource_monitor import ResourceMonitor
 from swarm.server.task_manager import TaskManager
@@ -277,19 +278,19 @@ class SwarmDaemon(EventEmitter):
 
         self.jira_mgr = self._build_jira_token_manager(config)
         self.jira = JiraSyncService(config.jira, token_manager=self.jira_mgr)
-        self._jira_sync_task: asyncio.Task | None = None
         self._jira_auth_pending: dict[str, str] = {}  # state → csrf token
         self.pilot: DronePilot | None = None
         # --- BroadcastHub: WebSocket client management and debounced broadcasts ---
         self.hub = BroadcastHub(track_task=self._track_task)
-        self._heartbeat_task: asyncio.Task | None = None
-        self._usage_task: asyncio.Task | None = None
-        self._conflict_task: asyncio.Task | None = None
+        # --- BackgroundLoopRunner: owns the periodic-loop task lifecycle ---
+        # Loops are registered in start() once the daemon is fully wired,
+        # since several depend on subsystems that aren't constructed yet
+        # (test_runner, config_mgr, etc.).
+        self.loop_runner = BackgroundLoopRunner()
         self._conflicts: list[ConflictEntry] = []
         self._heartbeat_snapshot: dict[str, str] = {}
         # In-flight Queen analysis tracking lives on self.analyzer
         self.start_time = time.time()
-        self._mtime_task: asyncio.Task | None = None
         self._bg_tasks: set[asyncio.Task[object]] = set()
         # --- EscalationHandler: escalation, oversight, notifications ---
         from swarm.server.escalation_handler import EscalationHandler
@@ -340,8 +341,7 @@ class SwarmDaemon(EventEmitter):
             track_task=self._track_task,
             emit=self.emit,
         )
-        # Resource monitoring
-        self._resource_task: asyncio.Task | None = None
+        # Resource monitoring (lifecycle owned by loop_runner)
         self.resource_mon = ResourceMonitor(
             broadcast_ws=self.broadcast_ws,
             get_pilot=lambda: self.pilot,
@@ -412,9 +412,8 @@ class SwarmDaemon(EventEmitter):
             get_pilot=lambda: self.pilot,
             emitter=self,
         )
-        # Update detection
+        # Update detection (loop lifecycle owned by loop_runner)
         self._update_result: UpdateResult | None = None
-        self._update_task: asyncio.Task | None = None
         # Daemon lock FD — set externally by run_server()
         self._lock_fd: int | None = None
         self._wire_task_board()
@@ -481,6 +480,55 @@ class SwarmDaemon(EventEmitter):
     @_notification_history.setter
     def _notification_history(self, value: list[dict[str, Any]]) -> None:
         self.escalation._notification_history = value
+
+    # --- Backward-compat delegation properties (BackgroundLoopRunner) ---
+    #
+    # tests/test_daemon.py historically reached into ``daemon._heartbeat_task``
+    # / ``_usage_task`` / ``_mtime_task`` to drive _cancel_timers and to
+    # assert lifecycle. These shims keep those tests working without
+    # forcing a parallel rename pass.  Writes update the runner's
+    # internal registry so a None assignment is honoured (the test for
+    # ``_mtime_task = None`` relies on it).
+
+    @property
+    def _heartbeat_task(self) -> asyncio.Task[None] | None:
+        return self.loop_runner.get("heartbeat")
+
+    @_heartbeat_task.setter
+    def _heartbeat_task(self, value: asyncio.Task[None] | None) -> None:
+        self._set_loop_task("heartbeat", value)
+
+    @property
+    def _usage_task(self) -> asyncio.Task[None] | None:
+        return self.loop_runner.get("usage")
+
+    @_usage_task.setter
+    def _usage_task(self, value: asyncio.Task[None] | None) -> None:
+        self._set_loop_task("usage", value)
+
+    @property
+    def _mtime_task(self) -> asyncio.Task[None] | None:
+        return self.loop_runner.get("mtime")
+
+    @_mtime_task.setter
+    def _mtime_task(self, value: asyncio.Task[None] | None) -> None:
+        self._set_loop_task("mtime", value)
+
+    def _set_loop_task(self, name: str, value: asyncio.Task[None] | None) -> None:
+        """Test-only setter: forces a specific task object into the runner.
+
+        Production code calls ``loop_runner.register`` + ``start_all``; this
+        path exists so tests that hand-build a task can still wire it in.
+        Auto-initialises ``loop_runner`` because many test fixtures
+        bypass ``__init__`` via ``SwarmDaemon.__new__`` and then set
+        ``_mtime_task`` / ``_usage_task`` / ``_heartbeat_task`` directly.
+        """
+        if not hasattr(self, "loop_runner") or self.loop_runner is None:
+            self.loop_runner = BackgroundLoopRunner()
+        if value is None:
+            self.loop_runner._tasks.pop(name, None)
+        else:
+            self.loop_runner._tasks[name] = value
 
     # --- Backward-compat delegation properties (StatePublisher) ---
 
@@ -854,53 +902,34 @@ class SwarmDaemon(EventEmitter):
                 "active" if self.config.drones.enabled else "disabled",
             )
 
-        # Background tasks start regardless of worker count
-        # Start heartbeat loop for display_state dirty-checking
-        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+        # Background tasks start regardless of worker count.  All periodic
+        # loops are registered with the BackgroundLoopRunner so the
+        # cancellation list in stop() can't drift out of sync with the
+        # start list here.
+        #
+        # Config mtime watcher needs its anchor primed before the loop
+        # starts, and is only needed when using YAML (no swarm_db).
+        mtime_enabled = not self.swarm_db.connected
+        if mtime_enabled and self.config.source_path:
+            sp = Path(self.config.source_path)
+            if sp.exists():
+                self.config_mgr._config_mtime = sp.stat().st_mtime
 
-        # Start periodic usage refresh (every 15s)
-        self._usage_task = asyncio.create_task(self._usage_refresh_loop())
-
-        # Start conflict detection loop (every 30s, only for worktree workers)
-        self._conflict_task = asyncio.create_task(self._conflict_check_loop())
-
-        # Start Jira sync loop (if enabled)
-        if self.jira.enabled:
-            self._jira_sync_task = asyncio.create_task(self._jira_sync_loop())
-
-        # Start background update check (5s delay for WS clients to connect)
-        self._update_task = asyncio.create_task(self._check_for_updates())
-
-        # Start WebSocket janitor to cull stale clients periodically
-        self._ws_janitor_task = asyncio.create_task(self.hub.ws_janitor_loop())
-
-        # Start config file mtime watcher
-        # Config mtime watcher — only needed when using YAML (no swarm_db)
-        if not self.swarm_db.connected:
-            if self.config.source_path:
-                sp = Path(self.config.source_path)
-                if sp.exists():
-                    self.config_mgr._config_mtime = sp.stat().st_mtime
-            self._mtime_task = asyncio.create_task(self._watch_config_mtime())
-        else:
-            self._mtime_task = None
-
-        # Start resource monitor loop (if enabled)
-        if self.config.resources.enabled:
-            self._resource_task = asyncio.create_task(self._resource_monitor_loop())
-
-        # Periodic task backup (every 30 minutes)
-        self._backup_task = asyncio.create_task(self._backup_loop())
-
-        # Pipeline schedule checker (every 60 seconds)
-        self._pipeline_schedule_task = asyncio.create_task(self._pipeline_schedule_loop())
-
-        # DB maintenance: WAL checkpoint every 5 min, daily backup
-        self._db_maintenance_task = asyncio.create_task(self._db_maintenance_loop())
-
-        # Playbook consolidation sweep (low-frequency; merges same-scope
-        # near-duplicate playbooks via the headless Queen).
-        self._playbook_consolidation_task = asyncio.create_task(self._playbook_consolidation_loop())
+        self.loop_runner.register("heartbeat", self._heartbeat_loop)
+        self.loop_runner.register("usage", self._usage_refresh_loop)
+        self.loop_runner.register("conflict", self._conflict_check_loop)
+        self.loop_runner.register("jira_sync", self._jira_sync_loop, enabled=self.jira.enabled)
+        self.loop_runner.register("update_check", self._check_for_updates)
+        self.loop_runner.register("ws_janitor", self.hub.ws_janitor_loop)
+        self.loop_runner.register("mtime", self._watch_config_mtime, enabled=mtime_enabled)
+        self.loop_runner.register(
+            "resource", self._resource_monitor_loop, enabled=self.config.resources.enabled
+        )
+        self.loop_runner.register("backup", self._backup_loop)
+        self.loop_runner.register("pipeline_schedule", self._pipeline_schedule_loop)
+        self.loop_runner.register("db_maintenance", self._db_maintenance_loop)
+        self.loop_runner.register("playbook_consolidation", self._playbook_consolidation_loop)
+        self.loop_runner.start_all()
 
     async def _db_maintenance_loop(self) -> None:
         """Periodic WAL checkpoint (5 min) and daily backup with rotation."""
@@ -1686,10 +1715,11 @@ class SwarmDaemon(EventEmitter):
         """Hot-reload configuration. Updates pilot, queen, and notifies WS clients."""
         await self.config_mgr.reload(new_config)
 
-        # Start resource monitor if enabled but not yet running
-        rt = getattr(self, "_resource_task", None)
-        if self.config.resources.enabled and (rt is None or rt.done()):
-            self._resource_task = asyncio.create_task(self._resource_monitor_loop())
+        # Start resource monitor if enabled but not yet running.  The
+        # runner's start() is a no-op when the task is already live, so
+        # this is safe to call on every reload.
+        if self.config.resources.enabled:
+            self.loop_runner.start("resource")
 
     async def _watch_config_mtime(self) -> None:
         """Poll config file mtime every 30s and notify WS clients if changed."""
@@ -1765,27 +1795,16 @@ class SwarmDaemon(EventEmitter):
         """Cancel all background timer tasks and await their completion."""
         if self.pilot:
             self.pilot.stop()
-        cancelled: list[asyncio.Task[object]] = []
-        for t in (
-            self._heartbeat_task,
-            self._usage_task,
-            self._mtime_task,
-            getattr(self, "_conflict_task", None),
-            getattr(self, "_update_task", None),
-            getattr(self, "_resource_task", None),
-            getattr(self, "_backup_task", None),
-            getattr(self, "_pipeline_schedule_task", None),
-            getattr(self, "_ws_janitor_task", None),
-            getattr(self, "_db_maintenance_task", None),
-            getattr(self, "_playbook_consolidation_task", None),
-        ):
-            if t:
-                t.cancel()
-                if isinstance(t, asyncio.Task):
-                    cancelled.append(t)
+        # The BackgroundLoopRunner owns the periodic-loop task lifecycle;
+        # cancel_all() awaits each task with return_exceptions=True so
+        # an already-failed worker can't abort the rest of shutdown.
+        await self.loop_runner.cancel_all()
         if self._state_debounce_handle is not None:
             self._state_debounce_handle.cancel()
             self._state_debounce_handle = None
+        # _bg_tasks holds ad-hoc one-shot tasks (e.g. completion replies,
+        # playbook fires) that aren't part of the periodic-loop set.
+        cancelled: list[asyncio.Task[object]] = []
         for task in list(self._bg_tasks):
             task.cancel()
             if isinstance(task, asyncio.Task):
