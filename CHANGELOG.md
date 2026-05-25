@@ -10,6 +10,35 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.25.4] - 2026-05-25
+
+### Features
+
+### Changes
+
+- **Remove dormant verifier wiring from `SwarmDaemon`.** Audit
+  surfaced that `_init_verifier_drone` was defined in commit `4249a39`
+  (`feat(verifier): tiered verifier drone — adversarial
+  post-completion check`) but the activation call site was never
+  added — `_init_verifier_drone` had zero callers, so
+  `self.verifier_drone` was never set, and `_fire_verifier`'s
+  `getattr(self, "verifier_drone", None)` always returned `None`. The
+  verifier code path has been dormant in production since landing.
+  Removed: `_init_verifier_drone`, `_verifier_diff`,
+  `_verifier_check_evidence`, `_verifier_peer_warnings`,
+  `_verifier_send_warning`, `_verifier_escalate`, and `_fire_verifier`
+  (~115 LOC of dead code). The `complete_task` `verify` kwarg is
+  preserved on the public API (queen_force_complete_task still passes
+  `verify=False` to leave a SKIPPED stamp) — the `verify=True` branch
+  is now a no-op. `_log_verifier_skip` stays (it's live on the
+  force-complete path). The `VerifierDrone` class and its 70 unit
+  tests in `tests/test_verifier_drone.py` are unchanged; if the
+  verifier ever comes off the shelf, the wiring is documented in
+  commit `4249a39`. `test_complete_task_default_verify_runs_verifier_when_wired`
+  renamed and re-docstringed to reflect the no-op semantics.
+
+### Fixes
+
 ## [2026.5.25.3] - 2026-05-25
 
 ### Features

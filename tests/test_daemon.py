@@ -653,11 +653,15 @@ def test_complete_task_verify_false_marks_skipped(daemon):
     assert skip_entries[0].metadata["actor"] == "queen"
 
 
-def test_complete_task_default_verify_runs_verifier_when_wired(daemon):
-    """Default path ``verify=True`` schedules the verifier drone (no-op when none wired).
+def test_complete_task_default_verify_leaves_status_not_run(daemon):
+    """Default path ``verify=True`` is a no-op on verification status.
 
-    The fixture daemon has no ``verifier_drone`` attribute by default;
-    ``_fire_verifier`` should silently no-op rather than raising.
+    The verifier drone was never wired up in production (the
+    ``_init_verifier_drone`` call site was missed in commit 4249a39),
+    and the dormant code path was removed in 2026.5.25.4. The
+    ``verify`` kwarg is preserved on the public API so
+    ``queen_force_complete_task(verify=False)`` keeps its SKIPPED-stamp
+    semantics; ``verify=True`` just leaves verification untouched.
     """
     from swarm.tasks.task import VerificationStatus
 
@@ -665,7 +669,6 @@ def test_complete_task_default_verify_runs_verifier_when_wired(daemon):
     daemon.task_board.assign(task.id, "api")
     result = daemon.complete_task(task.id, actor="api", resolution="done")
     assert result is True
-    # No verifier drone wired → status stays NOT_RUN, no SKIPPED stamp.
     after = daemon.task_board.get(task.id)
     assert after is not None
     assert after.verification_status == VerificationStatus.NOT_RUN

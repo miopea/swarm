@@ -1085,104 +1085,6 @@ class SwarmDaemon(EventEmitter):
         elif action in (ReconcileAction.SEEDED, ReconcileAction.MARKER_SEEDED):
             _log.debug("queen CLAUDE.md reconcile: %s — %s", action, details)
 
-    def _init_verifier_drone(self) -> None:
-        """Construct the verifier drone with daemon-scoped closures.
-
-        Read-only surfaces:
-
-        * ``diff_provider`` — best-effort ``git diff HEAD~1 -- .`` in
-          the worker's repo path; empty string on any failure (tier 1
-          treats empty as "no diff produced", which short-circuits to
-          reopen — the right conservative behaviour).
-        * ``check_evidence_provider`` — scans the in-memory drone log
-          for ``/check`` markers from the worker.
-        * ``peer_warnings_provider`` — pulls open warning messages on
-          the task from the message store.
-
-        Mutating surfaces:
-
-        * ``send_warning`` — wraps ``message_store.send`` so verifier
-          findings show up in the worker's normal inbox.
-        * ``escalate_to_operator`` — opens a Queen thread (kind=
-          ``verifier-escalation``) the operator sees in the dashboard.
-          Stub-safe when no Queen is configured.
-        """
-        from swarm.drones.verifier import VerifierDrone
-        from swarm.queen.verifier import VerifierClient
-
-        self.verifier_drone = VerifierDrone(
-            drone_log=self.drone_log,
-            task_board=self.task_board,
-            verifier_client=VerifierClient(),
-            diff_provider=self._verifier_diff,
-            check_evidence_provider=self._verifier_check_evidence,
-            peer_warnings_provider=self._verifier_peer_warnings,
-            send_warning=self._verifier_send_warning,
-            escalate_to_operator=self._verifier_escalate,
-            on_verdict=self._attribute_playbook_outcome,
-        )
-
-    async def _verifier_diff(self, task: SwarmTask) -> str:
-        """Best-effort git diff for the verifier (tier 1 + tier 2 input)."""
-        from swarm.drones.verifier import safe_git_diff
-
-        worker = self.get_worker(task.assigned_worker or "")
-        repo = getattr(worker, "path", None) if worker else None
-        if not repo:
-            return ""
-        return await safe_git_diff(str(repo))
-
-    def _verifier_check_evidence(self, worker_name: str) -> bool:
-        """True when the worker has recent /check evidence in the buzz log."""
-        from swarm.drones.verifier import has_check_evidence
-
-        entries = list(getattr(self.drone_log, "entries", []))
-        return has_check_evidence(entries, worker_name)
-
-    def _verifier_peer_warnings(self, task_id: str) -> str:
-        """Concatenate any unresolved peer warnings on this task."""
-        store = getattr(self, "message_store", None)
-        if store is None:
-            return ""
-        try:
-            msgs = store.recent_for_task(task_id, msg_type="warning")
-        except (AttributeError, TypeError):
-            return ""
-        return "\n".join(getattr(m, "content", "") for m in msgs)[:1000]
-
-    async def _verifier_send_warning(
-        self, *, to: str, msg_type: str, content: str, from_: str = "verifier"
-    ) -> None:
-        """Deliver verifier findings to the worker's inbox."""
-        store = getattr(self, "message_store", None)
-        if store is None:
-            return
-        try:
-            store.send(from_, to, msg_type, content)
-        except Exception:
-            _log.warning("verifier send_warning failed", exc_info=True)
-
-    async def _verifier_escalate(self, *, task: SwarmTask, reason: str, reopen_count: int) -> None:
-        """Open a Queen thread when the self-loop guard trips."""
-        queen_chat = getattr(self, "queen_chat", None)
-        if queen_chat is None:
-            return
-        try:
-            await queen_chat.open_thread(
-                title=f"Verifier escalation: task #{task.number}",
-                kind="verifier-escalation",
-                worker_name=task.assigned_worker or "",
-                task_id=task.id,
-                seed_message=(
-                    f"Verifier reopened task #{task.number} {reopen_count} times "
-                    f"and the worker still hasn't passed verification.\n\n"
-                    f"Latest reason: {reason}\n\n"
-                    "This needs operator review."
-                ),
-            )
-        except Exception:
-            _log.warning("verifier escalation thread open failed", exc_info=True)
-
     def _on_workers_changed(self) -> None:
         self.publisher.on_workers_changed()
 
@@ -2395,12 +2297,16 @@ class SwarmDaemon(EventEmitter):
             # waiting for a drone/Queen nudge.  We skip IN_PROGRESS follow-ups
             # (already mid-flight in some session) and all other states.
             self._auto_start_next_assigned(task.assigned_worker)
-            # Item 4 of the 10-repo bundle: fire the verifier drone async.
-            # Skipped on explicit operator overrides (verify=False) so
-            # queen_force_complete_task isn't second-guessed.
-            if verify:
-                self._fire_verifier(task)
-            else:
+            # Operator force-completes (verify=False) leave a SKIPPED
+            # stamp on the task so the audit trail distinguishes them
+            # from normal completions.  The fire-the-verifier branch
+            # for verify=True existed in commit 4249a39 but the
+            # ``_init_verifier_drone`` call site was missed, so the
+            # verifier never ran in production; the dead code was
+            # removed in 2026.5.25.4 along with the closure helpers.
+            # The ``verify`` kwarg stays on the public API so
+            # queen_force_complete_task keeps its audit semantics.
+            if not verify:
                 self._log_verifier_skip(task, actor=actor)
             # Playbook synthesis (independent of verification): mine this
             # successful completion into reusable procedural memory.
@@ -2534,29 +2440,6 @@ class SwarmDaemon(EventEmitter):
                     )
         except Exception:
             _log.warning("playbook outcome attribution failed", exc_info=True)
-
-    def _fire_verifier(self, task: SwarmTask) -> None:
-        """Schedule the verifier drone for ``task`` as fire-and-forget.
-
-        No-op when there's no running event loop (sync/CLI callers) or
-        when no verifier drone is wired (config disable / older
-        deployments). The verifier itself never raises into the
-        ``complete_task`` caller — :func:`fire_and_forget` swallows any
-        exception so the task lifecycle is unaffected.
-        """
-        verifier = getattr(self, "verifier_drone", None)
-        if verifier is None:
-            return
-        try:
-            from swarm.drones.verifier import fire_and_forget
-
-            t = asyncio.create_task(fire_and_forget(verifier, task))
-            t.add_done_callback(_log_task_exception)
-            self._track_task(t)
-        except RuntimeError:
-            # No running event loop (sync/CLI context); the verifier
-            # only runs in the daemon's async lifecycle.
-            return
 
     def _log_verifier_skip(self, task: SwarmTask, *, actor: str) -> None:
         """Log a force-complete skip under LogCategory.VERIFIER."""
