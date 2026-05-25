@@ -55,7 +55,7 @@ def _make_daemon(
     """Build a mock SwarmDaemon with optional password and workers."""
     daemon = MagicMock()
     daemon.config = HiveConfig(session_name="test", api_password=api_password)
-    daemon.terminal_ws_clients = set()
+    daemon.hub.terminal_ws_clients = set()
     _workers = workers or []
 
     def _get_worker(name: str) -> Worker | None:

@@ -6,7 +6,6 @@ import asyncio
 import os
 import sys
 import time
-from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -418,68 +417,6 @@ class SwarmDaemon(EventEmitter):
         self._lock_fd: int | None = None
         self._wire_task_board()
         self._wire_pipeline_engine()
-
-    # --- Backward-compat delegation properties (BroadcastHub) ---
-
-    @property
-    def ws_clients(self) -> set[web.WebSocketResponse]:
-        return self.hub.ws_clients
-
-    @ws_clients.setter
-    def ws_clients(self, value: set[web.WebSocketResponse]) -> None:
-        self.hub.ws_clients = value
-
-    @property
-    def terminal_ws_clients(self) -> set[web.WebSocketResponse]:
-        return self.hub.terminal_ws_clients
-
-    @terminal_ws_clients.setter
-    def terminal_ws_clients(self, value: set[web.WebSocketResponse]) -> None:
-        self.hub.terminal_ws_clients = value
-
-    @property
-    def _broadcast_hook(self) -> Callable[[dict[str, Any]], None] | None:
-        return self.hub._broadcast_hook
-
-    @_broadcast_hook.setter
-    def _broadcast_hook(self, value: Callable[[dict[str, Any]], None] | None) -> None:
-        self.hub._broadcast_hook = value
-
-    @property
-    def _broadcast_pending(self) -> dict[str, asyncio.TimerHandle]:
-        return self.hub._broadcast_pending
-
-    @property
-    def _broadcast_latest(self) -> dict[str, dict[str, Any]]:
-        return self.hub._broadcast_latest
-
-    # --- Backward-compat delegation properties (ResourceMonitor) ---
-
-    @property
-    def _resource_snapshot(self) -> dict[str, object] | None:
-        return self.resource_mon._resource_snapshot
-
-    @_resource_snapshot.setter
-    def _resource_snapshot(self, value: dict[str, object] | None) -> None:
-        self.resource_mon._resource_snapshot = value
-
-    @property
-    def _prev_pressure_level(self) -> str:
-        return self.resource_mon._prev_pressure_level
-
-    @_prev_pressure_level.setter
-    def _prev_pressure_level(self, value: str) -> None:
-        self.resource_mon._prev_pressure_level = value
-
-    # --- Backward-compat delegation properties (EscalationHandler) ---
-
-    @property
-    def _notification_history(self) -> list[dict[str, Any]]:
-        return self.escalation._notification_history
-
-    @_notification_history.setter
-    def _notification_history(self, value: list[dict[str, Any]]) -> None:
-        self.escalation._notification_history = value
 
     # --- Backward-compat delegation properties (BackgroundLoopRunner) ---
     #
@@ -1124,23 +1061,25 @@ class SwarmDaemon(EventEmitter):
             self._run_invariant_reconciliation(f"state→{worker.state.value}")
 
     def _mark_state_dirty(self) -> None:
-        self._state_dirty = True
-        if self._state_debounce_handle is not None:
-            self._state_debounce_handle.cancel()
+        pub = self.publisher
+        pub._state_dirty = True
+        if pub._state_debounce_handle is not None:
+            pub._state_debounce_handle.cancel()
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             self._flush_state_broadcast()
             return
-        self._state_debounce_handle = loop.call_later(
-            self._state_debounce_delay, self._flush_state_broadcast
+        pub._state_debounce_handle = loop.call_later(
+            pub._state_debounce_delay, self._flush_state_broadcast
         )
 
     def _flush_state_broadcast(self) -> None:
-        if not self._state_dirty:
+        pub = self.publisher
+        if not pub._state_dirty:
             return
-        self._state_dirty = False
-        self._state_debounce_handle = None
+        pub._state_dirty = False
+        pub._state_debounce_handle = None
         self._broadcast_state()
 
     def _on_drone_entry(self, entry: SystemEntry) -> None:
@@ -1673,9 +1612,9 @@ class SwarmDaemon(EventEmitter):
         # cancel_all() awaits each task with return_exceptions=True so
         # an already-failed worker can't abort the rest of shutdown.
         await self.loop_runner.cancel_all()
-        if self._state_debounce_handle is not None:
-            self._state_debounce_handle.cancel()
-            self._state_debounce_handle = None
+        if self.publisher._state_debounce_handle is not None:
+            self.publisher._state_debounce_handle.cancel()
+            self.publisher._state_debounce_handle = None
         # _bg_tasks holds ad-hoc one-shot tasks (e.g. completion replies,
         # playbook fires) that aren't part of the periodic-loop set.
         cancelled: list[asyncio.Task[object]] = []
@@ -1706,8 +1645,8 @@ class SwarmDaemon(EventEmitter):
         if self.tunnel.is_running:
             await self.tunnel.stop()
         # Close all WebSocket connections so runner.cleanup() doesn't hang
-        await self._close_ws_set(self.ws_clients)
-        await self._close_ws_set(self.terminal_ws_clients)
+        await self._close_ws_set(self.hub.ws_clients)
+        await self._close_ws_set(self.hub.terminal_ws_clients)
         # Persist proposals so pending items survive restarts
         try:
             self.proposal_store.save()
@@ -3312,7 +3251,7 @@ async def run_test_daemon(
             report_result["path"] = Path(data["path"])
             shutdown.set()
 
-    daemon._broadcast_hook = _on_ws_broadcast
+    daemon.hub._broadcast_hook = _on_ws_broadcast
 
     runner = web.AppRunner(app)
     await runner.setup()

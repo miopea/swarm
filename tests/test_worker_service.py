@@ -56,8 +56,8 @@ def daemon(monkeypatch):
     from swarm.server.broadcast import BroadcastHub
 
     d.hub = BroadcastHub(track_task=lambda t: d._bg_tasks.add(t))
-    d.ws_clients = set()
-    d.terminal_ws_clients = set()
+    d.hub.ws_clients = set()
+    d.hub.terminal_ws_clients = set()
     d.start_time = 0.0
     d.proposals = ProposalManager(
         store=d.proposal_store,

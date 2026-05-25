@@ -49,7 +49,7 @@ def daemon(monkeypatch):
     from swarm.server.broadcast import BroadcastHub
 
     d.hub = BroadcastHub(track_task=lambda t: d._bg_tasks.add(t))
-    d.ws_clients = set()
+    d.hub.ws_clients = set()
     d.start_time = 0.0
     d._mtime_task = None
     d.graph_mgr = None

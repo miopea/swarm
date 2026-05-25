@@ -248,7 +248,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
         sessions.discard(session_key)
         return ws
 
-    daemon.terminal_ws_clients.add(ws)
+    daemon.hub.terminal_ws_clients.add(ws)
     proc.set_terminal_active(True)
     attach_t = time.monotonic()
     _log.warning(
@@ -287,7 +287,7 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
         proc.unsubscribe_ws(ws)
         if not proc.has_ws_subscribers:
             proc.set_terminal_active(False)
-        daemon.terminal_ws_clients.discard(ws)
+        daemon.hub.terminal_ws_clients.discard(ws)
         sessions.discard(session_key)
         _log.warning(
             "[term-trace] terminal detached: worker=%s ws_id=%d session_alive=%.2fs ws.closed=%s",

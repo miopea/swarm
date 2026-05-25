@@ -71,8 +71,8 @@ def daemon(monkeypatch):
     from swarm.server.loop_runner import BackgroundLoopRunner
 
     d.loop_runner = BackgroundLoopRunner()
-    d.ws_clients = set()
-    d.terminal_ws_clients = set()
+    d.hub.ws_clients = set()
+    d.hub.terminal_ws_clients = set()
     d.start_time = 0.0
     d.graph_mgr = None
     d._mtime_task = None
@@ -245,7 +245,7 @@ async def test_cancel_timers_awaits_tasks(daemon):
     daemon._heartbeat_task = task1
     daemon._usage_task = task2
     daemon._mtime_task = None
-    daemon._state_debounce_handle = None
+    daemon.publisher._state_debounce_handle = None
     daemon._bg_tasks = set()
     daemon.pilot = None
 
@@ -786,7 +786,7 @@ def test_task_board_on_change_broadcasts(monkeypatch):
     from swarm.server.broadcast import BroadcastHub
 
     d.hub = BroadcastHub(track_task=lambda t: d._bg_tasks.add(t))
-    d.ws_clients = set()
+    d.hub.ws_clients = set()
     d.start_time = 0.0
     d.proposals = ProposalManager(
         store=d.proposal_store,
@@ -1561,8 +1561,8 @@ async def testbroadcast_ws_dead_client(monkeypatch):
     from swarm.server.broadcast import BroadcastHub as _BH
 
     d.hub = _BH(track_task=lambda t: d._bg_tasks.add(t))
-    d._broadcast_hook = None
-    d.ws_clients = set()
+    d.hub._broadcast_hook = None
+    d.hub.ws_clients = set()
     d.proposals = ProposalManager(
         store=d.proposal_store,
         broadcast_ws=d.broadcast_ws,
@@ -1617,13 +1617,13 @@ async def testbroadcast_ws_dead_client(monkeypatch):
     # Create a mock WS that is "closed"
     dead_ws = MagicMock()
     dead_ws.closed = True
-    d.ws_clients = {dead_ws}
+    d.hub.ws_clients = {dead_ws}
 
     # Use real broadcast_ws (not mocked)
     SwarmDaemon.broadcast_ws(d, {"type": "test"})
 
     # The dead client should be discarded
-    assert dead_ws not in d.ws_clients
+    assert dead_ws not in d.hub.ws_clients
 
 
 # --- Operator action logging ---
@@ -2197,22 +2197,22 @@ async def test_stop_closes_ws_clients(daemon):
     """stop() closes all WS clients."""
     ws1 = AsyncMock()
     ws2 = AsyncMock()
-    daemon.ws_clients = {ws1, ws2}
-    daemon.terminal_ws_clients = set()
+    daemon.hub.ws_clients = {ws1, ws2}
+    daemon.hub.terminal_ws_clients = set()
     await daemon.stop()
     ws1.close.assert_awaited_once()
     ws2.close.assert_awaited_once()
-    assert len(daemon.ws_clients) == 0
+    assert len(daemon.hub.ws_clients) == 0
 
 
 @pytest.mark.asyncio
 async def test_stop_closes_terminal_ws_clients(daemon):
     """stop() closes terminal WS clients too."""
     tws = AsyncMock()
-    daemon.terminal_ws_clients = {tws}
+    daemon.hub.terminal_ws_clients = {tws}
     await daemon.stop()
     tws.close.assert_awaited_once()
-    assert len(daemon.terminal_ws_clients) == 0
+    assert len(daemon.hub.terminal_ws_clients) == 0
 
 
 @pytest.mark.asyncio
@@ -2220,10 +2220,10 @@ async def test_stop_handles_ws_close_errors(daemon):
     """stop() doesn't raise even if ws.close() fails."""
     ws = AsyncMock()
     ws.close.side_effect = Exception("network down")
-    daemon.ws_clients = {ws}
-    daemon.terminal_ws_clients = set()
+    daemon.hub.ws_clients = {ws}
+    daemon.hub.terminal_ws_clients = set()
     await daemon.stop()  # should not raise
-    assert len(daemon.ws_clients) == 0
+    assert len(daemon.hub.ws_clients) == 0
 
 
 # --- Fallback test report on shutdown ---
@@ -3012,9 +3012,9 @@ async def test_stop_terminal_ws_close_errors(daemon):
     """stop() handles errors in terminal WS close gracefully."""
     tws = AsyncMock()
     tws.close.side_effect = Exception("network down")
-    daemon.terminal_ws_clients = {tws}
+    daemon.hub.terminal_ws_clients = {tws}
     await daemon.stop()
-    assert len(daemon.terminal_ws_clients) == 0
+    assert len(daemon.hub.terminal_ws_clients) == 0
 
 
 # --- complete_task with send_reply ---
@@ -3377,7 +3377,7 @@ async def test_on_state_changed_marks_dirty_not_immediate(daemon):
     daemon._on_state_changed(worker)
 
     # Should be dirty but no immediate broadcast
-    assert daemon._state_dirty is True
+    assert daemon.publisher._state_dirty is True
     assert len(broadcast_calls) == 0
 
 
@@ -3391,13 +3391,13 @@ async def test_debounce_flushes_after_timer(daemon):
     daemon._broadcast_state = lambda: broadcast_calls.append(1)
 
     daemon._on_state_changed(worker)
-    assert daemon._state_dirty is True
+    assert daemon.publisher._state_dirty is True
     assert len(broadcast_calls) == 0
 
     # Let the event loop process the call_later timer
-    await asyncio.sleep(daemon._state_debounce_delay + 0.05)
+    await asyncio.sleep(daemon.publisher._state_debounce_delay + 0.05)
 
-    assert daemon._state_dirty is False
+    assert daemon.publisher._state_dirty is False
     assert len(broadcast_calls) == 1
 
 
@@ -3412,10 +3412,10 @@ async def test_multiple_dirty_marks_single_broadcast(daemon):
         w.state = WorkerState.RESTING
         daemon._on_state_changed(w)
 
-    assert daemon._state_dirty is True
+    assert daemon.publisher._state_dirty is True
     assert len(broadcast_calls) == 0
 
-    await asyncio.sleep(daemon._state_debounce_delay + 0.05)
+    await asyncio.sleep(daemon.publisher._state_debounce_delay + 0.05)
 
     assert len(broadcast_calls) == 1
 
@@ -3425,7 +3425,7 @@ def test_flush_state_broadcast_noop_when_clean(daemon):
     broadcast_calls = []
     daemon._broadcast_state = lambda: broadcast_calls.append(1)
 
-    daemon._state_dirty = False
+    daemon.publisher._state_dirty = False
     daemon._flush_state_broadcast()
 
     assert len(broadcast_calls) == 0
@@ -3435,12 +3435,12 @@ def test_flush_state_broadcast_noop_when_clean(daemon):
 async def test_cancel_timers_cancels_debounce(daemon):
     """_cancel_timers should cancel the debounce handle."""
     handle = MagicMock()
-    daemon._state_debounce_handle = handle
+    daemon.publisher._state_debounce_handle = handle
 
     await daemon._cancel_timers()
 
     handle.cancel.assert_called_once()
-    assert daemon._state_debounce_handle is None
+    assert daemon.publisher._state_debounce_handle is None
 
 
 @pytest.mark.asyncio
@@ -3744,10 +3744,10 @@ def test_push_notification_broadcasts_bell(daemon):
 
 def test_push_notification_stores_history(daemon):
     """push_notification adds to _notification_history."""
-    daemon._notification_history.clear()
+    daemon.escalation._notification_history.clear()
     daemon.push_notification(event="test", worker="api", message="hello")
-    assert len(daemon._notification_history) == 1
-    assert daemon._notification_history[0]["event"] == "test"
+    assert len(daemon.escalation._notification_history) == 1
+    assert daemon.escalation._notification_history[0]["event"] == "test"
 
 
 # --- _on_test_complete ---
@@ -3768,7 +3768,7 @@ async def test_broadcast_ws_calls_hook(daemon):
     # Replace the MagicMock with the real method for these tests
     daemon.broadcast_ws = SwarmDaemon.broadcast_ws.__get__(daemon)
     hook = MagicMock()
-    daemon._broadcast_hook = hook
+    daemon.hub._broadcast_hook = hook
     daemon.broadcast_ws({"type": "test"})
     hook.assert_called_once_with({"type": "test"})
 
@@ -3777,8 +3777,8 @@ async def test_broadcast_ws_calls_hook(daemon):
 async def test_broadcast_ws_skips_when_no_clients(daemon):
     """broadcast_ws returns early when ws_clients is empty."""
     daemon.broadcast_ws = SwarmDaemon.broadcast_ws.__get__(daemon)
-    daemon._broadcast_hook = None
-    daemon.ws_clients = set()
+    daemon.hub._broadcast_hook = None
+    daemon.hub.ws_clients = set()
     # Should not raise — just returns
     daemon.broadcast_ws({"type": "noop"})
 
@@ -3787,13 +3787,13 @@ async def test_broadcast_ws_skips_when_no_clients(daemon):
 async def test_broadcast_ws_removes_closed_clients(daemon):
     """broadcast_ws discards closed WebSocket connections."""
     daemon.broadcast_ws = SwarmDaemon.broadcast_ws.__get__(daemon)
-    daemon._broadcast_hook = None
+    daemon.hub._broadcast_hook = None
 
     closed_ws = MagicMock()
     closed_ws.closed = True
-    daemon.ws_clients = {closed_ws}
+    daemon.hub.ws_clients = {closed_ws}
     daemon.broadcast_ws({"type": "cleanup"})
-    assert closed_ws not in daemon.ws_clients
+    assert closed_ws not in daemon.hub.ws_clients
 
 
 @pytest.mark.asyncio
@@ -3801,13 +3801,13 @@ async def test_broadcast_ws_sends_to_open_clients(daemon):
     """broadcast_ws creates send tasks for open clients."""
     # Restore real broadcast_ws (overridden by MagicMock in fixture)
     daemon.broadcast_ws = SwarmDaemon.broadcast_ws.__get__(daemon)
-    daemon._broadcast_hook = None
+    daemon.hub._broadcast_hook = None
     daemon.hub._safe_ws_send = AsyncMock()
     daemon.hub._track_task = MagicMock()
 
     open_ws = MagicMock()
     open_ws.closed = False
-    daemon.ws_clients = {open_ws}
+    daemon.hub.ws_clients = {open_ws}
     daemon.broadcast_ws({"type": "hello"})
     # A task should have been tracked
     assert daemon.hub._track_task.called

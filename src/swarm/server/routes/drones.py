@@ -200,7 +200,7 @@ async def handle_notification_history(request: web.Request) -> web.Response:
     """Return recent notification history."""
     d = get_daemon(request)
     limit = min(int(request.query.get("limit", "50")), 50)
-    history = d._notification_history[-limit:]
+    history = d.escalation._notification_history[-limit:]
     return web.json_response({"notifications": list(reversed(history))})
 
 

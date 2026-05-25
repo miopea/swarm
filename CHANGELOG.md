@@ -10,6 +10,40 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.25.5] - 2026-05-25
+
+### Features
+
+### Changes
+
+- **Remove 11 backward-compat `@property` shims from `SwarmDaemon`.**
+  When subsystems were progressively extracted (`BroadcastHub`,
+  `ResourceMonitor`, `EscalationHandler`, `StatePublisher`), each
+  refactor left behind delegation properties on the daemon so external
+  callers wouldn't break. Audited the actual usage and migrated every
+  caller to the extracted service directly:
+  - `daemon.ws_clients` / `daemon.terminal_ws_clients` → `daemon.hub.*`
+    (callers: `pty/bridge.py`, `routes/websocket.py`, several tests).
+  - `daemon._broadcast_hook` → `daemon.hub._broadcast_hook` (callers:
+    `daemon._on_ws_broadcast` setup in `run_daemon`, tests).
+  - `daemon._notification_history` → `daemon.escalation._notification_history`
+    (callers: `routes/drones.py` notification history endpoint, tests).
+  - `daemon._state_dirty` / `_state_debounce_handle` /
+    `_state_debounce_delay` → `daemon.publisher.*` (callers: tests
+    plus daemon's own `_mark_state_dirty` / `_flush_state_broadcast`
+    methods, which were updated to thread `pub = self.publisher`
+    once instead of bouncing through the shim per field).
+  - `daemon._broadcast_pending` / `_broadcast_latest` /
+    `_resource_snapshot` / `_prev_pressure_level` had **zero**
+    external callers — pure dead shim. Deleted outright.
+  Result: -85 LOC of pure indirection, no behaviour change, no public
+  API surface change (the shims were on private attributes anyway).
+  The 3 `BackgroundLoopRunner` shims (`_heartbeat_task`, `_usage_task`,
+  `_mtime_task`) from 2026.5.25.2 stay — they're 24 hours old and
+  the cost of churning tests off them outweighs the indirection.
+
+### Fixes
+
 ## [2026.5.25.4] - 2026-05-25
 
 ### Features

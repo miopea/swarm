@@ -224,7 +224,7 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
 
         _log.info("WebSocket client connected")
 
-        d.ws_clients.add(ws)
+        d.hub.ws_clients.add(ws)
         try:
             pending_proposals = d.proposal_store.pending
             init_payload: dict[str, object] = {
@@ -258,7 +258,7 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
                 elif msg.type == web.WSMsgType.ERROR:
                     _log.warning("WebSocket error: %s", ws.exception())
         finally:
-            d.ws_clients.discard(ws)
+            d.hub.ws_clients.discard(ws)
             _log.info("WebSocket client disconnected")
     finally:
         _ws_decrement(ws_ip_counts, ip)
