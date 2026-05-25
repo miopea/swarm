@@ -110,14 +110,14 @@ async def test_cleanup_dead_workers_removes_last_full_poll(pilot_setup):
     alive_name = workers[1].name
     # Seed _last_full_poll for all workers
     for w in workers:
-        pilot._last_full_poll[w.name] = time.time()
+        pilot._state_tracker._last_full_poll[w.name] = time.time()
 
     # Mark first worker as dead
     dead = [workers[0]]
     pilot._cleanup_dead_workers(dead)
 
-    assert dead_name not in pilot._last_full_poll
-    assert alive_name in pilot._last_full_poll
+    assert dead_name not in pilot._state_tracker._last_full_poll
+    assert alive_name in pilot._state_tracker._last_full_poll
 
 
 def test_cleanup_stale_proposed_completions(pilot_setup):
@@ -159,7 +159,7 @@ async def test_poll_loop_error_counter(pilot_setup, monkeypatch):
     for _ in range(6):
         try:
             pilot._had_substantive_action = False
-            pilot._any_became_active = False
+            pilot._state_tracker.any_became_active = False
             async with pilot._poll_lock:
                 await pilot._poll_once_locked()
         except Exception:
@@ -2380,12 +2380,12 @@ async def test_sleeping_worker_poll_throttled(monkeypatch):
 
     # First poll — should do a full poll (no previous timestamp)
     dead: list = []
-    pilot._poll_single_worker(workers[0], dead)
+    pilot._state_tracker._poll_single_worker(workers[0], dead)
     assert call_count[0] >= 1
     first_count = call_count[0]
 
     # Immediately poll again — throttled path does lightweight re-check
-    pilot._poll_single_worker(workers[0], dead)
+    pilot._state_tracker._poll_single_worker(workers[0], dead)
     assert call_count[0] > first_count  # lightweight check still reads content
 
 
@@ -2407,14 +2407,14 @@ async def test_sleeping_worker_not_throttled_when_focused(monkeypatch):
 
     # First poll — full
     dead: list = []
-    pilot._poll_single_worker(workers[0], dead)
+    pilot._state_tracker._poll_single_worker(workers[0], dead)
 
     # Second poll immediately — should still be full (focused overrides throttle)
     # Verify by checking _last_full_poll gets updated
-    pilot._last_full_poll[workers[0].name] = time.time() - 1  # just set it
-    pilot._poll_single_worker(workers[0], dead)
+    pilot._state_tracker._last_full_poll[workers[0].name] = time.time() - 1  # just set it
+    pilot._state_tracker._poll_single_worker(workers[0], dead)
     # Should not be throttled (focused), so _last_full_poll should be recent
-    assert time.time() - pilot._last_full_poll.get("sleepy", 0) < 2
+    assert time.time() - pilot._state_tracker._last_full_poll.get("sleepy", 0) < 2
 
 
 @pytest.mark.asyncio
@@ -2438,12 +2438,12 @@ async def test_sleeping_throttle_rechecks_state(monkeypatch):
 
     # First poll — full
     dead: list = []
-    pilot._poll_single_worker(workers[0], dead)
+    pilot._state_tracker._poll_single_worker(workers[0], dead)
 
     # Now change content to something that classifies as WAITING
     workers[0].process.set_content(">> accept edits on (shift+tab to cycle)")
     # Second poll — lightweight check sees accept-edits -> falls through to full poll
-    result = pilot._poll_single_worker(workers[0], dead)
+    result = pilot._state_tracker._poll_single_worker(workers[0], dead)
     # The throttle should have fallen through (returned None from _poll_sleeping_throttled)
     # so full classify + decide happened
     assert result is not None  # got a real result, not early-return
@@ -2460,7 +2460,7 @@ async def test_sleeping_worker_suspended_after_unchanged_polls(pilot_setup, monk
     w.state = WorkerState.RESTING
     w.state_since = time.time() - 1500  # idle 25 min → SLEEPING display_state
     # Seed last_full_poll so throttling kicks in immediately
-    pilot._last_full_poll[w.name] = time.time()
+    pilot._state_tracker._last_full_poll[w.name] = time.time()
 
     w.process.set_content("idle prompt")
     w.process._child_foreground_command = "claude"
@@ -2564,7 +2564,7 @@ async def test_state_change_wakes_suspended_worker(pilot_setup, monkeypatch):
     pilot._suspended_at[w.name] = time.time()
 
     # Simulate a state change
-    pilot._handle_state_change(w, WorkerState.BUZZING)
+    pilot._state_tracker._handle_state_change(w, WorkerState.BUZZING)
 
     assert w.name not in pilot._suspended
 
@@ -2585,7 +2585,7 @@ async def test_state_transition_emits_diagnostic_buzz_entry(pilot_setup):
     w = workers[0]
     w.state = WorkerState.BUZZING
 
-    pilot._handle_state_change(w, WorkerState.RESTING)
+    pilot._state_tracker._handle_state_change(w, WorkerState.RESTING)
 
     transitions = [e for e in log.entries if e.action == SystemAction.STATE_TRANSITION]
     assert len(transitions) == 1
@@ -2688,13 +2688,13 @@ def test_wake_worker_returns_true_and_clears_state(pilot_setup):
 
     pilot._suspended.add(w.name)
     pilot._suspended_at[w.name] = time.time()
-    pilot._content_fingerprints[w.name] = 12345
-    pilot._unchanged_streak[w.name] = 5
+    pilot._state_tracker._content_fingerprints[w.name] = 12345
+    pilot._state_tracker._unchanged_streak[w.name] = 5
 
     assert pilot.wake_worker(w.name) is True
     assert w.name not in pilot._suspended
-    assert w.name not in pilot._content_fingerprints
-    assert w.name not in pilot._unchanged_streak
+    assert w.name not in pilot._state_tracker._content_fingerprints
+    assert w.name not in pilot._state_tracker._unchanged_streak
 
 
 def test_diagnostics_includes_suspension_info(pilot_setup):
@@ -2908,7 +2908,7 @@ class TestEscalationTrackingClearance:
 
         # Simulate WAITING → RESTING transition
         workers[0].state = WorkerState.RESTING
-        pilot._handle_state_change(workers[0], WorkerState.WAITING)
+        pilot._state_tracker._handle_state_change(workers[0], WorkerState.WAITING)
         assert "api" not in pilot._escalated
 
     def test_escalation_cleared_on_waiting_to_buzzing(self):
@@ -2918,7 +2918,7 @@ class TestEscalationTrackingClearance:
         pilot._escalated["api"] = 0.0
 
         # Simulate WAITING → BUZZING transition
-        pilot._handle_state_change(workers[0], WorkerState.WAITING)
+        pilot._state_tracker._handle_state_change(workers[0], WorkerState.WAITING)
         assert "api" not in pilot._escalated
 
 
@@ -3060,7 +3060,7 @@ class TestEventThreading:
         pilot, workers, _log = pilot_setup
         w = workers[0]
         _set_workers_content([w], content="esc to interrupt", command="claude")
-        state, events = pilot._classify_worker_state(w, "claude", "esc to interrupt")
+        state, events = pilot._state_tracker._classify_worker_state(w, "claude", "esc to interrupt")
         assert state == WorkerState.BUZZING
         assert events is not None
         assert isinstance(events, list)
@@ -3076,7 +3076,7 @@ class TestEventThreading:
         monkeypatch.setattr(
             "swarm.providers.claude.ClaudeProvider.classify_with_events", raise_error
         )
-        state, events = pilot._classify_worker_state(w, "claude", "content")
+        state, events = pilot._state_tracker._classify_worker_state(w, "claude", "content")
         assert events is None
 
     def test_run_decision_sync_passes_events(self, pilot_setup):
@@ -3122,7 +3122,7 @@ Esc to cancel"""
         _set_workers_content([w], content=choice_content, command="claude")
 
         with patch("swarm.drones.decision_executor.decide", wraps=decide) as mock_decide:
-            pilot._poll_single_worker(w, [])
+            pilot._state_tracker._poll_single_worker(w, [])
             if mock_decide.called:
                 call_kwargs = mock_decide.call_args
                 events_arg = call_kwargs.kwargs.get("events")

@@ -39,7 +39,6 @@ if TYPE_CHECKING:
         WorkerCallback,
     )
     from swarm.providers import LLMProvider
-    from swarm.providers.styled import StyledContent
     from swarm.pty.provider import WorkerProcessProvider
     from swarm.queen.oversight import OversightMonitor
     from swarm.queen.queen import Queen
@@ -199,7 +198,16 @@ class DronePilot(EventEmitter):
             queen=self.queen,
             task_board=self.task_board,
             emit=self.emit,
-            classify_worker_state=self._classify_worker_state,
+            # Late-bind: ``_state_tracker`` is constructed below, and
+            # ``DirectiveExecutor`` only invokes this callback after init
+            # completes. A lambda lets us preserve the construction order
+            # (directives → state_tracker → decision_exec is the natural
+            # dependency order, but state_tracker uses decision_exec, so
+            # we'd loop) without re-introducing a delegation method that
+            # has no other purpose.
+            classify_worker_state=lambda *a, **kw: self._state_tracker._classify_worker_state(
+                *a, **kw
+            ),
             get_provider=self._get_provider,
             safe_worker_action=self._safe_worker_action,
             pending_proposals_check=self._pending_proposals_check,
@@ -417,14 +425,6 @@ class DronePilot(EventEmitter):
         self._decision_exec._had_substantive_action = value
 
     @property
-    def _any_became_active(self) -> bool:
-        return self._state_tracker.any_became_active
-
-    @_any_became_active.setter
-    def _any_became_active(self, value: bool) -> None:
-        self._state_tracker.any_became_active = value
-
-    @property
     def _emit_decisions(self) -> bool:
         return self._decision_exec._emit_decisions
 
@@ -451,30 +451,6 @@ class DronePilot(EventEmitter):
     @_deferred_actions.setter
     def _deferred_actions(self, value: list) -> None:
         self._decision_exec._deferred_actions = value
-
-    @property
-    def _content_fingerprints(self) -> dict[str, int]:
-        return self._state_tracker._content_fingerprints
-
-    @property
-    def _unchanged_streak(self) -> dict[str, int]:
-        return self._state_tracker._unchanged_streak
-
-    @property
-    def _last_full_poll(self) -> dict[str, float]:
-        return self._state_tracker._last_full_poll
-
-    @property
-    def _waiting_content(self) -> dict[str, str]:
-        return self._state_tracker._waiting_content
-
-    @property
-    def _drone_continued(self) -> set[str]:
-        return self._state_tracker._drone_continued
-
-    @property
-    def _operator_continued(self) -> set[str]:
-        return self._state_tracker._operator_continued
 
     @property
     def _revive_loop_max(self) -> int:
@@ -773,39 +749,6 @@ class DronePilot(EventEmitter):
     def wake_worker(self, name: str) -> bool:
         """Wake a suspended worker so it's polled on the next tick."""
         return self._state_tracker.wake_worker(name)
-
-    def _classify_worker_state(
-        self,
-        worker: Worker,
-        cmd: str,
-        content: str,
-        styled: StyledContent | None = None,
-    ) -> tuple[WorkerState, list | None]:
-        """Classify worker output into a state, with exception safety."""
-        return self._state_tracker._classify_worker_state(worker, cmd, content, styled=styled)
-
-    def _handle_state_change(self, worker: Worker, prev: WorkerState) -> tuple[bool, bool]:
-        """Process a worker state change."""
-        return self._state_tracker._handle_state_change(worker, prev)
-
-    def _update_content_fingerprint(self, name: str, content: str) -> None:
-        """Update content fingerprint and unchanged streak for a worker."""
-        self._state_tracker._update_content_fingerprint(name, content)
-
-    def _poll_single_worker(
-        self,
-        worker: Worker,
-        dead_workers: list[Worker],
-        now: float | None = None,
-    ) -> tuple[bool, bool, bool]:
-        """Poll one worker. Returns (had_action, transitioned_to_resting, state_changed)."""
-        return self._state_tracker._poll_single_worker(
-            worker, dead_workers, now=now, enabled=self.enabled
-        )
-
-    def _is_suspended_skip(self, worker: Worker, now: float | None = None) -> bool:
-        """Return True if this worker should be skipped."""
-        return self._state_tracker._is_suspended_skip(worker, now=now)
 
     # --- Delegate to DecisionExecutor ---
 

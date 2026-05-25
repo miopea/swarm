@@ -10,6 +10,50 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.25.7] - 2026-05-25
+
+### Features
+
+### Changes
+
+- **Migrate DronePilot's WorkerStateTracker-family shims to direct
+  sub-handler access.** Targeted follow-up to 2026.5.25.6: that
+  release deleted only zero-caller shims; this release migrates the
+  WorkerStateTracker cluster's external callers to access
+  `pilot._state_tracker.*` directly, then deletes the now-orphaned
+  shims. Migrated 5 method delegations + 7 `@property` shims across
+  4 caller files:
+  - `src/swarm/drones/poll_dispatcher.py` (3 sites): `_is_suspended_skip`,
+    `_poll_single_worker`, `_any_became_active`.
+  - `tests/test_pilot.py` (~13 sites): `_classify_worker_state`,
+    `_handle_state_change`, `_poll_single_worker`, `_any_became_active`,
+    `_content_fingerprints`, `_unchanged_streak`, `_last_full_poll`.
+  - `tests/test_code_review_fixes.py` (~10 sites):
+    `_update_content_fingerprint`, `_content_fingerprints`,
+    `_unchanged_streak`.
+  - `tests/test_terminal_approval.py` (~7 sites): `_waiting_content`,
+    `_drone_continued`, `_operator_continued`.
+  Bug found mid-migration: the original
+  `pilot._poll_single_worker(...)` shim threaded `enabled=self.enabled`
+  through to the tracker, but the dispatcher call site was migrated
+  without it, silently defaulting `enabled=True`. Under the test
+  fixture's default `pilot.enabled=False`, the tracker fired
+  `_run_decision_sync` against WAITING workers, which auto-CONTINUE'd
+  them and marked them `_drone_continued`, defeating
+  `_detect_operator_terminal_approval` on the next transition (the
+  test_terminal_approval suite caught this — 3 failures). Fixed by
+  passing `enabled=p.enabled` explicitly in `poll_dispatcher`. The
+  test sites of `_poll_single_worker` use the default `True` (matches
+  their pre-shim expectation since they didn't toggle `pilot.enabled`).
+  `_classify_worker_state` had to be kept as a late-binding lambda in
+  `__init__` (`DirectiveExecutor` construction depends on it, before
+  `_state_tracker` exists). `wake_worker` and `mark_operator_continue`
+  stay as pilot delegations — they're semantically pilot-level public
+  API used widely by `worker_service.py`, `daemon.py`, and tests.
+  Net: -100 LOC removed from `pilot.py`, full suite 4549 pass.
+
+### Fixes
+
 ## [2026.5.25.6] - 2026-05-25
 
 ### Features

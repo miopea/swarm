@@ -124,7 +124,7 @@ async def test_drone_continue_not_flagged(pilot_setup):
 
     # Mark both as drone-continued (simulating what _execute_deferred_actions does)
     for w in workers:
-        pilot._drone_continued.add(w.name)
+        pilot._state_tracker._drone_continued.add(w.name)
 
     # Transition to BUZZING
     _set_content(workers, "esc to interrupt")
@@ -301,16 +301,16 @@ def test_cleanup_on_dead_worker(pilot_setup):
     pilot, workers, log = pilot_setup
 
     # Populate tracking data
-    pilot._waiting_content["alpha"] = "cached"
-    pilot._drone_continued.add("alpha")
-    pilot._operator_continued.add("alpha")
+    pilot._state_tracker._waiting_content["alpha"] = "cached"
+    pilot._state_tracker._drone_continued.add("alpha")
+    pilot._state_tracker._operator_continued.add("alpha")
 
     # Directly call _cleanup_dead_workers (simulates reap after STUNG timeout)
     pilot._cleanup_dead_workers([workers[0]])
 
-    assert "alpha" not in pilot._waiting_content
-    assert "alpha" not in pilot._drone_continued
-    assert "alpha" not in pilot._operator_continued
+    assert "alpha" not in pilot._state_tracker._waiting_content
+    assert "alpha" not in pilot._state_tracker._drone_continued
+    assert "alpha" not in pilot._state_tracker._operator_continued
 
 
 # ---------------------------------------------------------------------------

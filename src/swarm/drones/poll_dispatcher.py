@@ -87,12 +87,18 @@ class PollDispatcher:
         now = time.time()
 
         for worker in list(p.workers):
-            if p._is_suspended_skip(worker, now=now):
+            if p._state_tracker._is_suspended_skip(worker, now=now):
                 continue
 
             try:
-                action, _transitioned, changed = p._poll_single_worker(
-                    worker, dead_workers, now=now
+                # ``enabled`` gates _run_decision_sync inside the tracker; it
+                # used to be threaded through the pilot's _poll_single_worker
+                # shim which is now gone, so the dispatcher passes it
+                # explicitly. Missing it silently defaults to True and makes
+                # disabled-pilot tests fire CONTINUE/etc. against WAITING
+                # workers (seen in the terminal-approval suite).
+                action, _transitioned, changed = p._state_tracker._poll_single_worker(
+                    worker, dead_workers, now=now, enabled=p.enabled
                 )
                 had_action |= action
                 any_state_changed |= changed
@@ -356,12 +362,12 @@ class PollDispatcher:
                 backoff = p._base_interval
                 try:
                     p._had_substantive_action = False
-                    p._any_became_active = False
+                    p._state_tracker.any_became_active = False
                     async with self._poll_lock:
                         _had_action, _any_changed = await self.poll_once_locked()
 
                         # Track idle streak for adaptive backoff.
-                        if p._had_substantive_action or p._any_became_active:
+                        if p._had_substantive_action or p._state_tracker.any_became_active:
                             self._idle_streak = 0
                         else:
                             self._idle_streak += 1

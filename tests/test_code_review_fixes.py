@@ -193,25 +193,25 @@ class TestContentFingerprinting:
         log = DroneLog()
         pilot = DronePilot(workers, log, interval=1.0, drone_config=DroneConfig())
 
-        pilot._update_content_fingerprint("api", "content A")
-        fp_a = pilot._content_fingerprints["api"]
+        pilot._state_tracker._update_content_fingerprint("api", "content A")
+        fp_a = pilot._state_tracker._content_fingerprints["api"]
 
-        pilot._update_content_fingerprint("api", "content B")
-        fp_b = pilot._content_fingerprints["api"]
+        pilot._state_tracker._update_content_fingerprint("api", "content B")
+        fp_b = pilot._state_tracker._content_fingerprints["api"]
 
         assert fp_a != fp_b
-        assert pilot._unchanged_streak["api"] == 0
+        assert pilot._state_tracker._unchanged_streak["api"] == 0
 
     def test_unchanged_streak_increments(self):
         workers = [_make_worker("api")]
         log = DroneLog()
         pilot = DronePilot(workers, log, interval=1.0, drone_config=DroneConfig())
 
-        pilot._update_content_fingerprint("api", "same content")
-        pilot._update_content_fingerprint("api", "same content")
-        pilot._update_content_fingerprint("api", "same content")
+        pilot._state_tracker._update_content_fingerprint("api", "same content")
+        pilot._state_tracker._update_content_fingerprint("api", "same content")
+        pilot._state_tracker._update_content_fingerprint("api", "same content")
 
-        assert pilot._unchanged_streak["api"] == 2  # 2 repeats after first
+        assert pilot._state_tracker._unchanged_streak["api"] == 2  # 2 repeats after first
 
 
 # --- Fix #8: Rate limiter TTL cleanup ---
