@@ -10,11 +10,51 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.25.10] - 2026-05-25
+
+### Features
+
+- **New test file `tests/test_state_publisher.py` (23 tests).** Covers
+  the previously integration-only `StatePublisher` (the broadcast
+  layer that ferries worker / task / pipeline state to WS clients).
+  Pins:
+  - `_terse_detail` helper — empty input, whitespace collapsing,
+    first-non-empty-line picking, 160-char ellipsis cap.
+  - Single-shot broadcasts — `on_task_board_changed`,
+    `on_workers_changed`, `broadcast_state`, `broadcast_usage`,
+    `on_tunnel_state_change` (running / stopped / error).
+  - `on_drone_entry` — non-notification entries broadcast only;
+    notification entries also fire `push_notification`; STUNG and
+    TASK_FAILED actions get `priority="high"`.
+  - `on_state_changed` — BUZZING clears inflight + expires stale
+    ESCALATION/COMPLETION proposals; RESTING is no-op; STUNG logs to
+    drone_log with terminal tail; `mark_dirty` callback is invoked.
+  - Internal debounce path — `_flush_state_broadcast` no-op when
+    clean; `_mark_state_dirty` flushes immediately outside an event
+    loop.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.25.9] - 2026-05-25
 
 ### Features
 
 ### Changes
+
+- **Replace `SELECT *` with explicit column lists in db stores.**
+  Audit-flagged: `buzz_store.py` (3 sites) and `playbook_store.py`
+  (6 sites) used `SELECT *` while the `_row_to_dict` / `_row_to_pb`
+  consumers each had a fixed, known set of columns. Added module-
+  level `_BUZZ_COLS` / `_PB_COLS` constants and switched every
+  query to `f"SELECT {_BUZZ_COLS} FROM ..."`. Zero behaviour change
+  today; the guardrail is schema-evolution safety — a future column
+  addition won't silently inflate every query payload, and a column
+  rename now fails at SQL execution time rather than masquerading
+  as a `KeyError` inside `_row_to_*`. (CHANGELOG body added in the
+  2026.5.25.10 commit; the .9 commit shipped with an empty body
+  because the release script rewrote CHANGELOG.md mid-edit.)
 
 ### Fixes
 
