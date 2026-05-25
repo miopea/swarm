@@ -10,6 +10,44 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.25.12] - 2026-05-25
+
+### Features
+
+### Changes
+
+- **Type MCP tool argument payloads with TypedDicts.** Audit-flagged
+  581 `Any` annotations across `src/swarm/`, concentrated in
+  `mcp/tools.py` (47) and `mcp/queen_tools.py` (47). Defined 30
+  TypedDicts in a new module `src/swarm/mcp/_arg_types.py` — one per
+  MCP tool — mirroring each tool's `inputSchema.properties`. Updated
+  every handler signature in both files from `args: dict[str, Any]`
+  to the concrete TypedDict (`SendMessageArgs`,
+  `QueenReassignTaskArgs`, etc.). The shapes were extracted
+  programmatically from the existing schemas to guarantee the
+  TypedDict and the wire schema stay in lock-step.
+
+  Conventions documented in `_arg_types.py`:
+  - All TypedDicts use `total=False` because runtime input may omit
+    any field — required-field enforcement happens inside the handler
+    body (the `if not field: return error` guard), not at the type-
+    system layer. A JSON-RPC mis-send produces a polite tool error,
+    not a Python `KeyError`.
+  - Enum-like fields (`msg_type`, `priority`) stay as `str` — the
+    handlers already validate the value, and `Literal[...]` would
+    force every test fixture to cast for marginal gain.
+  - Arrays of dicts (`swarm_batch.ops`, `queen_post_thread.widgets`)
+    stay as `list[dict[str, Any]]` — the per-element shape is its
+    own schema and a nested TypedDict variant union would
+    reintroduce the Any-soup the audit flagged.
+
+  Net: 30 dict[str, Any] → typed args. The remaining `Any` in
+  `tools.py` / `queen_tools.py` is on return types (genuinely
+  heterogeneous JSON-RPC payloads) and on `metadata` dicts that
+  legitimately carry arbitrary keys. Full suite: 4594 passed.
+
+### Fixes
+
 ## [2026.5.25.11] - 2026-05-25
 
 ### Features

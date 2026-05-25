@@ -12,6 +12,23 @@ import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from swarm.mcp._arg_types import (
+    BatchArgs,
+    CheckMessagesArgs,
+    ClaimFileArgs,
+    CompleteTaskArgs,
+    CreateTaskArgs,
+    DraftEmailArgs,
+    GetLearningsArgs,
+    GetPlaybooksArgs,
+    NoteToQueenArgs,
+    ParkTaskArgs,
+    ReportBlockerArgs,
+    ReportProgressArgs,
+    SendMessageArgs,
+    TaskStatusArgs,
+)
+
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
 
@@ -809,7 +826,7 @@ def handle_tool_call(
 
 
 def _handle_check_messages(
-    d: SwarmDaemon, worker_name: str, _args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, _args: CheckMessagesArgs
 ) -> list[dict[str, Any]]:
     messages = d.message_store.get_unread(worker_name)
     if not messages:
@@ -823,7 +840,7 @@ def _handle_check_messages(
 
 
 def _handle_send_message(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: SendMessageArgs
 ) -> list[dict[str, Any]]:
     recipient = args.get("to", "")
     msg_type = args.get("type", "finding")
@@ -906,7 +923,7 @@ def _handle_send_message(
 
 
 def _handle_report_blocker(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: ReportBlockerArgs
 ) -> list[dict[str, Any]]:
     """Persist a worker-reported blocker so the IdleWatcher can skip it.
 
@@ -995,7 +1012,7 @@ def _validate_draft_email_args(args: dict[str, Any]) -> _DraftEmailFields | str:
 
 
 def _handle_draft_email(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: DraftEmailArgs
 ) -> list[dict[str, Any]]:
     """Create a draft email in the operator's Outlook Drafts via Graph.
 
@@ -1087,9 +1104,7 @@ def _handle_draft_email(
     ]
 
 
-def _handle_park_task(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
-) -> list[dict[str, Any]]:
+def _handle_park_task(d: SwarmDaemon, worker_name: str, args: ParkTaskArgs) -> list[dict[str, Any]]:
     """#406/#407: park one of the caller's OWN ACTIVE tasks back to ASSIGNED.
 
     Only ever touches *this caller's* own tasks, so cross-worker parking
@@ -1194,7 +1209,7 @@ def _handle_park_task(
 
 
 def _handle_note_to_queen(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: NoteToQueenArgs
 ) -> list[dict[str, Any]]:
     """Persist a side-channel note addressed to the Queen + auto-relay it.
 
@@ -1495,7 +1510,7 @@ def _apply_task_filter(
 
 
 def _handle_task_status(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: TaskStatusArgs
 ) -> list[dict[str, Any]] | dict[str, Any]:
     if not d.task_board:
         return [{"type": "text", "text": "No task board available."}]
@@ -1568,7 +1583,7 @@ def _task_to_payload(t: Any) -> dict[str, Any]:
 
 
 def _handle_claim_file(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: ClaimFileArgs
 ) -> list[dict[str, Any]]:
     import os
     import time
@@ -1591,7 +1606,7 @@ _ACTIVE_STATUSES = ("assigned", "active")
 
 
 def _handle_complete_task(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: CompleteTaskArgs
 ) -> list[dict[str, Any]]:
     resolution = args.get("resolution", "")
     if not d.task_board:
@@ -1689,7 +1704,7 @@ def _handle_complete_task(
 
 
 def _handle_create_task(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: CreateTaskArgs
 ) -> list[dict[str, Any]]:
     title = args.get("title", "")
     if not title:
@@ -1768,7 +1783,7 @@ def _handle_create_task(
 
 
 def _handle_get_learnings(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: GetLearningsArgs
 ) -> list[dict[str, Any]]:
     if not d.task_board:
         return [{"type": "text", "text": "No task board."}]
@@ -1786,7 +1801,7 @@ def _handle_get_learnings(
 
 
 def _handle_get_playbooks(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: GetPlaybooksArgs
 ) -> list[dict[str, Any]]:
     from swarm.playbooks.models import PlaybookStatus
 
@@ -1817,7 +1832,7 @@ def _handle_get_playbooks(
 
 
 def _handle_report_progress(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: ReportProgressArgs
 ) -> list[dict[str, Any]]:
     phase = args.get("phase", "")
     pct = args.get("pct", -1)
@@ -1870,7 +1885,7 @@ def _validate_batch_op(op: Any) -> tuple[str, dict[str, Any], str]:
     return tool, op_args, ""
 
 
-def _handle_batch(d: SwarmDaemon, worker_name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
+def _handle_batch(d: SwarmDaemon, worker_name: str, args: BatchArgs) -> list[dict[str, Any]]:
     """Execute a sequence of swarm_* ops in one MCP round-trip.
 
     Workers that need claim_file + send_message + complete_task today

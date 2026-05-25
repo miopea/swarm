@@ -17,6 +17,23 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING, Any
 
+from swarm.mcp._arg_types import (
+    QueenForceCompleteTaskArgs,
+    QueenInterruptWorkerArgs,
+    QueenPostThreadArgs,
+    QueenPromptWorkerArgs,
+    QueenQueryLearningsArgs,
+    QueenReassignTaskArgs,
+    QueenReplyArgs,
+    QueenSaveLearningArgs,
+    QueenUpdateThreadArgs,
+    QueenViewBuzzLogArgs,
+    QueenViewDroneActionsArgs,
+    QueenViewMessagesArgs,
+    QueenViewMessageStreamArgs,
+    QueenViewTaskBoardArgs,
+    QueenViewWorkerStateArgs,
+)
 from swarm.worker.worker import QUEEN_WORKER_NAME
 
 if TYPE_CHECKING:
@@ -696,7 +713,7 @@ def _clamp(value: Any, default: int, minimum: int, maximum: int) -> int:
 
 
 def _handle_view_worker_state(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: QueenViewWorkerStateArgs
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """Return both a markdown text summary and a structured JSON sidecar.
 
@@ -809,7 +826,7 @@ _DONE_STATUSES = {"done"}
 
 
 def _handle_view_task_board(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: QueenViewTaskBoardArgs
 ) -> list[dict[str, Any]] | dict[str, Any]:
     err = _assert_queen(worker_name)
     if err:
@@ -868,7 +885,7 @@ def _handle_view_task_board(
 
 
 def _handle_view_messages(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: QueenViewMessagesArgs
 ) -> list[dict[str, Any]] | dict[str, Any]:
     err = _assert_queen(worker_name)
     if err:
@@ -942,7 +959,7 @@ _IDLE_RECIPIENT_STATES = ("RESTING", "SLEEPING", "STUNG")
 
 
 def _handle_view_message_stream(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: QueenViewMessageStreamArgs
 ) -> list[dict[str, Any]] | dict[str, Any]:
     """Return recent messages joined against the recipient's current state.
 
@@ -1089,7 +1106,7 @@ def _structured_message_stream_rows(
 
 
 def _handle_view_buzz_log(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: QueenViewBuzzLogArgs
 ) -> list[dict[str, Any]] | dict[str, Any]:
     err = _assert_queen(worker_name)
     if err:
@@ -1144,7 +1161,7 @@ def _handle_view_buzz_log(
 
 
 def _handle_view_drone_actions(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: QueenViewDroneActionsArgs
 ) -> list[dict[str, Any]] | dict[str, Any]:
     err = _assert_queen(worker_name)
     if err:
@@ -1192,7 +1209,7 @@ def _handle_view_drone_actions(
 
 
 def _handle_query_learnings(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: QueenQueryLearningsArgs
 ) -> list[dict[str, Any]]:
     err = _assert_queen(worker_name)
     if err:
@@ -1286,7 +1303,7 @@ def _resolve_thread_alias(d: SwarmDaemon, raw: str) -> str | None:
 
 
 def _handle_post_thread(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: QueenPostThreadArgs
 ) -> list[dict[str, Any]]:
     err = _assert_queen(worker_name)
     if err:
@@ -1327,7 +1344,7 @@ def _handle_post_thread(
     ]
 
 
-def _handle_reply(d: SwarmDaemon, worker_name: str, args: dict[str, Any]) -> list[dict[str, Any]]:
+def _handle_reply(d: SwarmDaemon, worker_name: str, args: QueenReplyArgs) -> list[dict[str, Any]]:
     err = _assert_queen(worker_name)
     if err:
         return err
@@ -1361,7 +1378,7 @@ def _handle_reply(d: SwarmDaemon, worker_name: str, args: dict[str, Any]) -> lis
 
 
 def _handle_update_thread(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: QueenUpdateThreadArgs
 ) -> list[dict[str, Any]]:
     err = _assert_queen(worker_name)
     if err:
@@ -1386,7 +1403,7 @@ def _handle_update_thread(
 
 
 def _handle_save_learning(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: QueenSaveLearningArgs
 ) -> list[dict[str, Any]]:
     err = _assert_queen(worker_name)
     if err:
@@ -1468,7 +1485,7 @@ def _fire_async(coro: Any) -> None:
 
 
 def _handle_reassign_task(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: QueenReassignTaskArgs
 ) -> list[dict[str, Any]]:
     err = _assert_queen(worker_name)
     if err:
@@ -1524,7 +1541,7 @@ def _handle_reassign_task(
 
 
 def _handle_interrupt_worker(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: QueenInterruptWorkerArgs
 ) -> list[dict[str, Any]]:
     err = _assert_queen(worker_name)
     if err:
@@ -1555,7 +1572,7 @@ def _handle_interrupt_worker(
 
 
 def _handle_force_complete_task(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: QueenForceCompleteTaskArgs
 ) -> list[dict[str, Any]]:
     err = _assert_queen(worker_name)
     if err:
@@ -1608,7 +1625,7 @@ def _handle_force_complete_task(
 
 
 def _handle_prompt_worker(
-    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+    d: SwarmDaemon, worker_name: str, args: QueenPromptWorkerArgs
 ) -> list[dict[str, Any]]:
     """Push a prompt into a worker's PTY — Queen-initiated direct chat.
 
