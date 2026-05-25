@@ -10,6 +10,27 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.25.3] - 2026-05-25
+
+### Features
+
+### Changes
+
+- **Remove dead Jira delegation shims from `SwarmDaemon`.** Six
+  methods (`_fire_jira`, `_fire_jira_export`, `_fire_jira_assign`,
+  `_fire_jira_completion`, `_run_jira_import`, `jira_export_status`)
+  plus `_jira_sync_loop` were one-line forwarders to methods that
+  already existed on `JiraService` since the service was extracted.
+  Two of them (`_run_jira_import`, `jira_export_status`) had zero
+  callers anywhere in the codebase — pure dead code. The four
+  `_fire_jira_*` shims had seven internal callers inside daemon.py;
+  those now call `self.jira_svc.fire_*` directly. `_jira_sync_loop`'s
+  one caller (the `BackgroundLoopRunner` registration in `start()`)
+  now points at `self.jira_svc.sync_loop` directly. Net: -30 LOC of
+  pure indirection, zero behaviour change.
+
+### Fixes
+
 ## [2026.5.25.2] - 2026-05-25
 
 ### Features

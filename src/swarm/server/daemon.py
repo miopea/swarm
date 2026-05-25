@@ -918,7 +918,7 @@ class SwarmDaemon(EventEmitter):
         self.loop_runner.register("heartbeat", self._heartbeat_loop)
         self.loop_runner.register("usage", self._usage_refresh_loop)
         self.loop_runner.register("conflict", self._conflict_check_loop)
-        self.loop_runner.register("jira_sync", self._jira_sync_loop, enabled=self.jira.enabled)
+        self.loop_runner.register("jira_sync", self.jira_svc.sync_loop, enabled=self.jira.enabled)
         self.loop_runner.register("update_check", self._check_for_updates)
         self.loop_runner.register("ws_janitor", self.hub.ws_janitor_loop)
         self.loop_runner.register("mtime", self._watch_config_mtime, enabled=mtime_enabled)
@@ -1545,34 +1545,6 @@ class SwarmDaemon(EventEmitter):
                     }
                 )
 
-    async def _jira_sync_loop(self) -> None:
-        """Periodically import Jira issues into the task board."""
-        await self.jira_svc.sync_loop()
-
-    async def _run_jira_import(self) -> int:
-        """Execute a single Jira import cycle. Returns count of new tasks."""
-        return await self.jira_svc.run_import()
-
-    async def jira_export_status(self, task_id: str, new_status: TaskStatus) -> bool:
-        """Export a task status change to Jira."""
-        return await self.jira_svc.export_status(task_id, new_status)
-
-    def _fire_jira(self, task_id: str, action: str, coro_factory: Callable[..., Any]) -> None:
-        """Schedule a Jira operation as fire-and-forget background task."""
-        self.jira_svc.fire_jira(task_id, action, coro_factory)
-
-    def _fire_jira_export(self, task_id: str, new_status: str) -> None:
-        """Schedule Jira status export as fire-and-forget background task."""
-        self.jira_svc.fire_export(task_id, new_status)
-
-    def _fire_jira_assign(self, task_id: str) -> None:
-        """Schedule Jira issue assignment as fire-and-forget background task."""
-        self.jira_svc.fire_assign(task_id)
-
-    def _fire_jira_completion(self, task_id: str) -> None:
-        """Schedule Jira completion comment as fire-and-forget background task."""
-        self.jira_svc.fire_completion(task_id)
-
     def _broadcast_usage(self) -> None:
         self.publisher.broadcast_usage()
 
@@ -2175,14 +2147,14 @@ class SwarmDaemon(EventEmitter):
                 actor="system",
                 detail=f"demoted to ASSIGNED — {worker_name} started newer task",
             )
-            self._fire_jira_export(demoted_id, "assigned")
+            self.jira_svc.fire_export(demoted_id, "assigned")
 
         # Transition to IN_PROGRESS
         task.start()
         self.task_board._persist()
         self.task_board._notify()
         self.task_history.append(task_id, TaskAction.STARTED, actor=actor, detail=worker_name)
-        self._fire_jira_export(task_id, "active")
+        self.jira_svc.fire_export(task_id, "active")
         if self.pilot:
             self.pilot.wake_worker(worker_name)
         self.drone_log.add(
@@ -2376,9 +2348,9 @@ class SwarmDaemon(EventEmitter):
             self.notification_bus.emit_task_completed(task.assigned_worker or actor, task_title)
             if hasattr(self, "pipeline_engine"):
                 self.pipeline_engine.on_task_completed(task_id, resolution)
-            self._fire_jira_assign(task_id)
-            self._fire_jira_export(task_id, "done")
-            self._fire_jira_completion(task_id)
+            self.jira_svc.fire_assign(task_id)
+            self.jira_svc.fire_export(task_id, "done")
+            self.jira_svc.fire_completion(task_id)
             # Notify source worker for cross-project tasks
             if task.is_cross_project and task.source_worker:
                 source = self.get_worker(task.source_worker)
@@ -2704,7 +2676,7 @@ class SwarmDaemon(EventEmitter):
         """Delegate to TaskManager."""
         result = self.tasks.reopen_task(task_id, actor)
         if result:
-            self._fire_jira_export(task_id, "unassigned")
+            self.jira_svc.fire_export(task_id, "unassigned")
         return result
 
     def fail_task(self, task_id: str, actor: str = "user") -> bool:
@@ -2713,7 +2685,7 @@ class SwarmDaemon(EventEmitter):
         if result:
             if hasattr(self, "pipeline_engine"):
                 self.pipeline_engine.on_task_failed(task_id)
-            self._fire_jira_export(task_id, "failed")
+            self.jira_svc.fire_export(task_id, "failed")
         return result
 
     def remove_task(self, task_id: str, actor: str = "user") -> bool:
