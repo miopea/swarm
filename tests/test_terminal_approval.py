@@ -14,6 +14,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from swarm.config import DroneConfig, HiveConfig, QueenConfig
 from swarm.drones.log import DroneLog
 from swarm.drones.pilot import DronePilot
+from swarm.drones.state_tracker import WorkerStateTracker
 from swarm.queen.queen import Queen
 from swarm.queen.queue import QueenCallQueue
 from swarm.server.analyzer import QueenAnalyzer
@@ -261,7 +262,7 @@ def test_pattern_suggestion_old_format():
 
     provider = get_provider("claude")
     content = "Bash(npm test --coverage)\n  > 1. Yes, allow once\n    2. No\n"
-    pattern = DronePilot._suggest_approval_pattern(content, provider)
+    pattern = WorkerStateTracker._suggest_approval_pattern(content, provider)
     assert r"\bnpm\ test\b" == pattern
 
 
@@ -271,7 +272,7 @@ def test_pattern_suggestion_new_format():
 
     provider = get_provider("claude")
     content = "Bash command\n  az webapp restart --name foo\n  > 1. Yes\n    2. No\n"
-    pattern = DronePilot._suggest_approval_pattern(content, provider)
+    pattern = WorkerStateTracker._suggest_approval_pattern(content, provider)
     assert r"\baz\ webapp\b" == pattern
 
 
@@ -281,7 +282,7 @@ def test_pattern_suggestion_accept_edits():
 
     provider = get_provider("claude")
     content = ">> accept edits on 3 files\n"
-    pattern = DronePilot._suggest_approval_pattern(content, provider)
+    pattern = WorkerStateTracker._suggest_approval_pattern(content, provider)
     assert pattern == "accept edits"
 
 
@@ -291,7 +292,7 @@ def test_pattern_suggestion_no_match():
 
     provider = get_provider("claude")
     content = "Some random output\n> "
-    pattern = DronePilot._suggest_approval_pattern(content, provider)
+    pattern = WorkerStateTracker._suggest_approval_pattern(content, provider)
     assert pattern == ""
 
 
@@ -533,11 +534,11 @@ def test_pattern_suggestion_rejects_dangerous_cmds(cmd):
 
     # Test old format
     content_old = f"Bash({cmd})\n  > 1. Yes\n    2. No\n"
-    assert DronePilot._suggest_approval_pattern(content_old, provider) == ""
+    assert WorkerStateTracker._suggest_approval_pattern(content_old, provider) == ""
 
     # Test new format
     content_new = f"Bash command\n  {cmd}\n  > 1. Yes\n    2. No\n"
-    assert DronePilot._suggest_approval_pattern(content_new, provider) == ""
+    assert WorkerStateTracker._suggest_approval_pattern(content_new, provider) == ""
 
 
 @pytest.mark.parametrize(
@@ -558,4 +559,4 @@ def test_pattern_suggestion_specific_patterns(cmd, expected):
 
     provider = get_provider("claude")
     content = f"Bash({cmd})\n  > 1. Yes\n    2. No\n"
-    assert DronePilot._suggest_approval_pattern(content, provider) == expected
+    assert WorkerStateTracker._suggest_approval_pattern(content, provider) == expected

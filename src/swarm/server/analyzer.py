@@ -259,12 +259,13 @@ class QueenAnalyzer:
             )
             return
 
-        from swarm.drones.pilot import DronePilot, extract_prompt_snippet
+        from swarm.drones.pilot import extract_prompt_snippet
+        from swarm.drones.state_tracker import WorkerStateTracker
         from swarm.providers import get_provider
 
         snippet = extract_prompt_snippet(content)
         provider = get_provider(worker.provider_name)
-        rule_pattern = DronePilot._suggest_approval_pattern(content, provider)
+        rule_pattern = WorkerStateTracker._suggest_approval_pattern(content, provider)
 
         is_plan = reason_lower == "plan requires user approval"
 

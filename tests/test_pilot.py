@@ -11,6 +11,7 @@ import pytest
 from swarm.config import DroneConfig
 from swarm.drones.log import DroneLog, SystemAction
 from swarm.drones.pilot import DronePilot
+from swarm.drones.poll_dispatcher import PollDispatcher
 from swarm.drones.rules import decide
 from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import TaskStatus
@@ -855,7 +856,7 @@ async def test_on_loop_done_normal_exit_not_warning():
         # Simulate a normally-exited task
         task = asyncio.create_task(asyncio.sleep(0))
         await task
-        DronePilot._on_loop_done(task)
+        PollDispatcher._on_loop_done(task)
     finally:
         logger.removeHandler(handler)
 
@@ -3139,7 +3140,9 @@ def test_suspend_workers_does_not_send_sigtstp(pilot_setup, monkeypatch):
     pilot, workers, _log = pilot_setup
     signals_sent: list[tuple[str, int]] = []
     monkeypatch.setattr(
-        pilot, "_signal_worker_async", lambda name, sig: signals_sent.append((name, sig))
+        pilot._pressure_mgr,
+        "_signal_worker_async",
+        lambda name, sig: signals_sent.append((name, sig)),
     )
     pilot._suspend_workers([w.name for w in workers], "HIGH")
     # No signals should have been sent
@@ -3155,7 +3158,9 @@ def test_resume_pressure_suspended_does_not_send_sigcont(pilot_setup, monkeypatc
     pilot, workers, _log = pilot_setup
     signals_sent: list[tuple[str, int]] = []
     monkeypatch.setattr(
-        pilot, "_signal_worker_async", lambda name, sig: signals_sent.append((name, sig))
+        pilot._pressure_mgr,
+        "_signal_worker_async",
+        lambda name, sig: signals_sent.append((name, sig)),
     )
     # First suspend them
     pilot._suspend_workers([w.name for w in workers], "HIGH")
@@ -3173,7 +3178,7 @@ def test_resume_pressure_suspended_does_not_send_sigcont(pilot_setup, monkeypatc
 def test_critical_pressure_skips_buzzing_workers(pilot_setup, monkeypatch):
     """CRITICAL pressure should never suspend BUZZING or WAITING workers."""
     pilot, workers, _log = pilot_setup
-    monkeypatch.setattr(pilot, "_signal_worker_async", lambda name, sig: None)
+    monkeypatch.setattr(pilot._pressure_mgr, "_signal_worker_async", lambda name, sig: None)
     # Set workers to BUZZING (the default from pilot_setup)
     for w in workers:
         w.state = WorkerState.BUZZING
@@ -3185,7 +3190,7 @@ def test_critical_pressure_skips_buzzing_workers(pilot_setup, monkeypatch):
 def test_critical_pressure_suspends_sleeping_and_resting(pilot_setup, monkeypatch):
     """CRITICAL pressure should suspend SLEEPING and RESTING workers."""
     pilot, workers, _log = pilot_setup
-    monkeypatch.setattr(pilot, "_signal_worker_async", lambda name, sig: None)
+    monkeypatch.setattr(pilot._pressure_mgr, "_signal_worker_async", lambda name, sig: None)
     # Make one SLEEPING, one RESTING
     workers[0].state = WorkerState.RESTING
     workers[0].state_since = time.time() - 1500  # old enough for SLEEPING display
@@ -3200,7 +3205,7 @@ def test_critical_pressure_suspends_sleeping_and_resting(pilot_setup, monkeypatc
 def test_critical_pressure_skips_waiting_workers(pilot_setup, monkeypatch):
     """CRITICAL pressure should not suspend WAITING workers."""
     pilot, workers, _log = pilot_setup
-    monkeypatch.setattr(pilot, "_signal_worker_async", lambda name, sig: None)
+    monkeypatch.setattr(pilot._pressure_mgr, "_signal_worker_async", lambda name, sig: None)
     for w in workers:
         w.state = WorkerState.WAITING
     pilot._suspend_on_critical_pressure()

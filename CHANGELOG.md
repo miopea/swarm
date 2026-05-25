@@ -10,6 +10,61 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.25.6] - 2026-05-25
+
+### Features
+
+### Changes
+
+- **Remove 27 dead delegation methods + property shims from
+  `DronePilot`.** Same audit pattern as the SwarmDaemon cleanup
+  (2026.5.25.5): the pilot was already a facade over 12 sub-handlers
+  (`DirectiveExecutor`, `CoordinationHandler`, `OversightHandler`,
+  `PressureManager`, `_DecisionExecutor`, `WorkerStateTracker`,
+  `TaskLifecycle`, `IdleWatcher`, `InterWorkerMessageWatcher`,
+  `ContextPressureWatcher`, `Dreamer`, `PollDispatcher`), and the
+  delegation/shim layer on top had accumulated more methods than
+  callers. Census across `src/` and `tests/`:
+  - 3 `@property` shims with **zero** external callers: deleted
+    outright (`_escalation_timeout`, `_tick`, `_all_done_streak`).
+  - 24 delegation methods with **zero** external callers: deleted
+    outright (`_maybe_suspend_worker`, `_sync_display_state`,
+    `_track_idle`, `_handle_waiting_exit`, `_detect_operator_terminal_approval`,
+    `_suggest_approval_pattern`, `_should_throttle_sleeping`,
+    `_poll_sleeping_throttled`, `_poll_dead_worker`,
+    `_should_skip_decide`, `_is_revive_loop`, `_record_revive`,
+    `_execute_deferred_continue`, `_should_eager_assign`,
+    `_has_pending_bash_approval`, `_has_idle_prompt`,
+    `_has_operator_text_at_prompt`, `_capture_worker_outputs`,
+    `_signal_worker_async`, `_suspend_on_high_pressure`,
+    `_run_periodic_tasks`, `_speculate_for_idle_workers`,
+    `_on_loop_done`).
+  - Census initially missed two external usage shapes
+    (`DronePilot.X` class-static syntax in `server/analyzer.py` and
+    `test_terminal_approval.py`; `monkeypatch.setattr(pilot, "X", …)`
+    string-lookup in `test_pilot.py`). Migrated each to the owning
+    sub-handler:
+    - `server/analyzer.py`: `DronePilot._suggest_approval_pattern` →
+      `WorkerStateTracker._suggest_approval_pattern`.
+    - `test_terminal_approval.py` (8 sites): same migration.
+    - `test_pilot.py` (3 sites): `monkeypatch.setattr(pilot,
+      "_signal_worker_async", …)` →
+      `monkeypatch.setattr(pilot._pressure_mgr, "_signal_worker_async", …)`.
+    - `test_pilot.py` (`DronePilot._on_loop_done` static call) →
+      `PollDispatcher._on_loop_done`.
+  - Two internal pilot uses preserved: `self._safe_worker_action` is
+    passed as a callback into `DirectiveExecutor` during `__init__`
+    *before* `_decision_exec` exists (circular dep — the delegation
+    is the lazy-binding indirection that breaks it), and
+    `get_diagnostics()`'s `_tick` read was switched directly to
+    `self._dispatcher._tick`.
+  - `types` import dropped (only `_suspend_on_high_pressure` needed
+    it).
+  Net: -160 LOC of pure indirection, zero behaviour change. Full
+  suite: 4549 passed (unchanged).
+
+### Fixes
+
 ## [2026.5.25.5] - 2026-05-25
 
 ### Features

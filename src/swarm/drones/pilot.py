@@ -26,7 +26,6 @@ from swarm.worker.manager import revive_worker  # noqa: F401 — monkeypatched b
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
-    import types
     from collections.abc import Awaitable, Callable
     from typing import Any
 
@@ -478,14 +477,6 @@ class DronePilot(EventEmitter):
         return self._state_tracker._operator_continued
 
     @property
-    def _escalation_timeout(self) -> float:
-        return self._decision_exec._escalation_timeout
-
-    @_escalation_timeout.setter
-    def _escalation_timeout(self, value: float) -> None:
-        self._decision_exec._escalation_timeout = value
-
-    @property
     def _revive_loop_max(self) -> int:
         return self._decision_exec._revive_loop_max
 
@@ -520,14 +511,6 @@ class DronePilot(EventEmitter):
         self._dispatcher._task = value
 
     @property
-    def _tick(self) -> int:
-        return self._dispatcher._tick
-
-    @_tick.setter
-    def _tick(self, value: int) -> None:
-        self._dispatcher._tick = value
-
-    @property
     def _idle_streak(self) -> int:
         return self._dispatcher._idle_streak
 
@@ -554,14 +537,6 @@ class DronePilot(EventEmitter):
     @_consecutive_errors.setter
     def _consecutive_errors(self, value: int) -> None:
         self._dispatcher._consecutive_errors = value
-
-    @property
-    def _all_done_streak(self) -> int:
-        return self._dispatcher._all_done_streak
-
-    @_all_done_streak.setter
-    def _all_done_streak(self, value: int) -> None:
-        self._dispatcher._all_done_streak = value
 
     # Class-level constants — delegate to _task_lifecycle for runtime access
     _AUTO_COMPLETE_MIN_IDLE: ClassVar[int] = 45
@@ -613,7 +588,7 @@ class DronePilot(EventEmitter):
             "running": self._running,
             "enabled": self.enabled,
             "task_alive": task is not None and not task.done(),
-            "tick": self._tick,
+            "tick": self._dispatcher._tick,
             "idle_streak": self._idle_streak,
             "suspended_count": len(self._suspended),
             "suspended_workers": sorted(self._suspended),
@@ -761,10 +736,6 @@ class DronePilot(EventEmitter):
 
     # --- Delegate to PressureManager ---
 
-    def _signal_worker_async(self, name: str, sig: int) -> None:
-        """Send a signal to a worker via the pool, fire-and-forget."""
-        self._pressure_mgr._signal_worker_async(name, sig)
-
     def _suspend_workers(self, names: list[str], reason: str) -> int:
         """Mark workers as pressure-suspended."""
         return self._pressure_mgr._suspend_workers(names, reason)
@@ -789,10 +760,6 @@ class DronePilot(EventEmitter):
         """Resume workers that were suspended due to pressure."""
         self._pressure_mgr._resume_pressure_suspended()
 
-    def _suspend_on_high_pressure(self, math_mod: types.ModuleType) -> None:
-        """Suspend SLEEPING workers to target 60% active."""
-        self._pressure_mgr._suspend_on_high_pressure(math_mod)
-
     def _suspend_on_critical_pressure(self) -> None:
         """Suspend SLEEPING/RESTING workers except the most recently active."""
         self._pressure_mgr._suspend_on_critical_pressure()
@@ -807,10 +774,6 @@ class DronePilot(EventEmitter):
         """Wake a suspended worker so it's polled on the next tick."""
         return self._state_tracker.wake_worker(name)
 
-    def _maybe_suspend_worker(self, worker: Worker) -> None:
-        """Suspend a sleeping worker if it has been unchanged long enough."""
-        self._state_tracker._maybe_suspend_worker(worker)
-
     def _classify_worker_state(
         self,
         worker: Worker,
@@ -821,50 +784,13 @@ class DronePilot(EventEmitter):
         """Classify worker output into a state, with exception safety."""
         return self._state_tracker._classify_worker_state(worker, cmd, content, styled=styled)
 
-    def _sync_display_state(self, worker: Worker, state_changed: bool) -> bool:
-        """Emit state_changed for display-only transitions."""
-        return self._state_tracker._sync_display_state(worker, state_changed)
-
-    def _track_idle(self, worker: Worker) -> None:
-        """Update per-worker idle-consecutive counter."""
-        self._state_tracker._track_idle(worker)
-
     def _handle_state_change(self, worker: Worker, prev: WorkerState) -> tuple[bool, bool]:
         """Process a worker state change."""
         return self._state_tracker._handle_state_change(worker, prev)
 
-    def _handle_waiting_exit(self, worker: Worker, prev: WorkerState) -> None:
-        """Detect who approved a WAITING worker and clean up cached content."""
-        self._state_tracker._handle_waiting_exit(worker, prev)
-
-    def _detect_operator_terminal_approval(self, worker: Worker) -> None:
-        """Emit an event when the operator approved a prompt via the terminal."""
-        self._state_tracker._detect_operator_terminal_approval(worker)
-
-    @staticmethod
-    def _suggest_approval_pattern(content: str, provider: LLMProvider) -> str:
-        """Extract a suggested regex pattern from the raw PTY content."""
-        return WorkerStateTracker._suggest_approval_pattern(content, provider)
-
-    def _should_throttle_sleeping(self, worker: Worker, now: float | None = None) -> bool:
-        """Check if a sleeping worker's full poll should be skipped."""
-        return self._state_tracker._should_throttle_sleeping(worker, now=now)
-
     def _update_content_fingerprint(self, name: str, content: str) -> None:
         """Update content fingerprint and unchanged streak for a worker."""
         self._state_tracker._update_content_fingerprint(name, content)
-
-    def _poll_sleeping_throttled(self, worker: Worker, cmd: str) -> tuple[bool, bool] | None:
-        """Lightweight poll for throttled sleeping workers."""
-        return self._state_tracker._poll_sleeping_throttled(worker, cmd)
-
-    def _poll_dead_worker(
-        self,
-        worker: Worker,
-        dead_workers: list[Worker],
-    ) -> tuple[bool, bool, bool]:
-        """Handle polling for a worker whose process is dead or missing."""
-        return self._state_tracker._poll_dead_worker(worker, dead_workers)
 
     def _poll_single_worker(
         self,
@@ -883,38 +809,13 @@ class DronePilot(EventEmitter):
 
     # --- Delegate to DecisionExecutor ---
 
-    def _should_skip_decide(self, worker: Worker, changed: bool) -> bool:
-        """Return True if the decision engine should be skipped for this worker."""
-        return self._decision_exec._should_skip_decide(worker, changed, self.enabled)
-
     def _run_decision_sync(self, worker: Worker, content: str, events: list | None = None) -> bool:
         """Evaluate the drone decision for a worker (sync — actions deferred)."""
         return self._decision_exec._run_decision_sync(worker, content, events=events)
 
-    def _is_revive_loop(self, name: str) -> bool:
-        """Return True if *name* has been revived too many times within the window."""
-        return self._decision_exec._is_revive_loop(name)
-
-    def _record_revive(self, name: str) -> None:
-        """Record a successful revive for loop detection."""
-        self._decision_exec._record_revive(name)
-
     async def _execute_deferred_actions(self) -> None:
         """Execute deferred async actions from the sync poll loop."""
         await self._decision_exec._execute_deferred_actions()
-
-    async def _execute_deferred_continue(
-        self,
-        worker: Worker,
-        decision: DroneDecision,
-        state_at_decision: WorkerState,
-        proc_at_decision: object | None,
-        content: str = "",
-    ) -> None:
-        """Execute a single deferred CONTINUE action with safety checks."""
-        await self._decision_exec._execute_deferred_continue(
-            worker, decision, state_at_decision, proc_at_decision, content
-        )
 
     async def _safe_worker_action(
         self,
@@ -957,10 +858,6 @@ class DronePilot(EventEmitter):
         """
         self._task_lifecycle.record_completion_verdict(task_id, done, confidence)
 
-    def _should_eager_assign(self) -> bool:
-        """Check if idle-escalation or event-driven flag should trigger assign."""
-        return self._task_lifecycle._should_eager_assign()
-
     def _cleanup_stale_proposed_completions(self) -> None:
         """Evict proposed-completion entries older than 1 hour."""
         self._task_lifecycle._cleanup_stale_proposed_completions()
@@ -975,21 +872,6 @@ class DronePilot(EventEmitter):
 
     # --- Delegate to DirectiveExecutor ---
 
-    @staticmethod
-    def _has_pending_bash_approval(worker: Worker) -> bool:
-        """Check if a worker's terminal shows a bash/command approval prompt."""
-        return DirectiveExecutor.has_pending_bash_approval(worker)
-
-    @staticmethod
-    def _has_idle_prompt(worker: Worker) -> bool:
-        """Check if worker's terminal shows an idle/suggested prompt."""
-        return DirectiveExecutor.has_idle_prompt(worker)
-
-    @staticmethod
-    def _has_operator_text_at_prompt(worker: Worker) -> bool:
-        """Check if worker has operator-typed text at a prompt."""
-        return DirectiveExecutor.has_operator_text_at_prompt(worker)
-
     async def _execute_directives(
         self, directives: list[dict[str, Any]], confidence: float = 0.0
     ) -> bool:
@@ -1001,12 +883,6 @@ class DronePilot(EventEmitter):
     async def _oversight_cycle(self) -> bool:
         """Run oversight signal detection and Queen evaluation."""
         return await self._oversight_handler.oversight_cycle()
-
-    # --- Delegate to CoordinationHandler ---
-
-    def _capture_worker_outputs(self) -> dict[str, str]:
-        """Capture worker output for coordination."""
-        return self._coordination.capture_worker_outputs()
 
     # --- Lifecycle / event registration ---
 
@@ -1068,11 +944,6 @@ class DronePilot(EventEmitter):
         self.enabled = True
         self._dispatcher.start()
 
-    @staticmethod
-    def _on_loop_done(task: asyncio.Task) -> None:
-        """Log when the poll loop task finishes unexpectedly."""
-        PollDispatcher._on_loop_done(task)
-
     def stop(self) -> None:
         """Fully stop the pilot — kills the poll loop."""
         self.enabled = False
@@ -1094,17 +965,9 @@ class DronePilot(EventEmitter):
         """Remove dead workers from tracking and unassign their tasks."""
         self._dispatcher._cleanup_dead_workers(dead_workers)
 
-    async def _run_periodic_tasks(self) -> bool:
-        """Run periodic background tasks: completions, auto-assign, coordination."""
-        return await self._dispatcher._run_periodic_tasks()
-
     async def _poll_once_locked(self) -> tuple[bool, bool]:
         """Returns (had_action, any_state_changed)."""
         return await self._dispatcher.poll_once_locked()
-
-    async def _speculate_for_idle_workers(self) -> None:
-        """Pre-load task context on RESTING workers with matching pending tasks."""
-        await self._dispatcher._speculate_for_idle_workers()
 
     def _compute_backoff(self) -> float:
         """Compute poll interval based on worker states and idle streak."""
