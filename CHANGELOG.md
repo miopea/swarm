@@ -10,6 +10,50 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.25] - 2026-05-25
+
+### Features
+
+- **New focused unit tests for three core modules.** Added
+  `tests/test_oversight_handler.py` (14 tests) covering the
+  signal-to-intervention dispatch in `swarm.drones.oversight_handler`
+  — guard clauses, park-proposal emission, rate-limited evaluation,
+  operator-engagement skip, redirect message sanitisation;
+  `tests/test_state_tracker.py` (37 tests) covering
+  `WorkerStateTracker` public surface plus the small private helpers
+  the pilot loop depends on (`_build_safe_pattern`, content
+  fingerprinting, idle counter, rate-limit debounce, diminishing
+  returns, context-pressure thresholds, dead-worker cleanup); and
+  `tests/test_queen_tools.py` (55 tests) covering every Queen MCP
+  tool — permission gates for non-Queen callers, validation errors
+  for missing required args, audit-reason gates, and happy-path
+  side-effects on the daemon mock. The three modules were previously
+  exercised only indirectly through integration tests; these add
+  unit-level coverage that pins behaviour without spinning up a
+  daemon.
+
+### Changes
+
+- **SSE keepalive poll loosened from 0.5 s to 5.0 s
+  (`src/swarm/mcp/server.py`).** Each long-lived MCP client opened a
+  `while True` loop that woke twice per second just to check whether
+  the underlying transport had closed. Disconnect detection isn't
+  user-visible — broadcast notifications fire on the broadcast call,
+  not the poll tick — so the tighter cadence was pure idle CPU. With
+  a typical operator running ~5–10 Claude Code sessions concurrently,
+  this drops ~10–20 unnecessary wakeups per second per daemon.
+- **Dropped a stale `# type: ignore[name-defined]` in
+  `src/swarm/drones/pilot.py:53`.** The comment was attached to a
+  function definition; the `Any` typevar it referenced is imported at
+  module top, so the suppression silenced an error that couldn't
+  occur. Removed.
+- **De-duplicated repeated `asyncio.get_event_loop().time()` reads in
+  `src/swarm/tunnel.py:121-123`.** Three calls in three lines became
+  one local-variable assignment, both for clarity and to avoid the
+  per-call hash-lookup into the loop registry.
+
+### Fixes
+
 ## [2026.5.23.2] - 2026-05-23
 
 ### Features

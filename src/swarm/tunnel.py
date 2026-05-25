@@ -118,9 +118,10 @@ class TunnelManager:
             raise RuntimeError("tunnel process not started or stderr unavailable")
 
         try:
-            deadline = asyncio.get_event_loop().time() + timeout
-            while asyncio.get_event_loop().time() < deadline:
-                remaining = deadline - asyncio.get_event_loop().time()
+            loop = asyncio.get_event_loop()
+            deadline = loop.time() + timeout
+            while loop.time() < deadline:
+                remaining = deadline - loop.time()
                 try:
                     line_bytes = await asyncio.wait_for(
                         self._process.stderr.readline(),

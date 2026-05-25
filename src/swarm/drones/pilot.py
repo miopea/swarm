@@ -50,7 +50,7 @@ if TYPE_CHECKING:
 _log = get_logger("drones.pilot")
 
 
-async def _noop_sender(name: str, message: str, **kwargs: Any) -> None:  # type: ignore[name-defined]
+async def _noop_sender(name: str, message: str, **kwargs: Any) -> None:
     """Placeholder send-to-worker used before the daemon wires the real one.
 
     Runs the idle_watcher's machinery (debounce, filter, log entry) during

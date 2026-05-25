@@ -54,9 +54,11 @@ def get_worker_last_mcp_activity(worker_name: str) -> float | None:
 
 
 # How often the streamable SSE handler polls its transport for disconnect.
-# Small enough that broadcast-while-connected tests complete quickly;
-# large enough that healthy long-lived connections aren't churning CPU.
-_SSE_KEEPALIVE_POLL = 0.5
+# Disconnect-detection latency is not user-visible (the stream is server→client
+# push only; broadcast notifications fire on the broadcast call, not the tick),
+# so this can be coarse. Tests that need a tighter cadence override the module
+# constant via monkeypatch.
+_SSE_KEEPALIVE_POLL = 5.0
 
 
 def register(app: web.Application) -> None:
