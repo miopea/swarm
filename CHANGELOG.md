@@ -10,6 +10,50 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.25.11] - 2026-05-25
+
+### Features
+
+- **New test file `tests/test_runtime.py` (22 tests).** Covers
+  `swarm.queen.runtime` — Queen CLAUDE.md reconcile + sync CLI entry
+  + small support functions. The reconcile decision matrix
+  (SEEDED / MARKER_SEEDED / NO_OP / AUTO_UPDATED / DRIFT_FLAGGED) is
+  now unit-pinned with `tmp_path` filesystem fixtures rather than
+  relying on integration coverage. Pins:
+  - `ClaudeMdReconcileResult` — equality semantics, repr, default
+    details, `NotImplemented` on cross-type comparison.
+  - `reconcile_queen_claude_md` — fresh seed (creates workdir +
+    target + marker), marker-seed-from-disk for pre-existing files
+    upgraded from a swarm version without the marker, no-op when
+    shipped unchanged, auto-update when shipped changed with no
+    local edits, drift-flagged with both diff-ref files when both
+    shipped and on-disk diverged.
+  - `_ensure_queen_claude_md` — confirms back-compat alias still
+    returns the same shape.
+  - `sync_queen_claude_md` — `accept-shipped` replaces on-disk +
+    clears drift artifacts; `keep-local` updates marker only and
+    preserves on-disk; unknown mode raises `ValueError`; missing
+    workdir auto-created.
+  - `queen_worker_config` — uses `QUEEN_WORKER_NAME` + `QUEEN_WORK_DIR`,
+    falls back to `"claude"` when `config.provider` is None.
+  - `find_queen` — None on no-queen list, returns the queen Worker
+    when present, returns the first queen when multiple (pins
+    deterministic behaviour).
+
+  The PTY spawn path (`ensure_queen_running`) is left to integration
+  coverage in `test_queen.py` / `test_fresh_install_queen.py` — it
+  needs a real pool + worker manager and is more integration than
+  unit. Audit-flagged gap for `state_publisher.py`, `mcp/server.py`,
+  and `queen/contribute.py` were checked too; the first was filled
+  in 2026.5.25.10, the other two already have comprehensive coverage
+  (17 tests in `tests/test_mcp_server.py`, 8 test classes in
+  `tests/test_queen_claude_md_contribute.py`) that the original audit
+  Agent 2 missed. Net: only one real gap remained, now filled.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.25.10] - 2026-05-25
 
 ### Features
