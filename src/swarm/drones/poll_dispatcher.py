@@ -322,7 +322,7 @@ class PollDispatcher:
             if proc.is_user_active:
                 continue
             # Guard: skip if worker was recently rate-limited
-            rl_time = p._state_tracker._rate_limit_seen.get(worker.name, 0)
+            rl_time = p._state_tracker._detectors.rate_limit.last_seen(worker.name)
             if rl_time and (time.time() - rl_time) < 300:
                 continue
             # Guard: only speculate tasks targeted at this specific worker

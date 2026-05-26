@@ -10,6 +10,33 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.26.2] - 2026-05-26
+
+### Features
+
+### Changes
+
+- **WorkerStateTracker refactor — Phase 1**: extract per-worker health
+  detectors into `swarm.drones.detectors/`. Three detectors moved out
+  of `state_tracker.py` (which shrunk from 856 → 751 lines, 30 → 27
+  methods) and into their own modules with isolated tests:
+  - `ContextFileTracker` — records BUZZING workers' touched paths
+    for revive context restoration.
+  - `DiminishingReturnsDetector` — escalates BUZZING workers whose
+    token growth stalls.
+  - `RateLimitDetector` — spots provider rate-limit messages in PTY
+    output and emits a `rate_limit` event (60s debounce).
+  - New `WorkerHealthDetectors` dataclass bundles the three for a
+    single `detectors=` param on `WorkerStateTracker.__init__`.
+  - Tests for each detector moved to `tests/drones/detectors/` and
+    no longer carry the WorkerStateTracker fixture overhead. Net
+    test count: +2 (new edge cases for the extracted contracts).
+  - No behavior change. Phases 2 (`ContextRecoveryDetector`) and 3
+    (`ContextPressureCheck`) ship separately per the spec at
+    `docs/specs/state-tracker-refactor.md`.
+
+### Fixes
+
 ## [2026.5.26] - 2026-05-26
 
 ### Features

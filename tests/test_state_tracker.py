@@ -16,6 +16,12 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from swarm.config import DroneConfig
+from swarm.drones.detectors import (
+    ContextFileTracker,
+    DiminishingReturnsDetector,
+    RateLimitDetector,
+    WorkerHealthDetectors,
+)
 from swarm.drones.log import DroneLog
 from swarm.drones.state_tracker import (
     WorkerStateTracker,
@@ -56,6 +62,11 @@ def _make_tracker(
         prov.get_choice_summary.return_value = ""
         return prov
 
+    detectors = WorkerHealthDetectors(
+        context_files=ContextFileTracker(),
+        diminishing=DiminishingReturnsDetector(log=log, emit=emit),
+        rate_limit=RateLimitDetector(log=log, emit=emit),
+    )
     tracker = WorkerStateTracker(
         workers=workers,
         log=log,
@@ -71,6 +82,7 @@ def _make_tracker(
         suspended_at=suspended_at if suspended_at is not None else {},
         focused_workers=set(),
         revive_history={},
+        detectors=detectors,
     )
     return tracker, emit
 
@@ -225,55 +237,6 @@ class TestShouldThrottleSleeping:
         assert tracker._should_throttle_sleeping(worker) is False
 
 
-class TestRateLimitDebounce:
-    """``_check_rate_limit`` debounces 60s to avoid spamming the log."""
-
-    def test_no_match_does_nothing(self) -> None:
-        tracker, emit = _make_tracker()
-        worker = _make_worker("w1")
-        tracker._check_rate_limit(worker, "normal output without limit")
-        emit.assert_not_called()
-        assert "w1" not in tracker._rate_limit_seen
-
-    def test_match_emits_and_records(self) -> None:
-        tracker, emit = _make_tracker()
-        worker = _make_worker("w1")
-        # _RE_RATE_LIMIT lives in providers.claude; use its literal phrase.
-        content = "You've hit your 5-hour limit. Please wait until 3pm."
-        tracker._check_rate_limit(worker, content)
-        # Should have fired once.
-        calls = [c for c in emit.call_args_list if c.args and c.args[0] == "rate_limit"]
-        assert len(calls) == 1
-        assert "w1" in tracker._rate_limit_seen
-
-    def test_debounce_suppresses_second_match(self) -> None:
-        tracker, emit = _make_tracker()
-        worker = _make_worker("w1")
-        content = "You've hit your 5-hour limit. Try again at 3pm."
-        tracker._check_rate_limit(worker, content)
-        emit.reset_mock()
-        # Immediate second call within debounce → no new emit.
-        tracker._check_rate_limit(worker, content)
-        rate_calls = [c for c in emit.call_args_list if c.args and c.args[0] == "rate_limit"]
-        assert rate_calls == []
-
-
-class TestContextFileTracking:
-    def test_appends_unique_paths_capped(self) -> None:
-        tracker, _ = _make_tracker()
-        worker = _make_worker("w1", state=WorkerState.BUZZING)
-        content = "\n".join(f"Read('/tmp/file{i}')" for i in range(15))
-        tracker._track_context_files(worker, content)
-        # _MAX_CONTEXT_FILES is 10
-        assert len(worker.last_context_files) <= 10
-
-    def test_skipped_when_not_buzzing(self) -> None:
-        tracker, _ = _make_tracker()
-        worker = _make_worker("w1", state=WorkerState.RESTING)
-        tracker._track_context_files(worker, "Read('/tmp/a')")
-        assert worker.last_context_files == []
-
-
 class TestContextErrorRecoveryCounter:
     def test_recovery_counter_resets_on_non_buzzing(self) -> None:
         tracker, _ = _make_tracker()
@@ -288,43 +251,6 @@ class TestContextErrorRecoveryCounter:
         worker.recovery_attempts = 0
         tracker._check_context_error(worker, "ordinary output, no error here")
         assert worker.recovery_attempts == 0
-
-
-class TestDiminishingReturns:
-    def test_no_baseline_seeds_prev_tokens(self) -> None:
-        tracker, emit = _make_tracker()
-        worker = _make_worker("w1", state=WorkerState.BUZZING)
-        worker.usage.last_turn_input_tokens = 1000
-        tracker._check_diminishing_returns(worker)
-        assert worker._prev_input_tokens == 1000
-        # No escalation on first observation.
-        emit.assert_not_called()
-
-    def test_resets_streak_on_state_change(self) -> None:
-        tracker, _ = _make_tracker()
-        worker = _make_worker("w1", state=WorkerState.RESTING)
-        worker._low_delta_streak = 2
-        tracker._check_diminishing_returns(worker)
-        assert worker._low_delta_streak == 0
-
-    def test_low_delta_increments_streak(self) -> None:
-        tracker, _ = _make_tracker()
-        worker = _make_worker("w1", state=WorkerState.BUZZING)
-        worker._prev_input_tokens = 1000
-        worker.usage.last_turn_input_tokens = 1100  # delta 100, below threshold
-        worker.process = None  # skip subagent check
-        tracker._check_diminishing_returns(worker)
-        assert worker._low_delta_streak == 1
-
-    def test_stationary_value_is_ignored(self) -> None:
-        # Same value across polls = same turn still in progress, not no-progress.
-        tracker, emit = _make_tracker()
-        worker = _make_worker("w1", state=WorkerState.BUZZING)
-        worker._prev_input_tokens = 5000
-        worker.usage.last_turn_input_tokens = 5000
-        tracker._check_diminishing_returns(worker)
-        assert worker._low_delta_streak == 0
-        emit.assert_not_called()
 
 
 class TestContextPressure:

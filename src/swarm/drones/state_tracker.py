@@ -1,4 +1,11 @@
-"""WorkerStateTracker — worker state classification, tracking, and polling."""
+"""WorkerStateTracker — worker state classification, tracking, and polling.
+
+Per-worker health detectors (context files, diminishing returns, rate
+limits) live in :mod:`swarm.drones.detectors` and are passed in via
+:class:`~swarm.drones.detectors.WorkerHealthDetectors`.  See
+``docs/specs/state-tracker-refactor.md`` for the staged extraction
+plan.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +25,7 @@ if TYPE_CHECKING:
 
     from swarm.config import DroneConfig
     from swarm.drones.decision_executor import DecisionExecutor
+    from swarm.drones.detectors import WorkerHealthDetectors
     from swarm.drones.log import DroneLog
     from swarm.providers import LLMProvider
     from swarm.providers.styled import StyledContent
@@ -101,6 +109,7 @@ class WorkerStateTracker:
         suspended_at: dict[str, float],
         focused_workers: set[str],
         revive_history: dict[str, list[float]],
+        detectors: WorkerHealthDetectors,
     ) -> None:
         self.workers = workers
         self.log = log
@@ -116,11 +125,10 @@ class WorkerStateTracker:
         self._suspended_at = suspended_at
         self._focused_workers = focused_workers
         self._revive_history = revive_history
+        self._detectors = detectors
         # Content fingerprinting: hash of last 5 lines to detect unchanged output
         self._content_fingerprints: dict[str, int] = {}
         self._unchanged_streak: dict[str, int] = {}
-        # Rate limit detection debounce (worker → last alert time)
-        self._rate_limit_seen: dict[str, float] = {}
         # Suspension safety-net poll interval
         self._suspend_safety_interval: float = 60.0
         # Per-worker last full-poll timestamp (for sleeping worker throttling)
@@ -432,10 +440,6 @@ class WorkerStateTracker:
             self._unchanged_streak[name] = 0
         self._content_fingerprints[name] = fp
 
-    # -- Diminishing returns detection --
-    _DIMINISHING_DELTA = 500  # tokens — below this is "no progress"
-    _DIMINISHING_STREAK = 3  # consecutive low-delta polls before escalation
-
     # -- Task #236: stuck-BUZZING safety net --
     # Conservative floor — the operator observed workers stuck BUZZING
     # for 90+ minutes post-deploy. 10 minutes is long enough to avoid
@@ -466,83 +470,6 @@ class WorkerStateTracker:
         if _RE_SUBAGENT_ACTIVE.search(tail):
             return True
         return False
-
-    def _check_diminishing_returns(self, worker: Worker) -> None:
-        """Detect BUZZING workers with stalling token growth and escalate."""
-        if worker.state != WorkerState.BUZZING:
-            # Reset streak on state change
-            if worker._low_delta_streak > 0:
-                worker._low_delta_streak = 0
-            return
-
-        current = worker.usage.last_turn_input_tokens
-        prev = worker._prev_input_tokens
-
-        # Need a baseline before we can compute deltas
-        if prev == 0 or current == 0:
-            worker._prev_input_tokens = current
-            return
-
-        # Only evaluate delta on a new turn — last_turn_input_tokens only
-        # changes when a new assistant message is written to the session
-        # JSONL. Polls run faster than turns (seconds vs tens of seconds),
-        # so a stationary value means "same turn still in progress", not
-        # "no progress". Treat it as an indeterminate poll and skip.
-        if current == prev:
-            return
-
-        worker._prev_input_tokens = current
-        delta = current - prev
-        if delta < self._DIMINISHING_DELTA:
-            # Skip if sub-agent is active (parent idle while child works)
-            proc = worker.process
-            if proc:
-                tail = proc.get_content(10)
-                from swarm.providers.claude import _RE_SUBAGENT_ACTIVE
-
-                if _RE_SUBAGENT_ACTIVE.search(tail):
-                    worker._low_delta_streak = 0
-                    return
-            worker._low_delta_streak += 1
-        else:
-            worker._low_delta_streak = 0
-
-        if worker._low_delta_streak >= self._DIMINISHING_STREAK:
-            worker._low_delta_streak = 0  # reset to avoid spam
-            from swarm.drones.log import LogCategory, SystemAction
-
-            self.log.add(
-                SystemAction.QUEEN_BLOCKED,
-                worker.name,
-                f"diminishing returns — {self._DIMINISHING_STREAK} consecutive"
-                f" low-delta turns (delta={delta} tokens)",
-                category=LogCategory.DRONE,
-            )
-            self._emit(
-                "escalate", worker, "diminishing returns — context growing but output stalled"
-            )
-
-    # -- Context restoration: track files seen during BUZZING --
-    _RE_FILE_PATH = re.compile(
-        r"(?:Read|Edit|Write|Glob|Grep)\s*\(?['\"]?(/\S+?)(?:['\")]|\)|\s|$)"
-    )
-    _MAX_CONTEXT_FILES = 10
-
-    def _track_context_files(self, worker: Worker, content: str) -> None:
-        """Extract file paths from output and store for context restoration."""
-        if worker.state != WorkerState.BUZZING:
-            return
-        # Cap regex scan work: large outputs can match hundreds of paths,
-        # and we only keep _MAX_CONTEXT_FILES in the worker's list anyway.
-        _scan_cap = self._MAX_CONTEXT_FILES * 4
-        for i, m in enumerate(self._RE_FILE_PATH.finditer(content)):
-            if i >= _scan_cap:
-                break
-            path = m.group(1).rstrip(".,;:)")
-            if path not in worker.last_context_files:
-                worker.last_context_files.append(path)
-                if len(worker.last_context_files) > self._MAX_CONTEXT_FILES:
-                    worker.last_context_files.pop(0)
 
     # -- Tiered context recovery --
     # Tightened from ``"context window"`` — that bare phrase was too loose
@@ -610,36 +537,6 @@ class WorkerStateTracker:
             )
             self._emit("escalate", worker, "context recovery failed after 2 attempts")
             worker.recovery_attempts = 0
-
-    def _check_rate_limit(self, worker: Worker, content: str) -> None:
-        """Detect rate limit messages in worker output and log structured info."""
-        from swarm.providers.claude import _RE_RATE_LIMIT
-
-        m = _RE_RATE_LIMIT.search(content)
-        if not m:
-            return
-        # Debounce: don't spam for the same worker within 60s
-        now = time.time()
-        last = self._rate_limit_seen.get(worker.name, 0.0)
-        if now - last < 60:
-            return
-        self._rate_limit_seen[worker.name] = now
-        # Extract the matching line for context
-        line_start = content.rfind("\n", 0, m.start()) + 1
-        line_end = content.find("\n", m.end())
-        if line_end == -1:
-            line_end = len(content)
-        msg = content[line_start:line_end].strip()[:120]
-        from swarm.drones.log import LogCategory, SystemAction
-
-        self.log.add(
-            SystemAction.QUEEN_BLOCKED,
-            worker.name,
-            f"rate limit: {msg}",
-            category=LogCategory.WORKER,
-            is_notification=True,
-        )
-        self._emit("rate_limit", worker, msg)
 
     def _check_context_pressure(self, worker: Worker) -> None:
         """Warn or inject /compact when context fill exceeds thresholds."""
@@ -807,20 +704,16 @@ class WorkerStateTracker:
 
         self._prev_states[worker.name] = worker.state
 
-        # Track file paths for context restoration on revive
-        self._track_context_files(worker, content)
-
-        # Diminishing returns: detect stuck BUZZING workers burning tokens
-        self._check_diminishing_returns(worker)
-
-        # Proactive compaction: warn or inject /compact at context thresholds
+        # Per-worker health detectors (Phase 1 of state-tracker-refactor):
+        # context_files, diminishing-returns, and rate-limit are extracted
+        # into ``swarm.drones.detectors``; ``_check_context_pressure`` and
+        # ``_check_context_error`` remain inline until Phases 2 + 3 extract
+        # them too.
+        self._detectors.context_files.check(worker, content)
+        self._detectors.diminishing.check(worker)
         self._check_context_pressure(worker)
-
-        # Tiered context recovery: detect context errors and auto-recover
         self._check_context_error(worker, content)
-
-        # Rate limit detection
-        self._check_rate_limit(worker, content)
+        self._detectors.rate_limit.check(worker, content)
 
         if self._decision_executor._should_skip_decide(worker, changed, enabled):
             return had_action, transitioned, state_changed
@@ -854,3 +747,5 @@ class WorkerStateTracker:
         self._waiting_content.pop(dw.name, None)
         self._drone_continued.discard(dw.name)
         self._operator_continued.discard(dw.name)
+        # Detectors with per-worker state need their own cleanup hook.
+        self._detectors.rate_limit.forget(dw.name)

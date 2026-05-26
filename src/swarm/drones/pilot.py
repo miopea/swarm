@@ -10,6 +10,12 @@ from swarm.config import DroneConfig
 from swarm.drones.context_pressure import ContextPressureWatcher
 from swarm.drones.coordination import CoordinationHandler
 from swarm.drones.decision_executor import DecisionExecutor as _DecisionExecutor
+from swarm.drones.detectors import (
+    ContextFileTracker,
+    DiminishingReturnsDetector,
+    RateLimitDetector,
+    WorkerHealthDetectors,
+)
 from swarm.drones.directives import DirectiveExecutor
 from swarm.drones.dreamer import Dreamer
 from swarm.drones.idle_watcher import IdleWatcher
@@ -244,6 +250,15 @@ class DronePilot(EventEmitter):
             escalated=self._escalated,
             revive_history=self._revive_history,
         )
+        # Per-worker health detectors composed into the tracker (Phase 1 of
+        # the state-tracker-refactor spec). Constructed eagerly so they can
+        # be passed in via WorkerHealthDetectors; the tracker's poll loop
+        # invokes each ``check()`` in sequence.
+        self._detectors = WorkerHealthDetectors(
+            context_files=ContextFileTracker(),
+            diminishing=DiminishingReturnsDetector(log=self.log, emit=self.emit),
+            rate_limit=RateLimitDetector(log=self.log, emit=self.emit),
+        )
         self._state_tracker = WorkerStateTracker(
             workers=self.workers,
             log=self.log,
@@ -259,6 +274,7 @@ class DronePilot(EventEmitter):
             suspended_at=self._suspended_at,
             focused_workers=self._focused_workers,
             revive_history=self._revive_history,
+            detectors=self._detectors,
         )
         self._task_lifecycle = TaskLifecycle(
             workers=self.workers,
