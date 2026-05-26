@@ -471,73 +471,6 @@ class WorkerStateTracker:
             return True
         return False
 
-    # -- Tiered context recovery --
-    # Tightened from ``"context window"`` — that bare phrase was too loose
-    # (common in normal chats about LLMs). Now we require the full error
-    # strings Claude Code emits when it actually refuses a prompt for size.
-    _RE_CONTEXT_ERROR = re.compile(
-        r"prompt is too long"
-        r"|context window (?:is full|exceeded|limit reached)"
-        r"|maximum context length"
-        r"|token limit exceeded",
-        re.IGNORECASE,
-    )
-
-    def _check_context_error(self, worker: Worker, content: str) -> None:
-        """Detect context limit errors and attempt tiered recovery."""
-        if worker.state != WorkerState.BUZZING:
-            if worker.recovery_attempts > 0:
-                worker.recovery_attempts = 0
-            return
-        if not self._RE_CONTEXT_ERROR.search(content):
-            return
-        # Already compacting (either via pct-threshold or a prior tier-1)?
-        # Don't stack another /compact on top — that's how we ended up
-        # with six queued /compacts in the worker's pending-message
-        # buffer when auto mode was still processing the previous turn.
-        if worker.compacting:
-            return
-        worker.recovery_attempts += 1
-        from swarm.drones.log import LogCategory, SystemAction
-
-        if worker.recovery_attempts == 1:
-            # Tier 1: inject /compact
-            self.log.add(
-                SystemAction.QUEEN_BLOCKED,
-                worker.name,
-                "context error — tier 1 recovery: injecting /compact",
-                category=LogCategory.DRONE,
-            )
-            worker.compacting = True
-            self._decision_executor._deferred_actions.append(
-                ("compact", worker, None, worker.state, worker.process)
-            )
-        elif worker.recovery_attempts == 2:
-            # Tier 2: revive with context summary
-            self.log.add(
-                SystemAction.QUEEN_BLOCKED,
-                worker.name,
-                "context error — tier 2 recovery: reviving with context",
-                category=LogCategory.DRONE,
-            )
-            from swarm.drones.rules import Decision, DroneDecision
-
-            decision = DroneDecision(Decision.REVIVE, "context recovery tier 2")
-            self._decision_executor._deferred_actions.append(
-                ("revive", worker, decision, worker.state, worker.process)
-            )
-        else:
-            # Tier 3: escalate
-            self.log.add(
-                SystemAction.QUEEN_BLOCKED,
-                worker.name,
-                "context error — recovery failed, escalating",
-                category=LogCategory.DRONE,
-                is_notification=True,
-            )
-            self._emit("escalate", worker, "context recovery failed after 2 attempts")
-            worker.recovery_attempts = 0
-
     def _check_context_pressure(self, worker: Worker) -> None:
         """Warn or inject /compact when context fill exceeds thresholds."""
         if worker.state != WorkerState.BUZZING or worker.compacting:
@@ -704,15 +637,13 @@ class WorkerStateTracker:
 
         self._prev_states[worker.name] = worker.state
 
-        # Per-worker health detectors (Phase 1 of state-tracker-refactor):
-        # context_files, diminishing-returns, and rate-limit are extracted
-        # into ``swarm.drones.detectors``; ``_check_context_pressure`` and
-        # ``_check_context_error`` remain inline until Phases 2 + 3 extract
-        # them too.
+        # Per-worker health detectors live in ``swarm.drones.detectors``;
+        # ``_check_context_pressure`` is the last inline check pending
+        # Phase 3 of the state-tracker-refactor spec.
         self._detectors.context_files.check(worker, content)
         self._detectors.diminishing.check(worker)
         self._check_context_pressure(worker)
-        self._check_context_error(worker, content)
+        self._detectors.recovery.check(worker, content)
         self._detectors.rate_limit.check(worker, content)
 
         if self._decision_executor._should_skip_decide(worker, changed, enabled):

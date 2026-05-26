@@ -18,6 +18,7 @@ from unittest.mock import MagicMock
 from swarm.config import DroneConfig
 from swarm.drones.detectors import (
     ContextFileTracker,
+    ContextRecoveryDetector,
     DiminishingReturnsDetector,
     RateLimitDetector,
     WorkerHealthDetectors,
@@ -66,6 +67,7 @@ def _make_tracker(
         context_files=ContextFileTracker(),
         diminishing=DiminishingReturnsDetector(log=log, emit=emit),
         rate_limit=RateLimitDetector(log=log, emit=emit),
+        recovery=ContextRecoveryDetector(log=log, decision_executor=decision_executor, emit=emit),
     )
     tracker = WorkerStateTracker(
         workers=workers,
@@ -235,22 +237,6 @@ class TestShouldThrottleSleeping:
         worker.sleeping_threshold = 1.0
         tracker._last_full_poll["w1"] = time.time() - 5.0
         assert tracker._should_throttle_sleeping(worker) is False
-
-
-class TestContextErrorRecoveryCounter:
-    def test_recovery_counter_resets_on_non_buzzing(self) -> None:
-        tracker, _ = _make_tracker()
-        worker = _make_worker("w1", state=WorkerState.RESTING)
-        worker.recovery_attempts = 2
-        tracker._check_context_error(worker, "")
-        assert worker.recovery_attempts == 0
-
-    def test_no_error_pattern_no_change(self) -> None:
-        tracker, _ = _make_tracker()
-        worker = _make_worker("w1", state=WorkerState.BUZZING)
-        worker.recovery_attempts = 0
-        tracker._check_context_error(worker, "ordinary output, no error here")
-        assert worker.recovery_attempts == 0
 
 
 class TestContextPressure:

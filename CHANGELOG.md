@@ -10,6 +10,29 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.26.3] - 2026-05-26
+
+### Features
+
+### Changes
+
+- **WorkerStateTracker refactor — Phase 2**: extract
+  `ContextRecoveryDetector` (tier 1 `/compact` → tier 2 revive → tier
+  3 escalate) into `swarm.drones.detectors.context_recovery`. The
+  detector owns the `_RE_CONTEXT_ERROR` regex and walks
+  `worker.recovery_attempts` through the three tiers via deferred
+  actions on the shared `DecisionExecutor`.
+  - `state_tracker.py` shrunk 751 → 682 lines (−9%), 27 → 26 methods.
+  - `WorkerHealthDetectors` gains a `recovery` field.
+  - Pre-refactor `TestContextErrorCompactGuard` (5 regression tests
+    for the six-/compact-in-queue bug) migrated from
+    `tests/test_context_awareness.py` into the new
+    `tests/drones/detectors/test_context_recovery.py`, consolidated
+    with the smaller `TestContextErrorRecoveryCounter`.
+  - No behavior change. Phase 3 (`ContextPressureCheck`) is next.
+
+### Fixes
+
 ## [2026.5.26.2] - 2026-05-26
 
 ### Features

@@ -2,14 +2,9 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
-from swarm.config import DroneConfig
-from swarm.drones.log import DroneLog
-from swarm.drones.state_tracker import WorkerStateTracker
 from swarm.notify.bus import EventType, NotificationBus, Severity
 from swarm.worker.usage import estimate_context_usage
-from swarm.worker.worker import TokenUsage, Worker, WorkerState
+from swarm.worker.worker import TokenUsage, Worker
 
 
 class TestEstimateContextUsage:
@@ -88,102 +83,7 @@ class TestContextPressureNotification:
         assert len(received) == 1
         assert received[0].severity == Severity.URGENT
 
-
-class TestContextErrorCompactGuard:
-    """Regression tests for the six-/compact-in-queue bug.
-
-    Prior to the fix, ``_check_context_error`` would re-queue a
-    ``/compact`` deferred action on every poll while the error text
-    remained in the worker's scrollback. Once Claude Code switched
-    its native auto mode on the worker would queue up 6+ ``/compact``
-    commands in its pending-message buffer before executing any of
-    them. The guard here is ``worker.compacting`` — if a compact is
-    already in flight, skip re-queueing.
-    """
-
-    def _make_tracker(self) -> tuple[WorkerStateTracker, MagicMock]:
-        """Minimal tracker with a mocked decision_executor."""
-        tracker = WorkerStateTracker.__new__(WorkerStateTracker)
-        tracker.workers = []
-        tracker.log = DroneLog()
-        tracker.task_board = None
-        tracker.drone_config = DroneConfig()
-        tracker._get_provider = MagicMock()
-        tracker._emit = MagicMock()
-        de = MagicMock()
-        de._deferred_actions = []
-        tracker._decision_executor = de
-        tracker._rate_limit_seen = {}
-        return tracker, de
-
-    def _buzzing_worker(self, name: str = "api") -> Worker:
-        w = Worker(name=name, path="/tmp")
-        w.state = WorkerState.BUZZING
-        return w
-
-    def test_tier1_compact_sets_compacting_flag(self) -> None:
-        tracker, de = self._make_tracker()
-        w = self._buzzing_worker()
-        tracker._check_context_error(w, "Error: prompt is too long, retry later")
-        assert w.compacting is True
-        assert w.recovery_attempts == 1
-        assert len(de._deferred_actions) == 1
-        assert de._deferred_actions[0][0] == "compact"
-
-    def test_second_poll_does_not_requeue_while_compacting(self) -> None:
-        """The bug: on poll 2 (same error still in scrollback, worker
-        still BUZZING, compacting flag still True) we must NOT queue
-        another compact."""
-        tracker, de = self._make_tracker()
-        w = self._buzzing_worker()
-        tracker._check_context_error(w, "Error: prompt is too long")
-        assert len(de._deferred_actions) == 1
-
-        # Poll 2 — same conditions
-        tracker._check_context_error(w, "Error: prompt is too long")
-        assert len(de._deferred_actions) == 1  # still one, not two
-        assert w.recovery_attempts == 1  # didn't advance to 2
-
-    def test_recovery_resumes_after_compacting_clears(self) -> None:
-        """When the in-flight compact completes (``compacting = False``)
-        but the error is still showing, the tier-2 revive path should
-        still be reachable — the guard only prevents double-queue."""
-        tracker, de = self._make_tracker()
-        w = self._buzzing_worker()
-        tracker._check_context_error(w, "Error: prompt is too long")
-        w.compacting = False  # simulate PostCompact hook clearing it
-
-        tracker._check_context_error(w, "Error: prompt is too long")
-        # recovery_attempts should now advance to 2 → queues "revive"
-        assert w.recovery_attempts == 2
-        actions = [a[0] for a in de._deferred_actions]
-        assert actions == ["compact", "revive"]
-
-    def test_bare_context_window_phrase_no_longer_matches(self) -> None:
-        """``"context window"`` on its own (a common English phrase in
-        LLM chats) used to trigger tier-1 recovery. The tightened regex
-        now requires the full error shapes Claude Code actually emits."""
-        tracker, de = self._make_tracker()
-        w = self._buzzing_worker()
-        tracker._check_context_error(w, "The worker was discussing the Claude context window size")
-        assert w.compacting is False
-        assert w.recovery_attempts == 0
-        assert de._deferred_actions == []
-
-    def test_full_error_shapes_still_match(self) -> None:
-        """Make sure the tightened regex still fires on the real
-        errors: "prompt is too long", "context window exceeded",
-        "maximum context length", "token limit exceeded"."""
-        for err in (
-            "Error: prompt is too long, please retry",
-            "context window exceeded — please compact",
-            "context window is full",
-            "context window limit reached",
-            "maximum context length of 200000 tokens",
-            "token limit exceeded for this request",
-        ):
-            tracker, de = self._make_tracker()
-            w = self._buzzing_worker()
-            tracker._check_context_error(w, err)
-            assert w.compacting is True, f"regex should match: {err!r}"
-            assert len(de._deferred_actions) == 1, f"should queue compact for: {err!r}"
+    # ``TestContextErrorCompactGuard`` migrated to
+    # ``tests/drones/detectors/test_context_recovery.py`` as part of
+    # Phase 2 of ``docs/specs/state-tracker-refactor.md`` — the
+    # logic now lives in ContextRecoveryDetector.
