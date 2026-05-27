@@ -163,6 +163,9 @@ async def _fetch_latest_commit() -> dict[str, str]:
             "date": commit.get("commit", {}).get("committer", {}).get("date", ""),
         }
     except Exception:
+        # Update probe — never raise. Logged so operators diagnosing
+        # an update-check that mysteriously returns empty have a trail.
+        _log.debug("get_latest_commit failed", exc_info=True)
         return {}
 
 
@@ -345,6 +348,7 @@ def get_local_source_path() -> str | None:
             return url[len("file://") :]
         return None
     except Exception:
+        _log.debug("get_local_source_path parse failed", exc_info=True)
         return None
 
 
@@ -372,6 +376,7 @@ async def _local_head_sha() -> str:
             return ""
         return stdout.decode(errors="replace").strip()
     except Exception:
+        _log.debug("_local_head_sha failed (git missing or repo unreadable)", exc_info=True)
         return ""
 
 

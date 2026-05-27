@@ -353,7 +353,10 @@ class ConfigManager:
         # Built on first apply_update so config_appliers can import
         # FieldOutcome / _apply_dataclass_dict from this module
         # without circular-importing the registry at module load.
-        self._deps: Any = None  # type: ignore[unused-ignore]  # late-bound; see _build_deps
+        # Late-bound on first apply_update so config_appliers can import
+        # FieldOutcome / _apply_dataclass_dict from this module without
+        # circular-importing the registry at module load. See _build_deps.
+        self._deps: Any = None
 
     # --- Hot-reload ---
 

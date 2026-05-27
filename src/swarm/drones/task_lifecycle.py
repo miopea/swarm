@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, ClassVar
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
 from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
-from swarm.tasks.task import TaskStatus
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
@@ -311,16 +310,20 @@ class TaskLifecycle:
 
         now = time.time()
         proposed_any = False
+        # Snapshot once and bucket by assignee — calling ``tasks_for_worker``
+        # inside the worker loop was O(W·T) because each call re-snapshotted
+        # the full task dict under the board lock. With ~10 workers and ~100
+        # tasks running every poll cycle this dominated the lifecycle drone.
+        tasks_by_worker: dict[str, list[SwarmTask]] = {}
+        for t in self.task_board.active_tasks:
+            if t.assigned_worker:
+                tasks_by_worker.setdefault(t.assigned_worker, []).append(t)
         for worker in self.workers:
             if worker.state != WorkerState.RESTING:
                 continue
             if worker.state_duration < self._auto_complete_min_idle:
                 continue
-            active_tasks = [
-                t
-                for t in self.task_board.tasks_for_worker(worker.name)
-                if t.status in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE)
-            ]
+            active_tasks = tasks_by_worker.get(worker.name, [])
             for task in active_tasks:
                 # High-confidence "not done" verdict extends the cooldown.
                 # Queen was >=80% sure the worker hadn't finished; don't burn

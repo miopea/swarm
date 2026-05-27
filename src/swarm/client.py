@@ -178,4 +178,8 @@ class SwarmClient:
             await self.health()
             return True
         except Exception:
+            # Probe contract: False == not reachable. Logged at debug so a
+            # confused operator can trace whether the failure was a real
+            # connection error vs. health-endpoint protocol mismatch.
+            _log.debug("is_daemon_running probe failed", exc_info=True)
             return False

@@ -192,10 +192,11 @@ class IdleWatcher:
         self._last_sweep = now
 
         sent = 0
+        tasks_by_worker = self._bucket_active_tasks_by_worker()
         for worker in workers:
             if not self._should_nudge(worker, now=now):
                 continue
-            active = self._task_board.active_tasks_for_worker(worker.name)
+            active = tasks_by_worker.get(worker.name, [])
             if not active:
                 continue
             # Task #250: worker-reported blocker takes precedence over
@@ -254,6 +255,20 @@ class IdleWatcher:
             )
             sent += 1
         return sent
+
+    def _bucket_active_tasks_by_worker(self) -> dict[str, list]:
+        """Snapshot the board's active tasks once and group by assignee.
+
+        Calling ``active_tasks_for_worker`` inside the sweep loop was O(W·T) —
+        each call re-snapshotted the full task dict under the board lock.
+        One pass over ``active_tasks`` plus dict lookups in the loop drops
+        that to O(T) regardless of worker count.
+        """
+        bucketed: dict[str, list] = {}
+        for t in self._task_board.active_tasks:
+            if t.assigned_worker:
+                bucketed.setdefault(t.assigned_worker, []).append(t)
+        return bucketed
 
     def _should_nudge(self, worker: Worker, *, now: float) -> bool:
         """Cheap filters applied BEFORE we look at the task board."""

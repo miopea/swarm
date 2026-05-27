@@ -82,6 +82,14 @@ class PlaybookConsolidator:
                     pb.body, scope=pb.scope, exclude_name=pb.name
                 )
             except Exception:
+                # Best-effort sweep — one bad row shouldn't poison the
+                # remaining merges, but it must be visible in logs so the
+                # operator can investigate index corruption / store bugs.
+                _log.warning(
+                    "consolidation: find_near_duplicate failed for %s",
+                    pb.name,
+                    exc_info=True,
+                )
                 continue
             if (
                 other is None

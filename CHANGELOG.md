@@ -10,6 +10,59 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.27.6] - 2026-05-27
+
+### Features
+
+### Changes
+
+- **Audit remediation — code quality, observability, perf, and test coverage.**
+  Closes the actionable findings from the full-project `/audit-code` sweep
+  (zero TODOs, zero `pytest.mark.skip`, only 1 `# type: ignore` in the
+  tree, async I/O clean — these were the headline confirms).
+  - **N+1 fixes** in two drone sweeps: `_check_task_completions`
+    (`drones/task_lifecycle.py`) and `IdleWatcher.sweep`
+    (`drones/idle_watcher.py`) snapshot the board's active tasks once
+    and bucket by `assigned_worker` instead of calling
+    `tasks_for_worker` / `active_tasks_for_worker` once per worker.
+    Drops the per-sweep work from O(W·T) → O(T).
+  - **Observability — silent-swallow logging.**
+    `playbooks/consolidator.py:84`, `cli.py:1800` (pool-disconnect),
+    `update.py:165/347/374` (GitHub-commit parse, source-path parse,
+    `git rev-parse` failure), and `client.py:180`
+    (`is_daemon_running` probe) gained `_log.debug` /
+    `_log.warning` with `exc_info=True` so an operator
+    diagnosing flaky updates / restarts can find the cause in the
+    log instead of staring at a sentinel return value.
+  - **Config validation no longer recompiles regexes.**
+    `DroneApprovalRule.__post_init__` now captures the
+    `re.error` message on `compile_error` instead of dropping it;
+    `_validate_approval_rules` reads `compile_error` instead of running
+    `re.compile` a second time at validate-time.
+  - **Stale `# type: ignore[unused-ignore]`** in
+    `server/config_manager.py:356` removed (mypy was already
+    reporting the ignore as dead).
+  - **New tests**: `tests/test_db_migrate.py` (10 tests covering
+    `auto_migrate` over tasks.json / proposals.json / task_history.jsonl
+    — happy path, corrupt JSON, idempotent re-run, FK-cascade behavior,
+    pre-v9 status vocabulary translation — was 0% covered before this);
+    `tests/test_reverse_proxy.py` (17 tests covering Caddy install /
+    Caddyfile write / reload / setup pipeline / status — was 0%
+    covered before this, sat in the operator-facing reverse-proxy
+    setup path with no regression net).
+  - **Mock-board test helpers** in `tests/test_blockers.py`,
+    `tests/test_idle_watcher.py`, `tests/test_mcp_tools_stale_recovery.py`
+    updated to expose `active_tasks` + per-task `assigned_worker`
+    so they round-trip through the new bucketing path.
+  - Deferred (logged for follow-up, not in this commit): large
+    refactors of `SwarmDaemon` (god object, 2085 LOC / 62 public
+    methods), `mcp/tools.py` and `mcp/queen_tools.py` monoliths
+    (~1700–2000 LOC each), `pty/holder.py` SRP split, and a TypedDict
+    pass over MCP handler returns. These are risky / multi-day
+    refactors that warrant their own focused tasks.
+
+### Fixes
+
 ## [2026.5.27.5] - 2026-05-27
 
 ### Features

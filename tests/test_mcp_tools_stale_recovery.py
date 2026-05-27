@@ -61,7 +61,15 @@ def _board(tasks_by_worker: dict[str, list[MagicMock]]) -> MagicMock:
         return tasks_by_worker.get(name, [])
 
     b.active_tasks_for_worker = MagicMock(side_effect=active)
-    b.all_tasks = [t for tasks in tasks_by_worker.values() for t in tasks]
+    # IdleWatcher.sweep snapshots ``active_tasks`` once and buckets by
+    # ``assigned_worker`` — give the mock board both shapes.
+    flat: list[MagicMock] = []
+    for name, tasks in tasks_by_worker.items():
+        for t in tasks:
+            t.assigned_worker = name
+            flat.append(t)
+    b.active_tasks = flat
+    b.all_tasks = flat
     return b
 
 
@@ -467,17 +475,16 @@ class TestMCPRefreshFollowupNudge:
         daemon_start = 1_000.0
         mcp_lookup = MagicMock(return_value=None)
         task = _task(312, "t-312")
-        active_calls = {"n": 0}
+        task.assigned_worker = "d365-solutions"
 
-        # Sweep 1 (warning shot) and sweep 2 (/mcp probe) both see the
-        # task; the third call (the post-/mcp follow-up re-query) sees an
-        # empty list — the task completed while /mcp was dismissing.
-        def active(name: str):
-            active_calls["n"] += 1
-            return [task] if active_calls["n"] <= 2 else []
-
+        # Sweep 1 (warning shot) and sweep 2 (/mcp probe) both see the task
+        # via the bucketing snapshot of ``active_tasks``. The post-/mcp
+        # follow-up re-queries via ``active_tasks_for_worker`` — we return
+        # ``[]`` there to model the task completing while /mcp was
+        # dismissing, which is what this test exercises.
         board = MagicMock()
-        board.active_tasks_for_worker = MagicMock(side_effect=active)
+        board.active_tasks = [task]
+        board.active_tasks_for_worker = MagicMock(return_value=[])
         board.all_tasks = [task]
 
         drone_log = _log()

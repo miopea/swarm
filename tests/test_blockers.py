@@ -124,7 +124,17 @@ def _task_board(tasks_by_worker: dict[str, list[MagicMock]], *, all_tasks=None) 
         return tasks_by_worker.get(name, [])
 
     b.active_tasks_for_worker = MagicMock(side_effect=active)
-    b.all_tasks = all_tasks or [t for tasks in tasks_by_worker.values() for t in tasks]
+    # IdleWatcher.sweep now snapshots ``active_tasks`` once and buckets by
+    # ``assigned_worker`` (perf fix to avoid O(W·T) per-worker scans), so
+    # the mock needs to expose both the flat list AND the assignee on
+    # each mock task.
+    flat: list[MagicMock] = []
+    for name, tasks in tasks_by_worker.items():
+        for t in tasks:
+            t.assigned_worker = name
+            flat.append(t)
+    b.active_tasks = flat
+    b.all_tasks = all_tasks or flat
     return b
 
 

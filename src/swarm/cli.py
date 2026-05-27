@@ -11,7 +11,9 @@ from typing import TYPE_CHECKING, Any
 import click
 
 from swarm.config import HiveConfig, load_config
-from swarm.logging import setup_logging, setup_logging_from_cli
+from swarm.logging import get_logger, setup_logging, setup_logging_from_cli
+
+_log = get_logger("cli")
 
 _log_cli = __import__("logging").getLogger("swarm.cli")
 
@@ -1799,7 +1801,9 @@ def holder_restart_cmd(socket_path: str | None, timeout: float) -> None:
             try:
                 await pool.disconnect()
             except Exception:
-                pass
+                # Cleanup phase — never raise. Logged so an operator
+                # diagnosing a flaky restart can still see the cause.
+                _log.debug("pool disconnect failed during restart", exc_info=True)
 
     ok = asyncio.run(_run())
     if ok:

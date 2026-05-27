@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -251,10 +250,13 @@ def _validate_approval_rules(config: HiveConfig) -> list[str]:
     """Validate drone approval rule regex patterns and action values."""
     errors: list[str] = []
     for i, rule in enumerate(config.drones.approval_rules):
-        try:
-            re.compile(rule.pattern)
-        except re.error as exc:
-            errors.append(f"drones.approval_rules[{i}]: invalid regex '{rule.pattern}': {exc}")
+        # ``DroneApprovalRule.__post_init__`` already compiled the pattern
+        # and stashed any ``re.error`` on the dataclass — read it instead
+        # of recompiling.
+        if rule.compile_error is not None:
+            errors.append(
+                f"drones.approval_rules[{i}]: invalid regex '{rule.pattern}': {rule.compile_error}"
+            )
         if rule.action not in ("approve", "escalate"):
             errors.append(
                 f"drones.approval_rules[{i}]: action must be 'approve' or 'escalate', "
