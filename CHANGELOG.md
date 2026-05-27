@@ -10,6 +10,51 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.27] - 2026-05-27
+
+### Features
+
+### Changes
+
+- **SwarmDaemon refactor — Phase 1 + partial Phase 2 (audit
+  finding #1)**: shrink the daemon module by extracting three
+  cohesive concerns into focused sibling modules.
+  - **`swarm.server.runner`** (NEW, 747 lines): all entry-point code
+    (`run_daemon`, `run_test_daemon`, `_print_banner`,
+    `_print_test_banner`, `_wire_test_console`, `_acquire_daemon_lock`
+    + lock helpers, `_exec_restart` + restart helpers, `console_log`).
+    Daemon re-exports these names for one release so external
+    callers (cli, web routes, MCP) don't churn.
+  - **`swarm.server.invariants`** (NEW, 137 lines): the four
+    invariant-reconciliation methods (`working_workers`,
+    `blocked_task_ids`, `reconcile_active_per_worker`, `run(reason)`)
+    moved into `InvariantReconciler`. Daemon keeps the
+    `_working_workers`/`_blocked_task_ids`/`_run_invariant_reconciliation`
+    method names as thin shims for tests + #405 state-change paths.
+  - **`swarm.server.playbook_ops`** (NEW, 246 lines): the five
+    playbook-glue methods (`fire_synthesis`, `recall_for_task`,
+    `attribute_outcome`, `log_verifier_skip`, `consolidate_learnings`)
+    moved into `PlaybookOps`. Store/synthesizer/config flow through
+    getters so tests that reassign `daemon.playbook_synthesizer`
+    post-construction still pick up the new value.
+  - **`daemon.py`**: 3392 → 2519 lines (−873, −26%). `SwarmDaemon`
+    class itself trimmed; the rest is module-level service wiring
+    that didn't belong in `daemon.py`.
+  - **Out of scope (deferred follow-up)**: the full TaskCoordinator
+    extraction (`assign_task`, `start_task`, `complete_task`,
+    `_spawn_handoff_task`, `_maybe_seed_goal`,
+    `assign_and_start_task`, `_auto_start_next_assigned`) — ~600
+    more lines that are tightly wired to every coordinator on the
+    daemon. Worth its own spec discussion and shipping cycle; the
+    extraction this release lays the runway by clearing the
+    surrounding noise.
+  - No behavior change. 4605 pytest pass (1 pre-existing flake in
+    `test_ws_auth.py::TestRateLimitLogic::test_mixed_old_and_new`
+    that passes in isolation). No new `Any` types, no new
+    `# type: ignore` markers.
+
+### Fixes
+
 ## [2026.5.26.6] - 2026-05-26
 
 ### Features

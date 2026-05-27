@@ -176,6 +176,38 @@ def daemon(monkeypatch):
         get_pilot=lambda: d.pilot,
         rebuild_graph=d._rebuild_graph,
     )
+    # InvariantReconciler + PlaybookOps — extracted Phase 1+2 of
+    # daemon-god-object-refactor.  The fixture builds via __new__ so the
+    # live __init__ wiring doesn't run; mirror it here.
+    from swarm.config import PlaybookConfig
+    from swarm.server.invariants import InvariantReconciler
+    from swarm.server.playbook_ops import PlaybookOps
+
+    if not hasattr(d, "blocker_store"):
+        d.blocker_store = None
+    d.invariants = InvariantReconciler(
+        task_board=d.task_board,
+        task_history=d.task_history,
+        drone_log=d.drone_log,
+        blocker_store=d.blocker_store,
+        get_workers=lambda: d.workers,
+    )
+    # synthesizer left None — matches pre-refactor behavior where the
+    # fixture didn't bind one and complete_task's fire path silently
+    # returned.  Tests that need an actual synth can override.
+    d.playbook_store = None
+    d.playbook_synthesizer = None
+    if not hasattr(d.config, "playbooks") or d.config.playbooks is None:
+        d.config.playbooks = PlaybookConfig()
+    d.playbook_ops = PlaybookOps(
+        get_store=lambda: d.playbook_store,
+        get_synthesizer=lambda: d.playbook_synthesizer,
+        get_config=lambda: d.config.playbooks,
+        drone_log=d.drone_log,
+        task_board=d.task_board,
+        track_task=lambda t: d._bg_tasks.add(t),
+        get_worker=lambda name: d.get_worker(name),
+    )
     d.worker_svc = WorkerService(
         broadcast_ws=d.broadcast_ws,
         drone_log=d.drone_log,
@@ -825,6 +857,38 @@ def test_task_board_on_change_broadcasts(monkeypatch):
         apply_config=d.apply_config,
         get_pilot=lambda: d.pilot,
         rebuild_graph=d._rebuild_graph,
+    )
+    # InvariantReconciler + PlaybookOps — extracted Phase 1+2 of
+    # daemon-god-object-refactor.  The fixture builds via __new__ so the
+    # live __init__ wiring doesn't run; mirror it here.
+    from swarm.config import PlaybookConfig
+    from swarm.server.invariants import InvariantReconciler
+    from swarm.server.playbook_ops import PlaybookOps
+
+    if not hasattr(d, "blocker_store"):
+        d.blocker_store = None
+    d.invariants = InvariantReconciler(
+        task_board=d.task_board,
+        task_history=d.task_history,
+        drone_log=d.drone_log,
+        blocker_store=d.blocker_store,
+        get_workers=lambda: d.workers,
+    )
+    # synthesizer left None — matches pre-refactor behavior where the
+    # fixture didn't bind one and complete_task's fire path silently
+    # returned.  Tests that need an actual synth can override.
+    d.playbook_store = None
+    d.playbook_synthesizer = None
+    if not hasattr(d.config, "playbooks") or d.config.playbooks is None:
+        d.config.playbooks = PlaybookConfig()
+    d.playbook_ops = PlaybookOps(
+        get_store=lambda: d.playbook_store,
+        get_synthesizer=lambda: d.playbook_synthesizer,
+        get_config=lambda: d.config.playbooks,
+        drone_log=d.drone_log,
+        task_board=d.task_board,
+        track_task=lambda t: d._bg_tasks.add(t),
+        get_worker=lambda name: d.get_worker(name),
     )
     d.worker_svc = WorkerService(
         broadcast_ws=d.broadcast_ws,
@@ -1600,6 +1664,38 @@ async def testbroadcast_ws_dead_client(monkeypatch):
         apply_config=d.apply_config,
         get_pilot=lambda: d.pilot,
         rebuild_graph=d._rebuild_graph,
+    )
+    # InvariantReconciler + PlaybookOps — extracted Phase 1+2 of
+    # daemon-god-object-refactor.  The fixture builds via __new__ so the
+    # live __init__ wiring doesn't run; mirror it here.
+    from swarm.config import PlaybookConfig
+    from swarm.server.invariants import InvariantReconciler
+    from swarm.server.playbook_ops import PlaybookOps
+
+    if not hasattr(d, "blocker_store"):
+        d.blocker_store = None
+    d.invariants = InvariantReconciler(
+        task_board=d.task_board,
+        task_history=d.task_history,
+        drone_log=d.drone_log,
+        blocker_store=d.blocker_store,
+        get_workers=lambda: d.workers,
+    )
+    # synthesizer left None — matches pre-refactor behavior where the
+    # fixture didn't bind one and complete_task's fire path silently
+    # returned.  Tests that need an actual synth can override.
+    d.playbook_store = None
+    d.playbook_synthesizer = None
+    if not hasattr(d.config, "playbooks") or d.config.playbooks is None:
+        d.config.playbooks = PlaybookConfig()
+    d.playbook_ops = PlaybookOps(
+        get_store=lambda: d.playbook_store,
+        get_synthesizer=lambda: d.playbook_synthesizer,
+        get_config=lambda: d.config.playbooks,
+        drone_log=d.drone_log,
+        task_board=d.task_board,
+        track_task=lambda t: d._bg_tasks.add(t),
+        get_worker=lambda name: d.get_worker(name),
     )
     d.worker_svc = WorkerService(
         broadcast_ws=d.broadcast_ws,
@@ -3459,11 +3555,11 @@ def test_daemon_lock_prevents_duplicate(tmp_path):
     """_acquire_daemon_lock should raise SystemExit when another process holds the lock."""
     import fcntl
 
-    from swarm.server.daemon import _acquire_daemon_lock
+    from swarm.server.runner import _acquire_daemon_lock
 
     # Use a temp lock file to avoid interfering with real daemon
     lock_file = tmp_path / "daemon.lock"
-    with patch("swarm.server.daemon._DAEMON_LOCK_PATH", lock_file):
+    with patch("swarm.server.runner._DAEMON_LOCK_PATH", lock_file):
         # First acquisition should succeed
         fd1 = _acquire_daemon_lock()
         assert fd1 >= 0
@@ -3492,19 +3588,19 @@ def test_daemon_lock_stale_live_holder_points_at_swarm_stop(tmp_path, monkeypatc
     """
     import os
 
-    from swarm.server import daemon as daemon_mod
+    from swarm.server import runner as runner_mod
 
     lock_file = tmp_path / "daemon.lock"
-    monkeypatch.setattr(daemon_mod, "_DAEMON_LOCK_PATH", lock_file)
+    monkeypatch.setattr(runner_mod, "_DAEMON_LOCK_PATH", lock_file)
 
     # Hold the lock from a fresh fd and write a "live" PID that _pid_alive()
     # will report as alive — this drives execution into the `else` branch.
-    fd_holder = daemon_mod._acquire_daemon_lock()
+    fd_holder = runner_mod._acquire_daemon_lock()
     # Force _pid_alive to report True so the stale-lock branch is skipped.
-    monkeypatch.setattr(daemon_mod, "_pid_alive", lambda _pid: True)
+    monkeypatch.setattr(runner_mod, "_pid_alive", lambda _pid: True)
 
     with pytest.raises(SystemExit) as exc_info:
-        daemon_mod._acquire_daemon_lock()
+        runner_mod._acquire_daemon_lock()
     msg = str(exc_info.value)
     assert "swarm stop" in msg
     assert "kill --all" not in msg

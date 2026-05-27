@@ -1709,7 +1709,7 @@ def stop(timeout: float, force: bool) -> None:
     import signal
     import time as _time
 
-    from swarm.server.daemon import _DAEMON_LOCK_PATH, _pid_alive, _read_lock_pid
+    from swarm.server.runner import _DAEMON_LOCK_PATH, _pid_alive, _read_lock_pid
 
     pid = _read_lock_pid()
     if pid is None:

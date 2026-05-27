@@ -643,7 +643,7 @@ def test_kill_no_daemon(runner, monkeypatch):
 
 def test_stop_no_lock_file(runner, tmp_path, monkeypatch):
     """stop should report cleanly when no daemon is running."""
-    monkeypatch.setattr("swarm.server.daemon._DAEMON_LOCK_PATH", tmp_path / "nonexistent.lock")
+    monkeypatch.setattr("swarm.server.runner._DAEMON_LOCK_PATH", tmp_path / "nonexistent.lock")
     result = runner.invoke(main, ["stop"])
     assert result.exit_code == 0
     assert "No swarm daemon is running" in result.output
@@ -653,8 +653,8 @@ def test_stop_stale_lock(runner, tmp_path, monkeypatch):
     """stop should clean up a lock held by a dead PID."""
     lock = tmp_path / "daemon.lock"
     lock.write_text("99999\n")  # almost certainly dead
-    monkeypatch.setattr("swarm.server.daemon._DAEMON_LOCK_PATH", lock)
-    monkeypatch.setattr("swarm.server.daemon._pid_alive", lambda _pid: False)
+    monkeypatch.setattr("swarm.server.runner._DAEMON_LOCK_PATH", lock)
+    monkeypatch.setattr("swarm.server.runner._pid_alive", lambda _pid: False)
 
     result = runner.invoke(main, ["stop"])
     assert result.exit_code == 0
@@ -666,11 +666,11 @@ def test_stop_live_daemon_graceful(runner, tmp_path, monkeypatch):
     """stop should SIGTERM the daemon PID and confirm shutdown."""
     lock = tmp_path / "daemon.lock"
     lock.write_text("42\n")
-    monkeypatch.setattr("swarm.server.daemon._DAEMON_LOCK_PATH", lock)
+    monkeypatch.setattr("swarm.server.runner._DAEMON_LOCK_PATH", lock)
 
     # First alive check: True (before SIGTERM). Subsequent checks: False (it exited).
     alive_calls = iter([True, False])
-    monkeypatch.setattr("swarm.server.daemon._pid_alive", lambda _pid: next(alive_calls))
+    monkeypatch.setattr("swarm.server.runner._pid_alive", lambda _pid: next(alive_calls))
 
     killed: list[tuple[int, int]] = []
 
@@ -691,8 +691,8 @@ def test_stop_force_flag_sigkills_immediately(runner, tmp_path, monkeypatch):
     """--force should skip SIGTERM and send SIGKILL directly."""
     lock = tmp_path / "daemon.lock"
     lock.write_text("42\n")
-    monkeypatch.setattr("swarm.server.daemon._DAEMON_LOCK_PATH", lock)
-    monkeypatch.setattr("swarm.server.daemon._pid_alive", lambda _pid: True)
+    monkeypatch.setattr("swarm.server.runner._DAEMON_LOCK_PATH", lock)
+    monkeypatch.setattr("swarm.server.runner._pid_alive", lambda _pid: True)
 
     killed: list[tuple[int, int]] = []
     monkeypatch.setattr("swarm.cli.os.kill", lambda pid, sig: killed.append((pid, sig)))
@@ -709,10 +709,10 @@ def test_stop_timeout_escalates_to_sigkill(runner, tmp_path, monkeypatch):
     """If SIGTERM doesn't take within the timeout, escalate to SIGKILL."""
     lock = tmp_path / "daemon.lock"
     lock.write_text("42\n")
-    monkeypatch.setattr("swarm.server.daemon._DAEMON_LOCK_PATH", lock)
+    monkeypatch.setattr("swarm.server.runner._DAEMON_LOCK_PATH", lock)
     # Stay "alive" through SIGTERM + timeout loop, die only after SIGKILL.
     state = {"alive": True}
-    monkeypatch.setattr("swarm.server.daemon._pid_alive", lambda _pid: state["alive"])
+    monkeypatch.setattr("swarm.server.runner._pid_alive", lambda _pid: state["alive"])
 
     killed: list[tuple[int, int]] = []
 

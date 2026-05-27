@@ -326,4 +326,41 @@ def make_daemon(
         get_pilot=lambda: d.pilot,
         emitter=d,
     )
+    # InvariantReconciler — extracted Phase 1 of daemon-god-object-refactor.
+    # The factory builds the daemon via __new__ so the live __init__ wiring
+    # doesn't run; mirror it here so daemon._working_workers() /
+    # daemon._run_invariant_reconciliation() delegations resolve.
+    from swarm.server.invariants import InvariantReconciler
+
+    d.blocker_store = None
+    d.invariants = InvariantReconciler(
+        task_board=d.task_board,
+        task_history=d.task_history,
+        drone_log=d.drone_log,
+        blocker_store=d.blocker_store,
+        get_workers=lambda: d.workers,
+    )
+    # PlaybookOps — extracted Phase 2 of daemon-god-object-refactor.
+    # Same fixture-wiring caveat: tests reaching into
+    # daemon._fire_playbook_synthesis / _recall_playbooks_for_task /
+    # _consolidate_learnings need this binding.
+    from swarm.config import PlaybookConfig
+    from swarm.server.playbook_ops import PlaybookOps
+
+    # synthesizer left None — pre-refactor the daemon fixture didn't bind
+    # one, and recall_for_task / fire_synthesis both short-circuit when
+    # store / synthesizer is absent.  Matching the old behavior keeps the
+    # 4 complete_task tests' implicit assumption (no real synth fires).
+    d.playbook_store = None
+    d.playbook_synthesizer = None
+    d.config.playbooks = PlaybookConfig()
+    d.playbook_ops = PlaybookOps(
+        get_store=lambda: d.playbook_store,
+        get_synthesizer=lambda: d.playbook_synthesizer,
+        get_config=lambda: d.config.playbooks,
+        drone_log=d.drone_log,
+        task_board=d.task_board,
+        track_task=lambda t: d._bg_tasks.add(t),
+        get_worker=lambda name: d.get_worker(name),
+    )
     return d

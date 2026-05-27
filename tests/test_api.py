@@ -228,6 +228,34 @@ def daemon(monkeypatch):
         get_pilot=lambda: d.pilot,
         emitter=d,
     )
+    # InvariantReconciler + PlaybookOps — extracted Phase 1+2 of
+    # daemon-god-object-refactor.  __new__ skips the live __init__ wiring;
+    # mirror it here so daemon delegations resolve.
+    from swarm.config import PlaybookConfig
+    from swarm.server.invariants import InvariantReconciler
+    from swarm.server.playbook_ops import PlaybookOps
+
+    d.blocker_store = None
+    d.invariants = InvariantReconciler(
+        task_board=d.task_board,
+        task_history=d.task_history,
+        drone_log=d.drone_log,
+        blocker_store=d.blocker_store,
+        get_workers=lambda: d.workers,
+    )
+    d.playbook_store = None
+    d.playbook_synthesizer = None
+    if not hasattr(d.config, "playbooks") or d.config.playbooks is None:
+        d.config.playbooks = PlaybookConfig()
+    d.playbook_ops = PlaybookOps(
+        get_store=lambda: d.playbook_store,
+        get_synthesizer=lambda: d.playbook_synthesizer,
+        get_config=lambda: d.config.playbooks,
+        drone_log=d.drone_log,
+        task_board=d.task_board,
+        track_task=lambda t: d._bg_tasks.add(t),
+        get_worker=lambda name: d.get_worker(name),
+    )
     return d
 
 
