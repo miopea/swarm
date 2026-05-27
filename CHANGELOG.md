@@ -10,6 +10,47 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.27.5] - 2026-05-27
+
+### Features
+
+### Changes
+
+- **Test coverage gap-fill — phase 3: web routes**. Close the
+  user-facing auth surface gap.
+  - **`web/routes/auth.py`** (Microsoft Graph + Jira OAuth) sat at
+    **13%** — the status/disconnect endpoints had partial coverage
+    through config-dashboard integration use, but the login /
+    callback handlers were unreached. New `tests/web/test_auth_routes.py`
+    adds 23 direct tests covering: unconfigured / error / expired
+    state / exchange-failure / happy-path for both Graph and Jira
+    OAuth flows, status JSON for connected vs unconfigured, and
+    disconnect (including the no-mgr no-op path). Tests mock the
+    request + daemon directly rather than spinning up an aiohttp
+    test app, since each handler is a thin async function over
+    `request.query` + `daemon.{graph,jira}_mgr`. Module coverage:
+    **13% → 91%**.
+  - **`web/routes/login.py`** sat at **0% coverage** (217 lines) —
+    the most painful gap on the audit shelf because a login
+    regression locks the operator out. New
+    `tests/web/test_login_routes.py` adds 14 tests for the
+    load-bearing helpers: IP-based rate-limit window
+    (`_is_login_locked` / `_record_login_failure` /
+    `_clear_login_failures` including the auto-prune on read for
+    stale failures), WebAuthn `_get_rp_id` / `_get_expected_origin`
+    derivation from `config.domain` / `request.host`, and the
+    `_passkey_store` lazy-cache. WebAuthn route handlers and the
+    integration POST flow stay out of scope — the prod path is
+    exercised via dashboard integration use and the cryptographic
+    challenge/response needs heavy mocking; the helpers cover the
+    load-bearing pieces. Module coverage: **0% → 31%**.
+  - **Coverage gate** lifted **75 → 76** to lock in the new
+    headroom; future regressions trip `/check`.
+  - **Suite metrics**: 4703 → 4740 (+37 new tests). Overall
+    coverage **75.62% → 76.11%**.
+
+### Fixes
+
 ## [2026.5.27.4] - 2026-05-27
 
 ### Features

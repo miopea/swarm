@@ -1,6 +1,6 @@
 [project]
 name = "swarm-ai"
-version = "2026.5.27.4"
+version = "2026.5.27.5"
 description = "A hive-mind for Claude Code agents — web orchestrator"
 readme = "README.md"
 license = "MIT"
@@ -70,16 +70,18 @@ filterwarnings = [
 
 # Coverage: enforce a floor so the suite catches regressions in the
 # branches that have explicit tests.  Initial gate landed at 74 to
-# match the pre-gap-fill baseline; lifted to 75 after the
-# refactor-adjacent fills (apply_llms 10%→100%, task_coordinator
-# 66%→91%) put real headroom on the gate.  Lift further as the
-# storage / route gap-fills land.
+# match the pre-gap-fill baseline; lifted across three phases:
+# 74 → 75 (refactor-adjacent fills: apply_llms 10%→100%,
+# task_coordinator 66%→91%), 75 → 76 (storage layer: buzz_store
+# 0%→99%, task_history 45%→100%; web routes: auth.py 13%→91%,
+# login.py helpers 0%→31%).  Lift further as additional route
+# coverage lands.
 [tool.coverage.run]
 source = ["src/swarm"]
 branch = false  # branch coverage is noisy on aiohttp handler dispatch
 
 [tool.coverage.report]
-fail_under = 75
+fail_under = 76
 show_missing = false
 skip_covered = false
 exclude_lines = [
