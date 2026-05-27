@@ -208,6 +208,9 @@ def daemon(monkeypatch):
         track_task=lambda t: d._bg_tasks.add(t),
         get_worker=lambda name: d.get_worker(name),
     )
+    from swarm.server.task_coordinator import TaskCoordinator
+
+    d.tasks_coord = TaskCoordinator(d)
     d.worker_svc = WorkerService(
         broadcast_ws=d.broadcast_ws,
         drone_log=d.drone_log,
@@ -890,6 +893,9 @@ def test_task_board_on_change_broadcasts(monkeypatch):
         track_task=lambda t: d._bg_tasks.add(t),
         get_worker=lambda name: d.get_worker(name),
     )
+    from swarm.server.task_coordinator import TaskCoordinator
+
+    d.tasks_coord = TaskCoordinator(d)
     d.worker_svc = WorkerService(
         broadcast_ws=d.broadcast_ws,
         drone_log=d.drone_log,
@@ -1697,6 +1703,9 @@ async def testbroadcast_ws_dead_client(monkeypatch):
         track_task=lambda t: d._bg_tasks.add(t),
         get_worker=lambda name: d.get_worker(name),
     )
+    from swarm.server.task_coordinator import TaskCoordinator
+
+    d.tasks_coord = TaskCoordinator(d)
     d.worker_svc = WorkerService(
         broadcast_ws=d.broadcast_ws,
         drone_log=d.drone_log,

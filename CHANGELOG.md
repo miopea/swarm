@@ -10,6 +10,48 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.27.2] - 2026-05-27
+
+### Features
+
+### Changes
+
+- **SwarmDaemon refactor — Phase 3 TaskCoordinator (audit finding #1
+  complete)**: extract every task-lifecycle method from the daemon
+  into a new `swarm.server.task_coordinator.TaskCoordinator` class.
+  - **Moved**: `assign_task`, `start_task`, `assign_and_start_task`,
+    `complete_task`, `_maybe_seed_goal`, `_spawn_handoff_task`,
+    `_auto_resolve_attention_for_task`, `_auto_start_next_assigned`,
+    `_check_ownership`, `_send_completion_reply`, `retry_draft_reply`.
+  - **Pattern**: back-reference to daemon (`self._d`) — same pattern
+    `TestRunner` already uses. Cleaner than threading the 15+ daemon
+    attributes (`task_board`, `task_history`, `drone_log`,
+    `notification_bus`, `jira_svc`, `graph_mgr`, `pilot`,
+    `pipeline_engine`, `playbook_ops`, `queen_chat`, `file_ownership`,
+    `send_to_worker`, `push_notification`, `_track_task`,
+    `_require_worker`, `_require_task`, `get_worker`, `broadcast_ws`,
+    `email`, …) through a dedicated dependency dataclass — would
+    obscure the wiring more than the back-reference does.
+  - **Daemon proxies preserved**: every public method
+    (`daemon.assign_task`, `daemon.complete_task`, etc.) keeps its
+    signature as a thin one-line proxy to `self.tasks_coord.X`. Zero
+    route / MCP / test churn.
+  - **Patchability**: `complete_task`'s inner calls
+    (`auto_start_next_assigned`, `auto_resolve_attention_for_task`,
+    `_send_completion_reply`) route through the daemon proxies
+    (`d.X`) rather than calling `self.X` directly, so existing tests
+    that `monkeypatch.setattr(daemon, "_send_completion_reply", …)`
+    still intercept the dispatch.
+  - **Cleanup**: 4 now-unused imports dropped from `daemon.py`
+    (`DroneAction`, `ProcessError`, `TaskAction`, `_log_task_exception`).
+  - **Metrics**: `daemon.py` 2519 → 2087 lines (−432, additional −17%
+    on top of Phase 1+2). Combined audit-#1 reduction: 3392 → 2087
+    (−1305, −38%). Audit finding #1 is now fully shipped.
+  - No behavior change. 4605 pytest pass (same pre-existing
+    `test_ws_auth` cross-test flake that passes in isolation).
+
+### Fixes
+
 ## [2026.5.27] - 2026-05-27
 
 ### Features

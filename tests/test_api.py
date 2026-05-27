@@ -256,6 +256,9 @@ def daemon(monkeypatch):
         track_task=lambda t: d._bg_tasks.add(t),
         get_worker=lambda name: d.get_worker(name),
     )
+    from swarm.server.task_coordinator import TaskCoordinator
+
+    d.tasks_coord = TaskCoordinator(d)
     return d
 
 

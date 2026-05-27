@@ -363,4 +363,10 @@ def make_daemon(
         track_task=lambda t: d._bg_tasks.add(t),
         get_worker=lambda name: d.get_worker(name),
     )
+    # TaskCoordinator — extracted Phase 3 of daemon-god-object-refactor.
+    # All task lifecycle methods (assign / start / complete / handoff /
+    # auto_start_next_assigned / …) live here; daemon keeps thin shims.
+    from swarm.server.task_coordinator import TaskCoordinator
+
+    d.tasks_coord = TaskCoordinator(d)
     return d
