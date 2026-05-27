@@ -10,6 +10,50 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.27.10] - 2026-05-27
+
+### Features
+
+### Changes
+
+- **Refactor — `mcp/queen_tools.py` split by concern (task #519).** Fourth
+  of 5 deferred refactors from #514, applying the same pattern proven
+  in #518. `queen_tools.py` was 1695 LOC and mixed the 15 Queen-only
+  MCP handler schemas + bodies + helpers + the shared `_assert_queen`
+  permission gate.
+  - Decomposed into 11 modules under `src/swarm/mcp/queen_handlers/`:
+    `_common.py` (`_assert_queen`, `_PERMISSION_DENIED`, `_clamp` —
+    used by every handler), `_views.py` (view_worker_state +
+    view_task_board), `_logs.py` (view_buzz_log + view_drone_actions),
+    `_messages.py` (view_messages + view_message_stream),
+    `_message_stream_helpers.py` (the render + structured-payload
+    helpers split off to keep `_messages.py` under the LOC budget),
+    `_threads.py` (post_thread + reply + update_thread),
+    `_thread_helpers.py` (the operator-thread + broadcast helpers
+    shared with `_learnings.py`), `_learnings.py` (query_learnings +
+    save_learning), `_workers.py` (interrupt_worker + prompt_worker),
+    `_tasks.py` (reassign_task + force_complete_task, plus the shared
+    `_fire_async` + `_resolve_task` helpers).
+  - `src/swarm/mcp/queen_tools.py` shrinks from 1695 → 58 LOC (97%
+    reduction). Now purely an aggregator that concatenates per-domain
+    `TOOLS` lists and merges `HANDLERS` dicts into `QUEEN_TOOLS` and
+    `QUEEN_HANDLERS`, re-exporting `_assert_queen`, `_clamp`,
+    `_PERMISSION_DENIED`, and `_handle_view_worker_state` for the
+    handful of tests that reach those by name.
+  - Wire protocol unchanged: 15 Queen tools carry over verbatim; the
+    `_HANDLERS.update(QUEEN_HANDLERS)` merge in `tools.py` keeps the
+    unified 29-tool registry intact.
+  - Every handler module ≤ 300 LOC; `queen_tools.py` ≤ 400 LOC.
+  - Zero test file edits — `tests/test_queen_tools.py` (which imports
+    `QUEEN_HANDLERS`, `QUEEN_TOOLS`, `_assert_queen`, `_clamp`) and
+    `tests/test_structured_content.py` (which imports
+    `_handle_view_worker_state`) keep working through the re-exports.
+  - 1 child of #514 remains: #520 (MCP TypedDict sweep). With #518 +
+    #519 done, the handler files are now small enough to type
+    per-file cleanly — #520 is the natural next step.
+
+### Fixes
+
 ## [2026.5.27.9] - 2026-05-27
 
 ### Features
