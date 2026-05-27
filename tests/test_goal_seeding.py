@@ -138,3 +138,72 @@ async def test_goal_uses_configured_max_turns(daemon):
     goals = _goal_sends(mock_send)
     assert len(goals) == 1
     assert "stop after 7 turns" in goals[0]
+
+
+# --- task #524: cross-project from-worker dispatch -----------------------
+#
+# The bug: ``_maybe_seed_goal`` did not consult the task's source_worker /
+# target_worker fields. When a cross-project task somehow landed on the
+# from-worker (the requester) rather than the to-worker (the implementer),
+# the to-worker's acceptance criteria got seeded as a ``/goal`` on the
+# from-worker — which could not satisfy them (different repo, different
+# code paths). The Stop-hook then looped indefinitely, burning tokens.
+# Concrete repro: cross-project task #523 (from=rcg-networks → to=platform)
+# burned ~$10 / 257K output tokens before the operator reassigned.
+
+
+def _cross_project_task(daemon, *, source: str, target: str, criteria: list[str]):
+    """Build a task with cross-project from→to attribution + criteria."""
+    task = daemon.create_task(title="x-project goal task", description="do it elsewhere")
+    t = daemon.task_board.get(task.id)
+    t.acceptance_criteria = list(criteria)
+    t.source_worker = source
+    t.target_worker = target
+    t.is_cross_project = True
+    return task
+
+
+async def test_goal_skipped_when_dispatch_lands_on_cross_project_from_worker(daemon):
+    """Bug repro: if the dispatch ends up on the FROM-worker of a
+    cross-project task, the to-worker's criteria must NOT be seeded as
+    /goal on the from-worker (which can't satisfy them)."""
+    # Cross-project shape: from=api (the requester), to=other-worker.
+    # Then assign + start on `api` — the bug condition.
+    task = _cross_project_task(
+        daemon,
+        source="api",
+        target="some-other-repo",
+        criteria=["other-repo's tests pass", "other-repo migration deployed"],
+    )
+    await daemon.assign_task(task.id, "api")
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
+        await daemon.start_task(task.id)
+    # No /goal sent — the guard suppressed it.
+    assert _goal_sends(mock_send) == []
+    # GOAL_SET was NOT emitted; GOAL_SKIPPED WAS, naming the cross-project context.
+    actions = [e.action for e in daemon.drone_log.entries]
+    assert SystemAction.GOAL_SET not in actions
+    assert SystemAction.GOAL_SKIPPED in actions
+
+
+async def test_goal_still_seeded_when_dispatch_lands_on_cross_project_target(daemon):
+    """The happy cross-project path: dispatch lands on the to-worker
+    (the implementer). /goal must still be seeded there as before."""
+    # Cross-project task with from=other-worker → to=api. Dispatch on
+    # `api` (the to-worker) — the intended case. The guard MUST NOT
+    # fire here; this is the legitimate cross-project dispatch.
+    task = _cross_project_task(
+        daemon,
+        source="other-requester",
+        target="api",
+        criteria=["api tests pass", "api lint clean"],
+    )
+    await daemon.assign_task(task.id, "api")
+    with patch.object(daemon, "send_to_worker", new_callable=AsyncMock) as mock_send:
+        await daemon.start_task(task.id)
+    goals = _goal_sends(mock_send)
+    assert len(goals) == 1
+    assert "api tests pass" in goals[0]
+    actions = [e.action for e in daemon.drone_log.entries]
+    assert SystemAction.GOAL_SET in actions
+    assert SystemAction.GOAL_SKIPPED not in actions

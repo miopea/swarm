@@ -97,6 +97,12 @@ class SystemAction(Enum):
     # Native /goal seeded for a task at dispatch — the provider's own
     # evaluator runs the keep-working loop thereafter.
     GOAL_SET = "GOAL_SET"
+    # Task #524: /goal seeding skipped because the dispatch landed on
+    # the from-worker of a cross-project task. Seeding the to-worker's
+    # criteria on the from-worker pinned the worker into a Stop-hook
+    # loop (the from-worker's repo can't satisfy the to-worker's
+    # criteria). Logged here so the suppression is auditable.
+    GOAL_SKIPPED = "GOAL_SKIPPED"
     # Queen events
     QUEEN_PROPOSAL = "QUEEN_PROPOSAL"
     QUEEN_AUTO_ACTED = "QUEEN_AUTO_ACTED"

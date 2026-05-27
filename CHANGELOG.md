@@ -10,6 +10,43 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.27.12] - 2026-05-27
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Native `/goal` no longer pins cross-project from-worker into a
+  Stop-hook loop (task #524).** When `_maybe_seed_goal` dispatched
+  on the from-worker of a cross-project task (source_worker !=
+  target_worker), the to-worker's acceptance criteria were seeded
+  as a `/goal` on the from-worker — whose repo physically cannot
+  satisfy them. The Stop-hook then re-prompted indefinitely.
+  Concrete repro: cross-project task #523
+  (from=rcg-networks → to=platform) burned ~$10 / 257K output
+  tokens on rcg-networks before operator reassignment.
+  - Added an explicit cross-project guard at the top of
+    `_maybe_seed_goal` in `src/swarm/server/task_coordinator.py`:
+    if `task.is_cross_project and worker_name ==
+    task.source_worker and task.source_worker != task.target_worker`,
+    skip the seed and emit a `GOAL_SKIPPED` buzz entry naming the
+    from/to pair for audit.
+  - New `SystemAction.GOAL_SKIPPED` enum in
+    `src/swarm/drones/log.py` sits next to the existing
+    `GOAL_SET` so the suppression is visible alongside seedings.
+  - 2 regression tests added in `tests/test_goal_seeding.py`:
+    one covering the from-worker bug repro (no `/goal` sent,
+    `GOAL_SKIPPED` logged); one covering the legitimate
+    to-worker cross-project path (`/goal` still seeded as before).
+  - Backward-compatible: same-worker tasks and the happy
+    cross-project target-worker path are untouched. Only the
+    buggy from-worker dispatch path is altered, toward a NO-OP.
+  - Takes effect on the next operator-initiated daemon reload.
+    Currently running workers with already-seeded goals are
+    unaffected; only newly dispatched tasks consult the new guard.
+
 ## [2026.5.27.11] - 2026-05-27
 
 ### Features

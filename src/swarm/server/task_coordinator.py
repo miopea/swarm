@@ -281,6 +281,30 @@ class TaskCoordinator:
             and getattr(worker_prov, "supports_native_goal", False)
         ):
             return
+        # Task #524: cross-project tasks ship the to-worker's criteria.
+        # If for any reason the dispatch lands on the from-worker (the
+        # requester's repo doesn't host the implementation), seeding
+        # ``/goal`` there pins the worker into a Stop-hook loop on
+        # criteria it physically can't satisfy. Concrete bite: cross-
+        # project task #523 (from=rcg-networks → to=platform) burned
+        # ~$10 / 257K output tokens on rcg-networks before reassignment.
+        # Skip and log so the operator can see what was suppressed.
+        if (
+            task.is_cross_project
+            and task.source_worker
+            and task.target_worker
+            and task.source_worker != task.target_worker
+            and worker_name == task.source_worker
+        ):
+            d.drone_log.add(
+                SystemAction.GOAL_SKIPPED,
+                worker_name,
+                f"#{task.number}: cross-project from={task.source_worker} "
+                f"to={task.target_worker} — criteria belong to to-worker, skipped",
+                category=LogCategory.TASK,
+                metadata={"task_id": task.id, "task_number": task.number},
+            )
+            return
         try:
             from swarm.server.messages import render_goal_condition
 
