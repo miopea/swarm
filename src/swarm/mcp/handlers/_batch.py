@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from swarm.mcp._arg_types import BatchArgs
+from swarm.mcp.types import TextContent
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -113,7 +114,7 @@ def _validate_batch_op(op: object) -> tuple[str, dict[str, Any], str]:
     return tool, op_args, ""
 
 
-def _handle_batch(d: SwarmDaemon, worker_name: str, args: BatchArgs) -> list[dict[str, Any]]:
+def _handle_batch(d: SwarmDaemon, worker_name: str, args: BatchArgs) -> list[TextContent]:
     """Execute a sequence of swarm_* ops in one MCP round-trip.
 
     Workers that need claim_file + send_message + complete_task today

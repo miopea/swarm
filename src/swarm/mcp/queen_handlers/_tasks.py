@@ -19,9 +19,11 @@ from typing import TYPE_CHECKING, Any
 
 from swarm.mcp._arg_types import QueenForceCompleteTaskArgs, QueenReassignTaskArgs
 from swarm.mcp.queen_handlers._common import _assert_queen
+from swarm.mcp.types import TextContent
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
+    from swarm.tasks.task import SwarmTask
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -126,7 +128,7 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
-def _resolve_task(d: SwarmDaemon, args: dict[str, Any]) -> Any | list[dict[str, Any]]:
+def _resolve_task(d: SwarmDaemon, args: dict[str, Any]) -> SwarmTask | list[TextContent]:
     """Look up a task by ``number`` or ``task_id``. Return the task or an error payload."""
     number = args.get("number")
     task_id = (args.get("task_id") or "").strip() or None
@@ -168,7 +170,7 @@ def _fire_async(coro: Any) -> None:
 
 def _handle_reassign_task(
     d: SwarmDaemon, worker_name: str, args: QueenReassignTaskArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     err = _assert_queen(worker_name)
     if err:
         return err
@@ -224,7 +226,7 @@ def _handle_reassign_task(
 
 def _handle_force_complete_task(
     d: SwarmDaemon, worker_name: str, args: QueenForceCompleteTaskArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     err = _assert_queen(worker_name)
     if err:
         return err

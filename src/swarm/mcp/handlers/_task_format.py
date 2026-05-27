@@ -10,6 +10,8 @@ from __future__ import annotations
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from swarm.mcp.types import TextContent
+
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
     from swarm.tasks.task import SwarmTask
@@ -116,7 +118,7 @@ def _sort_tasks_for_display(tasks: list[SwarmTask]) -> list[SwarmTask]:
     return sorted(tasks, key=key)
 
 
-def _lookup_task_by_number(d: SwarmDaemon, raw: int | str | None) -> list[dict[str, Any]]:
+def _lookup_task_by_number(d: SwarmDaemon, raw: int | str | None) -> list[TextContent]:
     # ``int(None)`` raises TypeError → caught below and reported with the
     # caller-facing snippet. Narrow ``raw`` first so the conversion only
     # sees the supported types.

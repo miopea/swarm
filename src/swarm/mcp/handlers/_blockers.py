@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from swarm.mcp._arg_types import ReportBlockerArgs
+from swarm.mcp.types import TextContent
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -65,7 +66,7 @@ TOOLS: list[dict[str, Any]] = [
 
 def _handle_report_blocker(
     d: SwarmDaemon, worker_name: str, args: ReportBlockerArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     """Persist a worker-reported blocker so the IdleWatcher can skip it.
 
     Task #250: workers nudged by the idle-watcher while waiting on a

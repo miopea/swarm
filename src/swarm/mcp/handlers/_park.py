@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from swarm.mcp._arg_types import ParkTaskArgs
+from swarm.mcp.types import TextContent
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -62,7 +63,7 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
-def _handle_park_task(d: SwarmDaemon, worker_name: str, args: ParkTaskArgs) -> list[dict[str, Any]]:
+def _handle_park_task(d: SwarmDaemon, worker_name: str, args: ParkTaskArgs) -> list[TextContent]:
     """#406/#407: park one of the caller's OWN ACTIVE tasks back to ASSIGNED.
 
     Only ever touches *this caller's* own tasks, so cross-worker parking

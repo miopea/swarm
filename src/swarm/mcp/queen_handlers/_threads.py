@@ -19,6 +19,7 @@ from swarm.mcp.queen_handlers._thread_helpers import (
     _broadcast_thread_event,
     _resolve_thread_alias,
 )
+from swarm.mcp.types import TextContent
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -175,7 +176,7 @@ TOOLS: list[dict[str, Any]] = [
 
 def _handle_post_thread(
     d: SwarmDaemon, worker_name: str, args: QueenPostThreadArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     err = _assert_queen(worker_name)
     if err:
         return err
@@ -215,7 +216,7 @@ def _handle_post_thread(
     ]
 
 
-def _handle_reply(d: SwarmDaemon, worker_name: str, args: QueenReplyArgs) -> list[dict[str, Any]]:
+def _handle_reply(d: SwarmDaemon, worker_name: str, args: QueenReplyArgs) -> list[TextContent]:
     err = _assert_queen(worker_name)
     if err:
         return err
@@ -250,7 +251,7 @@ def _handle_reply(d: SwarmDaemon, worker_name: str, args: QueenReplyArgs) -> lis
 
 def _handle_update_thread(
     d: SwarmDaemon, worker_name: str, args: QueenUpdateThreadArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     err = _assert_queen(worker_name)
     if err:
         return err

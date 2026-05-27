@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from swarm.mcp.types import TextContent
 from swarm.worker.worker import QUEEN_WORKER_NAME
 
-_PERMISSION_DENIED = [
+_PERMISSION_DENIED: list[TextContent] = [
     {
         "type": "text",
         "text": (
@@ -22,7 +23,7 @@ _PERMISSION_DENIED = [
 ]
 
 
-def _assert_queen(worker_name: str) -> list[dict[str, Any]] | None:
+def _assert_queen(worker_name: str) -> list[TextContent] | None:
     """Return an error payload if *worker_name* is not the Queen, else None."""
     if worker_name != QUEEN_WORKER_NAME:
         return _PERMISSION_DENIED

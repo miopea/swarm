@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from swarm.mcp._arg_types import QueenViewTaskBoardArgs, QueenViewWorkerStateArgs
 from swarm.mcp.queen_handlers._common import _assert_queen, _clamp
+from swarm.mcp.types import HandlerResult
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -91,7 +92,7 @@ TOOLS: list[dict[str, Any]] = [
 
 def _handle_view_worker_state(
     d: SwarmDaemon, worker_name: str, args: QueenViewWorkerStateArgs
-) -> list[dict[str, Any]] | dict[str, Any]:
+) -> HandlerResult:
     """Return both a markdown text summary and a structured JSON sidecar.
 
     Claude Code 2.1.x prefers ``structuredContent`` when present, so the
@@ -200,7 +201,7 @@ def _handle_view_worker_state(
 
 def _handle_view_task_board(
     d: SwarmDaemon, worker_name: str, args: QueenViewTaskBoardArgs
-) -> list[dict[str, Any]] | dict[str, Any]:
+) -> HandlerResult:
     err = _assert_queen(worker_name)
     if err:
         return err

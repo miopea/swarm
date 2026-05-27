@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from swarm.mcp._arg_types import CreateTaskArgs
+from swarm.mcp.types import TextContent
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -116,7 +117,7 @@ TOOLS: list[dict[str, Any]] = [
 
 def _handle_create_task(
     d: SwarmDaemon, worker_name: str, args: CreateTaskArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     title = args.get("title", "")
     if not title:
         return [{"type": "text", "text": "Missing 'title'"}]

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 from swarm.mcp._arg_types import QueenQueryLearningsArgs, QueenSaveLearningArgs
 from swarm.mcp.queen_handlers._common import _assert_queen, _clamp
 from swarm.mcp.queen_handlers._thread_helpers import _resolve_thread_alias
+from swarm.mcp.types import TextContent
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -97,7 +98,7 @@ TOOLS: list[dict[str, Any]] = [
 
 def _handle_query_learnings(
     d: SwarmDaemon, worker_name: str, args: QueenQueryLearningsArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     err = _assert_queen(worker_name)
     if err:
         return err
@@ -120,7 +121,7 @@ def _handle_query_learnings(
 
 def _handle_save_learning(
     d: SwarmDaemon, worker_name: str, args: QueenSaveLearningArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     err = _assert_queen(worker_name)
     if err:
         return err

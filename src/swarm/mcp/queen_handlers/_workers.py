@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from swarm.mcp._arg_types import QueenInterruptWorkerArgs, QueenPromptWorkerArgs
 from swarm.mcp.queen_handlers._common import _assert_queen
 from swarm.mcp.queen_handlers._tasks import _fire_async
+from swarm.mcp.types import TextContent
 from swarm.worker.worker import QUEEN_WORKER_NAME
 
 if TYPE_CHECKING:
@@ -106,7 +107,7 @@ TOOLS: list[dict[str, Any]] = [
 
 def _handle_interrupt_worker(
     d: SwarmDaemon, worker_name: str, args: QueenInterruptWorkerArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     err = _assert_queen(worker_name)
     if err:
         return err
@@ -137,7 +138,7 @@ def _handle_interrupt_worker(
 
 def _handle_prompt_worker(
     d: SwarmDaemon, worker_name: str, args: QueenPromptWorkerArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     """Push a prompt into a worker's PTY — Queen-initiated direct chat.
 
     Claude Code queues PTY input while a turn is in progress, so sending

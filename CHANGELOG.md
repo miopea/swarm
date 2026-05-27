@@ -10,6 +10,51 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.27.11] - 2026-05-27
+
+### Features
+
+### Changes
+
+- **Refactor — MCP handler return TypedDicts (task #520).** Final
+  child of the #514 audit-code decomposition. With #518 + #519
+  done, every handler now lives in a per-domain module ≤ 300 LOC,
+  making this sweep tractable.
+  - New `src/swarm/mcp/types.py` (44 LOC) defines `TextContent`,
+    `ErrorContent` (alias), `StructuredResponse`, and the
+    `HandlerResult` union — the single shared vocabulary every
+    handler return signs to.
+  - Every `_handle_*` function across `src/swarm/mcp/handlers/` (14
+    worker handlers) and `src/swarm/mcp/queen_handlers/` (15 Queen
+    handlers) had its return signature rewritten:
+    `list[dict[str, Any]]` → `list[TextContent]`;
+    `list[dict[str, Any]] | dict[str, Any]` → `HandlerResult`.
+  - `handle_tool_call` in `src/swarm/mcp/tools.py`, `_assert_queen`
+    + `_PERMISSION_DENIED` in `src/swarm/mcp/queen_handlers/_common.py`,
+    `_lookup_task_by_number` in `src/swarm/mcp/handlers/_task_format.py`,
+    and `_resolve_task` in `src/swarm/mcp/queen_handlers/_tasks.py`
+    all picked up the same typed surface.
+  - Runtime no-op verified: TypedDicts are dicts at runtime, dict
+    literals every handler emits today already satisfy `TextContent`'s
+    `{"type": "text", "text": str}` shape. Smoke tests show identical
+    JSON output before/after.
+  - Out of scope (intentional, per the audit-criterion wording about
+    "return signatures"): `TOOLS: list[dict[str, Any]]` schema
+    declarations, `_HANDLERS: dict[str, Any]` registry dicts, and
+    `arguments: dict[str, Any]` input parameters all stay as-is.
+    Each tool has its own input-schema shape; unifying them would
+    be over-engineering.
+  - All 29 MCP tools (14 worker + 15 Queen) dispatch unchanged.
+    Full pytest 4767 passed; ruff format + ruff check clean.
+  - **With #520 done, #514's 5-task decomposition is fully shipped**:
+    #516 (PtyHolder SRP split, 2026.5.27.8), #518 (mcp/tools split,
+    2026.5.27.9), #519 (mcp/queen_tools split, 2026.5.27.10), #520
+    (TypedDict sweep, this release). #517 (proposal extraction) was
+    closed earlier as already-done after investigation showed
+    `ProposalCoordinator` already existed.
+
+### Fixes
+
 ## [2026.5.27.10] - 2026-05-27
 
 ### Features

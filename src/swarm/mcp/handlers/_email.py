@@ -9,6 +9,7 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 from swarm.mcp._arg_types import DraftEmailArgs
+from swarm.mcp.types import TextContent
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -135,7 +136,7 @@ def _validate_draft_email_args(
 
 def _handle_draft_email(
     d: SwarmDaemon, worker_name: str, args: DraftEmailArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     """Create a draft email in the operator's Outlook Drafts via Graph.
 
     Mirrors the existing email-reply flow that fires when an email-sourced

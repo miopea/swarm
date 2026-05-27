@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from swarm.mcp._arg_types import QueenViewBuzzLogArgs, QueenViewDroneActionsArgs
 from swarm.mcp.queen_handlers._common import _assert_queen, _clamp
+from swarm.mcp.types import HandlerResult
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -88,7 +89,7 @@ TOOLS: list[dict[str, Any]] = [
 
 def _handle_view_buzz_log(
     d: SwarmDaemon, worker_name: str, args: QueenViewBuzzLogArgs
-) -> list[dict[str, Any]] | dict[str, Any]:
+) -> HandlerResult:
     err = _assert_queen(worker_name)
     if err:
         return err
@@ -143,7 +144,7 @@ def _handle_view_buzz_log(
 
 def _handle_view_drone_actions(
     d: SwarmDaemon, worker_name: str, args: QueenViewDroneActionsArgs
-) -> list[dict[str, Any]] | dict[str, Any]:
+) -> HandlerResult:
     err = _assert_queen(worker_name)
     if err:
         return err

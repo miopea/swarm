@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from swarm.mcp._arg_types import CheckMessagesArgs, NoteToQueenArgs, SendMessageArgs
 from swarm.mcp.handlers._queen_relay import _auto_relay_to_queen
+from swarm.mcp.types import TextContent
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -129,7 +130,7 @@ TOOLS: list[dict[str, Any]] = [
 
 def _handle_check_messages(
     d: SwarmDaemon, worker_name: str, _args: CheckMessagesArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     messages = d.message_store.get_unread(worker_name)
     if not messages:
         return [{"type": "text", "text": "No pending messages."}]
@@ -143,7 +144,7 @@ def _handle_check_messages(
 
 def _handle_send_message(
     d: SwarmDaemon, worker_name: str, args: SendMessageArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     recipient = args.get("to", "")
     msg_type = args.get("type", "finding")
     content = args.get("content", "")
@@ -226,7 +227,7 @@ def _handle_send_message(
 
 def _handle_note_to_queen(
     d: SwarmDaemon, worker_name: str, args: NoteToQueenArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     """Persist a side-channel note addressed to the Queen + auto-relay it.
 
     Task #248: workers often address the Queen via PTY text (pre-

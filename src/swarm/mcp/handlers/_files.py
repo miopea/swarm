@@ -10,6 +10,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from swarm.mcp._arg_types import ClaimFileArgs
+from swarm.mcp.types import TextContent
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -48,9 +49,7 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
-def _handle_claim_file(
-    d: SwarmDaemon, worker_name: str, args: ClaimFileArgs
-) -> list[dict[str, Any]]:
+def _handle_claim_file(d: SwarmDaemon, worker_name: str, args: ClaimFileArgs) -> list[TextContent]:
     path = args.get("path", "")
     if not path:
         return [{"type": "text", "text": "Missing 'path'"}]

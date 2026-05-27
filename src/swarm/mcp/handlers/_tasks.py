@@ -20,6 +20,7 @@ from swarm.mcp.handlers._task_format import (
     _sort_tasks_for_display,
     _task_to_payload,
 )
+from swarm.mcp.types import HandlerResult, TextContent
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -140,9 +141,7 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
-def _handle_task_status(
-    d: SwarmDaemon, worker_name: str, args: TaskStatusArgs
-) -> list[dict[str, Any]] | dict[str, Any]:
+def _handle_task_status(d: SwarmDaemon, worker_name: str, args: TaskStatusArgs) -> HandlerResult:
     if not d.task_board:
         return [{"type": "text", "text": "No task board available."}]
 
@@ -189,7 +188,7 @@ def _handle_task_status(
 
 def _handle_complete_task(
     d: SwarmDaemon, worker_name: str, args: CompleteTaskArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     resolution = args.get("resolution", "")
     if not d.task_board:
         return [{"type": "text", "text": "No task board."}]

@@ -55,6 +55,7 @@ from swarm.mcp.handlers._tasks import (  # noqa: F401
     _handle_complete_task,
     _handle_task_status,
 )
+from swarm.mcp.types import HandlerResult
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -159,7 +160,7 @@ def handle_tool_call(
     worker_name: str,
     tool_name: str,
     arguments: dict[str, Any],
-) -> list[dict[str, Any]] | dict[str, Any]:
+) -> HandlerResult:
     """Dispatch a tool call and return MCP content blocks.
 
     Phase 3 (2026-05-08): handlers may now return either the legacy

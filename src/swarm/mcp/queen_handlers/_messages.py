@@ -18,6 +18,7 @@ from swarm.mcp.queen_handlers._message_stream_helpers import (
     _render_message_stream_rows,
     _structured_message_stream_rows,
 )
+from swarm.mcp.types import HandlerResult
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -129,7 +130,7 @@ TOOLS: list[dict[str, Any]] = [
 
 def _handle_view_messages(
     d: SwarmDaemon, worker_name: str, args: QueenViewMessagesArgs
-) -> list[dict[str, Any]] | dict[str, Any]:
+) -> HandlerResult:
     err = _assert_queen(worker_name)
     if err:
         return err
@@ -200,7 +201,7 @@ def _handle_view_messages(
 
 def _handle_view_message_stream(
     d: SwarmDaemon, worker_name: str, args: QueenViewMessageStreamArgs
-) -> list[dict[str, Any]] | dict[str, Any]:
+) -> HandlerResult:
     """Return recent messages joined against the recipient's current state.
 
     ``actionable_only=true`` narrows to the subset the Queen is most

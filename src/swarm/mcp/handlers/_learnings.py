@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from swarm.mcp._arg_types import GetLearningsArgs
+from swarm.mcp.types import TextContent
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -47,7 +48,7 @@ TOOLS: list[dict[str, Any]] = [
 
 def _handle_get_learnings(
     d: SwarmDaemon, worker_name: str, args: GetLearningsArgs
-) -> list[dict[str, Any]]:
+) -> list[TextContent]:
     if not d.task_board:
         return [{"type": "text", "text": "No task board."}]
     query = args.get("query", "").lower()
