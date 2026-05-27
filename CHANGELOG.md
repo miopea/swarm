@@ -10,6 +10,28 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.27.7] - 2026-05-27
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Mobile dashboard: worker-pill context bar visual regression
+  (task #515).** Operator-reported visual delta in the worker-tab row
+  at the top of the dashboard on a narrow viewport — the `my-rcg`
+  tab had a dark stripe its neighbours (`platform`, `swarm`) didn't.
+  Root cause: the context-pressure bar (introduced in `607e350`
+  task #285 Phase 1) renders a 3px brown stripe inside the worker
+  pill whenever `context_pct > 0.05`. On mobile, `worker-meta` and
+  `worker-task` are already hidden inside pills, so a single worker
+  with active context becomes the only pill with an inner visible
+  element — asymmetric. Fix: extend the existing mobile-hide rule
+  to `.context-bar` in `worker-item`. The context-pressure drone
+  runs on its own cadence regardless, so the visual signal is
+  informational only; desktop view continues to show it.
+
 ## [2026.5.27.6] - 2026-05-27
 
 ### Features

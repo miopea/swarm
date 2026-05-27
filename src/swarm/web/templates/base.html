@@ -2157,6 +2157,20 @@
             .worker-item .worker-name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             .worker-item .worker-meta { display: none; }
             .worker-item .worker-task { display: none; }
+            /* Context-pressure bar (task #285) renders a 3px brown stripe
+               inside the worker pill whenever ``context_pct > 0.05``. On
+               mobile that stripe is the only inner element still showing,
+               so a single worker with active context (e.g. my-rcg) ends
+               up with an asymmetric dark bar that its neighbours don't
+               have — operators read it as a visual regression. The
+               context-pressure drone runs on its own cadence regardless,
+               so the visual signal is informational only; hiding it on
+               mobile matches the existing worker-meta / worker-task
+               treatment and restores tab-row symmetry. The bar (and the
+               soft/hard tier chip absolutely positioned inside it) stays
+               visible at desktop widths where the full worker card has
+               room to host it cleanly. */
+            .worker-item .context-bar { display: none; }
             .worker-item.selected { border-color: var(--lavender); background: rgba(168,143,217,0.2); }
             .worker-list > .action-bar { display: none; }
 
