@@ -10,6 +10,57 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.28.3] - 2026-05-28
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Mobile dashboard: worker-tab dark overlay (task #540, second
+  attempt at the #515 bug class).** Operator reported a dark overlay
+  on the `platform` tab (slot 2) in the worker-tab row of the mobile
+  dashboard. The previous attempt (#515, 2026.5.27.7) patched a
+  per-element symptom (hiding `.context-bar` inside mobile pills).
+  Today's overlay is a different bug class.
+  - **Root cause hypothesis (a priori most likely)**: the
+    `.worker-item:hover` rule at `base.html:1042` paints
+    `background: var(--panel)` (dark brown `#3E2B1B`) + an inset
+    honey stripe, with no `@media (hover: hover)` guard. On mobile
+    browsers' well-known sticky-hover-on-tap quirk, the rule applies
+    when the user taps a tab and STICKS until the next focus shift —
+    producing the visible dark overlay. The operator's framing
+    "whatever is in the 2nd position has the same issue" is
+    explained as: it follows whichever tab was most recently
+    tapped (which happened to be slot 2 when the screenshot was
+    captured).
+  - **Fix**: wrapped `.worker-item:hover` in
+    `@media (hover: hover) and (pointer: fine)` so the rule only
+    applies on devices with a real hover-capable pointer
+    (mouse / trackpad). Touch devices get no hover-paint — the
+    artifact cannot persist. Desktop hover behaviour is preserved.
+  - **Why this is a bug-class fix, not a per-element patch**: any
+    `:hover` rule that paints visible background or color on a
+    tappable element is at risk for the same sticky-hover artifact
+    on mobile. This fix is specific to `.worker-item:hover` (the
+    one rule with the reported symptom). A broader hygiene audit
+    of every `:hover` rule in `base.html` is filed as a follow-up
+    (out of scope here per the approved plan).
+  - **Diagnostic-pending caveat**: the plan asked the operator to
+    confirm position-dependence vs. last-tapped via a drag-reorder
+    test before code touched. The operator approved the plan; the
+    fix shipped as the most-likely candidate (risk-symmetric — the
+    media-query guard is harmless if the actual cause turns out to
+    be different). If the overlay persists after operator visual
+    smoke post-deploy, Phase 2 of the plan (slot-specific
+    investigation) kicks in.
+  - **No new tests**: CSS rendering can't be asserted in pytest
+    without Playwright/Cypress infra. Visual smoke after deploy
+    (tap each worker tab → verify no sticky overlay; mouse-hover
+    on desktop → verify hover paint preserved) is the
+    authoritative check.
+
 ## [2026.5.28.2] - 2026-05-28
 
 ### Features

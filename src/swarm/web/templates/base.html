@@ -1039,7 +1039,21 @@
             gap: 0.5rem;
             transition: background 0.15s, box-shadow 0.15s;
         }
-        .worker-item:hover { background: var(--panel); box-shadow: inset 3px 0 0 var(--honey); }
+        /* Task #540: ``.worker-item:hover`` painted dark-brown ``--panel``
+           + honey stripe on the pill. Without an ``@media (hover: hover)``
+           guard, mobile browsers apply the rule after a tap and the state
+           STICKS (the well-known mobile sticky-hover quirk) — leaving a
+           tapped tab visually overlaid with the dark background until the
+           next focus shift. That's the operator-reported "dark overlay on
+           the platform tab" from the 2026-05-28 screenshot, distinct from
+           the per-element ``.context-bar`` symptom that #515 patched.
+           Guarding with ``(hover: hover) and (pointer: fine)`` makes the
+           rule apply only on devices with a real hover-capable pointer
+           (mouse/trackpad); touch devices get no hover-paint at all, so
+           the artifact cannot persist. Desktop hover behaviour preserved. */
+        @media (hover: hover) and (pointer: fine) {
+            .worker-item:hover { background: var(--panel); box-shadow: inset 3px 0 0 var(--honey); }
+        }
         .worker-item.selected { background: rgba(168,143,217,0.3); color: var(--text); box-shadow: inset 3px 0 0 var(--lavender); opacity: 1; }
         .worker-item.selected .worker-meta { color: var(--muted); }
         .worker-item.selected .worker-task { color: var(--lavender); }
