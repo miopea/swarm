@@ -1,6 +1,6 @@
 [project]
 name = "swarm-ai"
-version = "2026.5.28.4"
+version = "2026.5.28.5"
 description = "A hive-mind for Claude Code agents — web orchestrator"
 readme = "README.md"
 license = "MIT"

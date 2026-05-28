@@ -10,6 +10,42 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.28.5] - 2026-05-28
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Mobile dashboard: scroll-fade gradient no longer paints a dark bar
+  over a random worker pill (task #543 — actual root cause of the
+  #515 / #540 / #541 overlay reports).** The mobile worker-list has a
+  30px `linear-gradient` scroll-fade ("scroll → for more workers")
+  applied via `.worker-list .panel-body::after`. But `.panel-body` is
+  the horizontal scroll container (`overflow-x: auto`), and an
+  absolutely-positioned `::after` with `right: 0` inside a scroll
+  container anchors to the scroll **content box**, not the visible
+  viewport edge. So the dark fade painted wherever the pill row was
+  currently scrolled — landing on top of whatever worker sat at that
+  offset. It followed the **scroll position**, which is why it
+  appeared on `platform` (slot 2), then `rcg-networks` (slot 3), then
+  `admin` across successive operator screenshots: not a per-slot and
+  not a per-worker artifact.
+  - **Fix**: moved the `::after` from the scroll container
+    (`.panel-body`) to the non-scrolling wrapper (`.worker-list`),
+    which now has `position: relative`. The fade pins to the true
+    right edge of the visible column. Mirrors the already-correct
+    `.config-tab-nav-wrap::after` pattern in the same file (whose
+    comment reads "on wrapper so it stays pinned").
+  - **Why #515 / #540 / #541 all missed it**: those fixes chased
+    per-worker elements (`.context-bar`), a sticky-hover guard, and
+    the Queen modal `display` — none touched this scroll-fade
+    pseudo-element. The real culprit was structural (wrong
+    positioning anchor), not per-worker. Mobile-scoped (inside the
+    `@media (max-width: 768px)` block); desktop's vertical worker
+    list is unaffected.
+
 ## [2026.5.28.4] - 2026-05-28
 
 ### Features

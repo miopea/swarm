@@ -2159,6 +2159,10 @@
             .worker-list {
                 max-height: none;
                 border-radius: 6px;
+                /* Positioning context for the scroll-fade ::after below.
+                   MUST be the non-scrolling wrapper, not the .panel-body
+                   scroll container — see the ::after comment. */
+                position: relative;
             }
             .worker-list > .panel-header { display: none; }
             .worker-list > .panel-body {
@@ -2291,11 +2295,27 @@
             /* Collapse detail empty state on mobile */
             .detail-empty-state { display: none; }
             .detail-area > .panel > .panel-header { font-size: 0.8rem; padding: 0.2rem 0.5rem; }
-            /* Worker list scroll indicator (gradient fade) */
-            .worker-list .panel-body { position: relative; }
-            .worker-list .panel-body::after {
+            /* Worker list scroll indicator (gradient fade).
+               Task #543: this MUST live on the non-scrolling .worker-list
+               WRAPPER, not on the .panel-body scroll container. An
+               absolutely-positioned ::after with ``right: 0`` inside an
+               ``overflow-x: auto`` element anchors to the scroll CONTENT
+               box, not the visible viewport edge — so the dark fade
+               painted wherever the pill row happened to be scrolled,
+               landing on top of whatever worker sat at that offset. That
+               is the long-standing "dark gradient bar covering a random
+               worker" mobile bug: it followed the SCROLL POSITION, which
+               is why it appeared on platform (slot 2), then rcg-networks
+               (slot 3), then admin across successive screenshots — not a
+               per-slot or per-worker artifact. #515 (context-bar),
+               #540 (sticky-hover guard) and #541 (modal display) all
+               chased the wrong element. Pinning the fade to the wrapper
+               keeps it at the true right edge. Mirrors the working
+               .config-tab-nav-wrap::after pattern below. */
+            .worker-list::after {
                 content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 30px;
-                background: linear-gradient(to right, transparent, var(--hive-bg)); pointer-events: none;
+                background: linear-gradient(to right, transparent, var(--hive-bg));
+                pointer-events: none; z-index: 1;
             }
             /* Config header: tighten button gap on mobile */
             body > header .gap-lg { gap: 0.4rem; }
