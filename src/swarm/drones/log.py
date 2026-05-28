@@ -103,6 +103,13 @@ class SystemAction(Enum):
     # loop (the from-worker's repo can't satisfy the to-worker's
     # criteria). Logged here so the suppression is auditable.
     GOAL_SKIPPED = "GOAL_SKIPPED"
+    # Task #529: a worker-reported blocker was auto-cleared by the
+    # IdleWatcher because either the blocker target became done /
+    # failed / removed, OR a new inbox message arrived after the
+    # blocker was filed. Without this entry, an operator audit can
+    # only infer the clear from the absence of subsequent
+    # AUTO_NUDGE_SKIPPED entries.
+    BLOCKER_AUTO_CLEARED = "BLOCKER_AUTO_CLEARED"
     # Queen events
     QUEEN_PROPOSAL = "QUEEN_PROPOSAL"
     QUEEN_AUTO_ACTED = "QUEEN_AUTO_ACTED"

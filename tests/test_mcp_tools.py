@@ -439,6 +439,65 @@ class TestReportBlocker:
         )
         assert "failed" in result[0]["text"].lower()
 
+    # ---- task #529: reject blocker filings against terminal targets ----
+
+    def _daemon_with_board(self, target_status: str) -> MagicMock:
+        """Wire a task_board with a single task #245 in the supplied status.
+        Used to drive the #529 guard that rejects blocker filings against
+        already-terminal targets (the #526/#528 repro)."""
+        d = self._daemon()
+        target = MagicMock()
+        target.number = 245
+        target.status.value = target_status
+        d.task_board = MagicMock()
+        d.task_board.all_tasks = [target]
+        return d
+
+    def test_report_blocker_rejects_target_already_done(self):
+        """Task #529 / #526 repro: filing a blocker against a task that's
+        already done burned ~$51 in rcg-networks tokens before escalation
+        because the auto-clear was silent. Surface the rejection at the
+        filing moment instead so the worker breaks the re-file loop."""
+        d = self._daemon_with_board("done")
+        result = handle_tool_call(
+            d,
+            "admin",
+            "swarm_report_blocker",
+            {"task_number": 246, "blocked_by_task": 245},
+        )
+        text = result[0]["text"].lower()
+        assert "cannot file blocker" in text
+        assert "#245" in result[0]["text"]
+        assert "done" in text
+        # Store was NOT touched.
+        d.blocker_store.report.assert_not_called()
+
+    def test_report_blocker_rejects_target_already_failed(self):
+        d = self._daemon_with_board("failed")
+        result = handle_tool_call(
+            d,
+            "admin",
+            "swarm_report_blocker",
+            {"task_number": 246, "blocked_by_task": 245},
+        )
+        text = result[0]["text"].lower()
+        assert "cannot file blocker" in text
+        assert "failed" in text
+        d.blocker_store.report.assert_not_called()
+
+    def test_report_blocker_accepts_target_in_progress(self):
+        """Happy path: filing a blocker against an active task still
+        records it normally — only terminal targets are rejected."""
+        d = self._daemon_with_board("active")
+        result = handle_tool_call(
+            d,
+            "admin",
+            "swarm_report_blocker",
+            {"task_number": 246, "blocked_by_task": 245, "reason": "wait"},
+        )
+        assert "recorded" in result[0]["text"].lower()
+        d.blocker_store.report.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # Task #248 — swarm_note_to_queen: lightweight side-channel relay

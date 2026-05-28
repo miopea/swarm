@@ -305,10 +305,29 @@ class IdleWatcher:
                     return t.status.value == "done"
             return False
 
+        def _on_auto_clear(b, reason: str) -> None:
+            """Task #529: surface the auto-clear in the buzz log so an
+            operator audit can see WHY a previously-blocked worker is
+            being nudged again (without this, the only signal is the
+            ABSENCE of subsequent AUTO_NUDGE_SKIPPED entries — easy to
+            miss). ``reason`` is one of ``target_done`` (the blocker
+            target task became done/etc.) or ``message_since`` (new
+            inbox traffic landed after the blocker was filed)."""
+            self._drone_log.add(
+                SystemAction.BLOCKER_AUTO_CLEARED,
+                worker_name,
+                (
+                    f"blocker on #{b.task_number} cleared "
+                    f"(reason={reason}, target=#{b.blocked_by_task})"
+                ),
+                category=LogCategory.DRONE,
+            )
+
         return self._blocker_store.has_active_blocker(
             worker_name,
             is_task_completed=_is_completed,
             has_message_since=self._message_has_newer,
+            on_auto_clear=_on_auto_clear,
         )
 
     def _is_fresh(self, worker_name: str, task_id: str, *, now: float) -> bool:

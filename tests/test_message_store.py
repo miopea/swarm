@@ -202,3 +202,41 @@ class TestSendWildcardStillWorks:
         # precise reason handlers switched to broadcast().  The legacy path
         # still works; it just suffers the first-reader-wins behavior.
         assert len(store.get_unread("any_worker")) == 1
+
+
+# ---------------------------------------------------------------------------
+# Task #529 Bug B verification: get_unread is recipient-only (NOT
+# sender-leaky). rcg-networks's escalation note (msg #1175) raised the
+# secondary theory "watcher counts my outbound swarm_send_message as new
+# inbox traffic, resetting the pause-debounce." DB investigation falsified
+# the theory: the SQL `WHERE recipient = ? OR recipient = '*'` cannot
+# match a row where the worker is the sender. This regression test pins
+# the semantics so a future refactor that touches the WHERE clause can't
+# silently flip it.
+# ---------------------------------------------------------------------------
+
+
+class TestGetUnreadInboundOnly:
+    """``get_unread(worker)`` must only return rows where the worker is the
+    RECIPIENT (or the row is a legacy broadcast '*'). Outbound messages
+    (where the worker is the SENDER) MUST NOT appear."""
+
+    def test_outbound_messages_excluded(self, store: MessageStore) -> None:
+        # rcg-networks sends an outbound message to platform.
+        out_id = store.send("rcg-networks", "platform", "status", "FYI on #523")
+        assert out_id is not None
+        # platform sends an inbound message to rcg-networks.
+        in_id = store.send("platform", "rcg-networks", "dependency", "spec amend")
+        assert in_id is not None
+
+        # get_unread for rcg-networks returns ONLY the inbound row.
+        unread = store.get_unread("rcg-networks")
+        assert len(unread) == 1
+        assert unread[0].id == in_id
+        assert unread[0].sender == "platform"
+        assert unread[0].recipient == "rcg-networks"
+
+        # Conversely, platform's get_unread returns the outbound rcg-networks
+        # message (because platform is the recipient there).
+        unread_p = store.get_unread("platform")
+        assert any(m.id == out_id and m.sender == "rcg-networks" for m in unread_p)

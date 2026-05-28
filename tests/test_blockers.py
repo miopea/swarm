@@ -94,6 +94,68 @@ class TestBlockerStore:
         assert b is not None
         assert b.task_number == 246
 
+    def test_on_auto_clear_invoked_with_target_done_reason(self, store):
+        """Task #529: when the blocker target task auto-clears, the
+        ``on_auto_clear`` callback fires with reason='target_done'. The
+        IdleWatcher uses this to emit a BLOCKER_AUTO_CLEARED buzz entry
+        so an operator audit can see why the worker is being nudged
+        again."""
+        store.report("admin", 246, 245, now=1000.0)
+        cleared: list[tuple[int, int, str]] = []
+
+        def spy(b, reason: str) -> None:
+            cleared.append((b.task_number, b.blocked_by_task, reason))
+
+        assert (
+            store.has_active_blocker(
+                "admin",
+                is_task_completed=lambda n: n == 245,
+                on_auto_clear=spy,
+            )
+            is None
+        )
+        assert cleared == [(246, 245, "target_done")]
+        # Row is gone (clear ran before the callback).
+        assert store.list_for_worker("admin") == []
+
+    def test_on_auto_clear_invoked_with_message_since_reason(self, store):
+        """Same callback wiring, but the auto-clear trigger was a new
+        inbox message rather than the target completing."""
+        store.report("admin", 246, 245, now=1000.0)
+        cleared: list[tuple[int, int, str]] = []
+
+        def spy(b, reason: str) -> None:
+            cleared.append((b.task_number, b.blocked_by_task, reason))
+
+        assert (
+            store.has_active_blocker(
+                "admin",
+                has_message_since=lambda _w, since: since < 1500.0,
+                on_auto_clear=spy,
+            )
+            is None
+        )
+        assert cleared == [(246, 245, "message_since")]
+
+    def test_on_auto_clear_exceptions_do_not_break_clear(self, store):
+        """Callback bugs must not block the auto-clear path — operator
+        observability is best-effort, the clear itself is load-bearing."""
+        store.report("admin", 246, 245, now=1000.0)
+
+        def boom(_b, _reason: str) -> None:
+            raise RuntimeError("callback bug")
+
+        # No exception escapes; the clear still ran.
+        assert (
+            store.has_active_blocker(
+                "admin",
+                is_task_completed=lambda n: n == 245,
+                on_auto_clear=boom,
+            )
+            is None
+        )
+        assert store.list_for_worker("admin") == []
+
 
 # ---------------------------------------------------------------------------
 # IdleWatcher integration — skip nudges on reported blocker
@@ -341,3 +403,59 @@ async def test_multiple_active_tasks_still_skipped_on_single_blocker(tmp_path):
     assert sender.calls == []
     skipped = [e for e in log.entries if e.action == SystemAction.AUTO_NUDGE_SKIPPED]
     assert len(skipped) == 1
+
+
+# ---------------------------------------------------------------------------
+# Task #529: BLOCKER_AUTO_CLEARED buzz emission on IdleWatcher path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_idle_watcher_emits_blocker_auto_cleared_buzz_when_target_done(tmp_path):
+    """The #526/#528 repro at the IdleWatcher level. Before #529 the
+    auto-clear was silent in the buzz log — operators could only infer it
+    from the absence of subsequent ``AUTO_NUDGE_SKIPPED`` entries (and
+    rcg-networks didn't realize its repeated re-filings were being
+    silently no-op'd, burning ~$51 in tokens). The new
+    ``BLOCKER_AUTO_CLEARED`` SystemAction makes the clear auditable.
+
+    Setup mirrors the prior ``test_idle_watcher_resumes_nudges_when_blocker_task_completes``
+    but adds the buzz-emission assertion.
+    """
+    db = SwarmDB(Path(tmp_path) / "swarm.db")
+    store = BlockerStore(db)
+    store.report("admin", 246, 245)
+
+    t_blocked = _task(246, "t-246")
+    upstream_done = _task(245, "t-245")
+    upstream_done.status.value = "done"  # blocker target is now terminal
+    board = _task_board(
+        {"admin": [t_blocked]},
+        all_tasks=[t_blocked, upstream_done],
+    )
+
+    watcher, sender, log = _watcher(
+        board=board,
+        blocker_store=store,
+        message_has_newer=lambda _w, _s: False,
+    )
+    sent = await watcher.sweep([_worker("admin", WorkerState.RESTING)], now=1000.0)
+
+    # Worker IS nudged this sweep (blocker auto-cleared in the same call).
+    assert sent == 1
+    assert len(sender.calls) == 1
+
+    # BLOCKER_AUTO_CLEARED buzz entry was emitted with target_done reason.
+    cleared = [e for e in log.entries if e.action == SystemAction.BLOCKER_AUTO_CLEARED]
+    assert len(cleared) == 1
+    assert "#246" in cleared[0].detail
+    assert "target_done" in cleared[0].detail
+    assert "#245" in cleared[0].detail
+
+    # AUTO_NUDGE_SKIPPED should NOT have fired (the blocker was cleared
+    # before the skip check returned).
+    skipped = [e for e in log.entries if e.action == SystemAction.AUTO_NUDGE_SKIPPED]
+    assert skipped == []
+
+    # Blocker row is gone from the store.
+    assert store.list_for_worker("admin") == []

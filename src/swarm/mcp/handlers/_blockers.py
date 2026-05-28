@@ -90,6 +90,28 @@ def _handle_report_blocker(
     except (TypeError, ValueError):
         return [{"type": "text", "text": "'task_number' and 'blocked_by_task' must be integers."}]
 
+    # Task #529: reject filings whose target is already in a terminal
+    # status. The auto-clear in BlockerStore.has_active_blocker would
+    # purge this row on the next IdleWatcher sweep anyway — but a
+    # silent auto-clear left rcg-networks looping with re-filings it
+    # could not see being cleared (the #526/#528 repro burned ~$51
+    # in tokens). Surface the rejection AT THE FILING moment instead.
+    board = getattr(d, "task_board", None)
+    if board is not None:
+        target = next((t for t in board.all_tasks if t.number == blocked_by), None)
+        if target is not None and target.status.value in {"done", "failed", "removed"}:
+            return [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Cannot file blocker — task #{blocked_by} is already "
+                        f"{target.status.value}. Your blocked task "
+                        f"#{task_number} may need re-evaluation: check inbox "
+                        f"+ task status to see what's pending now."
+                    ),
+                }
+            ]
+
     store = getattr(d, "blocker_store", None)
     if store is None:
         return [{"type": "text", "text": "Blocker store unavailable on this daemon."}]

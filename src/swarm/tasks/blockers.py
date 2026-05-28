@@ -143,6 +143,7 @@ class BlockerStore:
         *,
         is_task_completed: Callable[[int], bool] | None = None,
         has_message_since: Callable[[str, float], bool] | None = None,
+        on_auto_clear: Callable[[Blocker, str], None] | None = None,
     ) -> Blocker | None:
         """Return a live blocker for ``worker`` that hasn't been auto-cleared yet.
 
@@ -157,32 +158,70 @@ class BlockerStore:
 
         Either callable may be ``None``; in that case the corresponding
         auto-clear is skipped (useful for tests that only want to
-        exercise one path). Returns the first still-active blocker
-        found, or ``None`` if the worker is clear to nudge.
+        exercise one path).
+
+        ``on_auto_clear(blocker, reason)`` fires once per cleared
+        blocker, with ``reason`` in ``{"target_done", "message_since"}``.
+        Added in task #529 so the IdleWatcher can buzz-log the clear
+        — without it, an operator audit can only infer the clear from
+        the absence of subsequent ``AUTO_NUDGE_SKIPPED`` entries.
+        Callback exceptions are swallowed so a callback bug never
+        breaks the auto-clear chain.
+
+        Returns the first still-active blocker found, or ``None`` if
+        the worker is clear to nudge.
         """
+
+        def _do_clear(b: Blocker, reason: str) -> None:
+            """Clear the row + fire the operator-facing callback once."""
+            self.clear(worker, b.task_number)
+            if on_auto_clear is not None:
+                try:
+                    on_auto_clear(b, reason)
+                except Exception:
+                    _log.debug("on_auto_clear raised", exc_info=True)
+
         blockers = self.list_for_worker(worker)
         if not blockers:
             return None
         for b in blockers:
-            if is_task_completed is not None:
-                try:
-                    if is_task_completed(b.blocked_by_task):
-                        self.clear(worker, b.task_number)
-                        continue
-                except Exception:
-                    _log.debug("is_task_completed raised for #%d", b.blocked_by_task, exc_info=True)
-            if has_message_since is not None:
-                try:
-                    if has_message_since(worker, b.created_at):
-                        self.clear(worker, b.task_number)
-                        continue
-                except Exception:
-                    _log.debug(
-                        "has_message_since raised for %s @ %.0f",
-                        worker,
-                        b.created_at,
-                        exc_info=True,
-                    )
+            if self._check_target_done(b, is_task_completed):
+                _do_clear(b, "target_done")
+                continue
+            if self._check_message_since(worker, b, has_message_since):
+                _do_clear(b, "message_since")
+                continue
             # Survived both auto-clear checks → still blocked.
             return b
         return None
+
+    @staticmethod
+    def _check_target_done(b: Blocker, is_task_completed: Callable[[int], bool] | None) -> bool:
+        """Did the blocker target task become terminal? Errors → False."""
+        if is_task_completed is None:
+            return False
+        try:
+            return bool(is_task_completed(b.blocked_by_task))
+        except Exception:
+            _log.debug("is_task_completed raised for #%d", b.blocked_by_task, exc_info=True)
+            return False
+
+    @staticmethod
+    def _check_message_since(
+        worker: str,
+        b: Blocker,
+        has_message_since: Callable[[str, float], bool] | None,
+    ) -> bool:
+        """Has the worker received new inbox traffic since the blocker filed?"""
+        if has_message_since is None:
+            return False
+        try:
+            return bool(has_message_since(worker, b.created_at))
+        except Exception:
+            _log.debug(
+                "has_message_since raised for %s @ %.0f",
+                worker,
+                b.created_at,
+                exc_info=True,
+            )
+            return False

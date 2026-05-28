@@ -10,6 +10,64 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.28.2] - 2026-05-28
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **`swarm_report_blocker` now rejects filings against terminal targets;
+  IdleWatcher's auto-clear emits a `BLOCKER_AUTO_CLEARED` buzz entry
+  (task #529).** Operator-relayed bug after rcg-networks burned ~$51 in
+  worker tokens being nudged on a blocker against task #528, which
+  platform had completed hours earlier.
+  - **Root-cause finding** (DB investigation falsified the operator's
+    stated theory): the auto-clear path in
+    `BlockerStore.has_active_blocker` was already working correctly —
+    the blocker row IS purged on the next sweep when the target task
+    becomes done. The actual problem was **visibility**: the worker had
+    no signal that its blocker was auto-cleared, so it kept re-filing
+    the same blocker (3 times across an hour, all silently no-op'd),
+    and kept being nudged with no understanding of why.
+  - **Fix 1 (MCP handler)**: `_handle_report_blocker` in
+    `src/swarm/mcp/handlers/_blockers.py` now checks the blocker target
+    task's status before recording. If status is `done`/`failed`/
+    `removed`, returns an explanatory error response naming the target
+    and pointing the worker at re-evaluating their blocked task. The
+    worker breaks the re-file loop at the filing surface instead of
+    looping silently.
+  - **Fix 2 (BlockerStore observability)**: added
+    `SystemAction.BLOCKER_AUTO_CLEARED` next to the existing
+    `AUTO_NUDGE_SKIPPED` in `src/swarm/drones/log.py`.
+    `BlockerStore.has_active_blocker` gained an optional
+    `on_auto_clear(blocker, reason)` callback that fires once per
+    cleared blocker. The IdleWatcher wires this to emit a
+    `BLOCKER_AUTO_CLEARED` buzz entry so operator audits can see
+    exactly when and why a previously-blocked worker is being nudged
+    again. Callback exceptions are swallowed (clear is load-bearing,
+    observability is best-effort).
+  - **Bug B verification** (operator asked me to check rcg-networks's
+    secondary theory): `get_unread` is recipient-only — SQL
+    `WHERE recipient = ? OR recipient = '*'` cannot match rows where
+    the worker is the sender. Outbound messages do NOT trigger the
+    pause-reset path. Documented + pinned with a regression test
+    (`test_outbound_messages_excluded`) in
+    `tests/test_message_store.py`.
+  - **Light refactor of `BlockerStore.has_active_blocker`** to keep
+    cyclomatic complexity ≤ 12 after the callback paths landed:
+    extracted `_check_target_done` and `_check_message_since`
+    statics; main loop now reads as
+    `if check: clear → continue` per path.
+  - 7 new regression tests across 3 files. Existing IdleWatcher /
+    BlockerStore / MCP tests unchanged and still pass.
+  - Takes effect on the next operator-initiated daemon reload.
+    Combined with the deferred #524 stop-hook fix, #527 auto-handoff
+    send-failure park, and #442 itself, the next reload activates
+    all four coordination changes together — combined smoke test
+    recommended.
+
 ## [2026.5.28] - 2026-05-28
 
 ### Features
