@@ -10,7 +10,7 @@ import pytest
 from swarm.config import DroneConfig
 from swarm.db.core import SwarmDB
 from swarm.drones.idle_watcher import IdleWatcher
-from swarm.drones.log import SystemAction
+from swarm.drones.log import DroneAction, SystemAction
 from swarm.tasks.blockers import BlockerStore
 from swarm.worker.worker import WorkerState
 
@@ -459,3 +459,92 @@ async def test_idle_watcher_emits_blocker_auto_cleared_buzz_when_target_done(tmp
 
     # Blocker row is gone from the store.
     assert store.list_for_worker("admin") == []
+
+
+# ---------------------------------------------------------------------------
+# Task #546: IdleWatcher stops nudging + escalates after N no-progress repeats
+# ---------------------------------------------------------------------------
+
+
+def _escalating_watcher(board, *, max_repeats: int):
+    """Build an IdleWatcher with the #546 escalation cap + an escalate spy."""
+    from swarm.config import DroneConfig
+
+    sender = _Sender()
+    drone_log = MagicMock()
+    drone_log.entries = []
+
+    def add(action, worker, detail, category=None, **_):
+        entry = MagicMock()
+        entry.action = action
+        entry.worker_name = worker
+        entry.detail = detail
+        drone_log.entries.append(entry)
+
+    drone_log.add = MagicMock(side_effect=add)
+    escalations: list[tuple[str, str]] = []
+    cfg = DroneConfig(
+        idle_nudge_interval_seconds=1.0,
+        idle_nudge_debounce_seconds=1.0,
+        idle_nudge_max_repeats=max_repeats,
+    )
+    w = IdleWatcher(
+        drone_config=cfg,
+        task_board=board,
+        drone_log=drone_log,
+        send_to_worker=sender,
+        escalate_to_operator=lambda name, detail: escalations.append((name, detail)),
+    )
+    return w, sender, drone_log, escalations
+
+
+@pytest.mark.asyncio
+async def test_idle_watcher_escalates_after_max_repeats(tmp_path):
+    """The #543/#546 repro: a worker idle on the same task with an unchanged
+    fingerprint gets nudged exactly ``max_repeats`` times, then the watcher
+    escalates to the operator ONCE and goes silent — no infinite loop."""
+    task = _task(526, "t-526")
+    board = _task_board({"rcg-networks": [task]}, all_tasks=[task])
+    w, sender, log, escalations = _escalating_watcher(board, max_repeats=2)
+
+    worker = _worker("rcg-networks", WorkerState.RESTING)
+    # Four sweeps, each past the 1s interval+debounce window.
+    for t in (10.0, 20.0, 30.0, 40.0):
+        await w.sweep([worker], now=t)
+
+    nudges = [e for e in log.entries if e.action == DroneAction.AUTO_NUDGE]
+    escalated = [e for e in log.entries if e.action == SystemAction.AUTO_NUDGE_ESCALATED]
+    # Exactly max_repeats real nudges, then one escalation, then silence.
+    assert len(nudges) == 2
+    assert len(escalated) == 1
+    assert len(sender.calls) == 2  # only real nudges hit the PTY
+    # Operator escalation fired exactly once, naming the worker + task.
+    assert len(escalations) == 1
+    assert escalations[0][0] == "rcg-networks"
+    assert "#526" in escalations[0][1]
+
+
+@pytest.mark.asyncio
+async def test_idle_watcher_streak_resets_on_task_status_change(tmp_path):
+    """If the worker makes progress (task status changes), the fingerprint
+    changes, the streak resets, and normal nudging resumes — escalation is
+    not sticky on a worker that's actually moving."""
+    task = _task(526, "t-526")
+    board = _task_board({"rcg-networks": [task]}, all_tasks=[task])
+    w, sender, log, escalations = _escalating_watcher(board, max_repeats=2)
+    worker = _worker("rcg-networks", WorkerState.RESTING)
+
+    # Drive to escalation (2 nudges + escalate + silent).
+    for t in (10.0, 20.0, 30.0, 40.0):
+        await w.sweep([worker], now=t)
+    assert len(escalations) == 1
+    nudges_before = len([e for e in log.entries if e.action == DroneAction.AUTO_NUDGE])
+
+    # Worker makes progress → task status changes → fingerprint changes.
+    task.status.value = "assigned"
+    await w.sweep([worker], now=50.0)
+
+    nudges_after = len([e for e in log.entries if e.action == DroneAction.AUTO_NUDGE])
+    # A fresh nudge fired (streak reset), and no second escalation.
+    assert nudges_after == nudges_before + 1
+    assert len(escalations) == 1

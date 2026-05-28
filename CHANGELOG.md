@@ -10,6 +10,50 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.28.6] - 2026-05-28
+
+### Features
+
+### Changes
+
+- **Watchers stop nudging + escalate to the operator after N no-progress
+  repeats (task #546 — coordination-machinery fix + audit).** The
+  IdleWatcher and InterWorkerMessageWatcher debounce nudge *frequency*
+  but had no *termination* condition, so a worker idle on a task it
+  cannot progress (e.g. a shipped fix awaiting operator verification —
+  the live #543/#546 repro — or a genuinely stuck worker) got poked
+  every debounce window forever, burning tokens (same shape as #529's
+  ~$51 rcg-networks stale-blocker incident, via a different hole).
+  - New shared `swarm/drones/nudge_guard.py::RepeatNudgeGuard`: tracks
+    consecutive no-progress nudges per worker keyed on a cheap
+    "fingerprint" (worker state + outstanding-work signature). After
+    `DroneConfig.idle_nudge_max_repeats` (default 3) repeats with an
+    unchanged fingerprint it returns ESCALATE once, then SILENT until
+    the fingerprint changes (worker made progress / operator acted).
+    Both watchers use it via a small `_dispatch_or_escalate` helper —
+    not duplicated.
+  - On escalation the watcher emits a new
+    `SystemAction.AUTO_NUDGE_ESCALATED` buzz entry and calls an
+    injected `escalate_to_operator` callback, wired in the daemon to
+    `push_notification(event="idle_nudge_escalated", priority="high")`
+    — one operator-facing dashboard notification instead of an endless
+    silent loop. Both failure modes (awaiting-verification, genuinely
+    stuck) resolve to the same correct action: stop poking the worker,
+    hand it to the operator.
+  - `idle_nudge_max_repeats=0` disables the cap (pre-#546 unbounded
+    behavior) for opt-out via `swarm.yaml`.
+  - **Audit** (the 4th coordination gap in a week — #524/#527/#529/#546
+    — warranted a sweep): reviewed IdleWatcher, InterWorkerMessageWatcher,
+    BlockerStore, and the auto-handoff spawn. The systemic pattern was
+    *"a coordination loop with no escalation-to-human terminal state."*
+    BlockerStore (post-#529) and auto-handoff (post-#527) are healthy;
+    both watchers had the hole and are now fixed by the shared guard.
+  - 8 new tests: 6 unit (`tests/test_nudge_guard.py`) + 2 IdleWatcher
+    integration (escalate-after-N, streak-resets-on-progress) in
+    `tests/test_blockers.py`.
+
+### Fixes
+
 ## [2026.5.28.5] - 2026-05-28
 
 ### Features

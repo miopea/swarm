@@ -670,6 +670,17 @@ class SwarmDaemon(EventEmitter):
         # would otherwise be harder to test.
         from swarm.mcp.server import get_worker_last_mcp_activity
 
+        # Task #546: when a watcher gives up nudging a worker after
+        # idle_nudge_max_repeats no-progress repeats, it surfaces one
+        # operator-facing notification instead of looping forever.
+        def _escalate_idle_to_operator(worker_name: str, detail: str) -> None:
+            self.push_notification(
+                event="idle_nudge_escalated",
+                worker=worker_name,
+                message=f"Worker stuck/awaiting input: {detail}",
+                priority="high",
+            )
+
         self.pilot.set_idle_nudge_sender(
             self.send_to_worker,
             message_store=getattr(self, "message_store", None),
@@ -678,6 +689,7 @@ class SwarmDaemon(EventEmitter):
             daemon_start_time=getattr(self, "daemon_start_time", None),
             interrupt_worker=self.interrupt_worker,
             spawn_handoff_task=self._spawn_handoff_task,
+            escalate_to_operator=_escalate_idle_to_operator,
         )
         # Wire the Dreamer drone's read sources. The drone_log already
         # holds a reference to the BuzzStore (used for buzz log writes);

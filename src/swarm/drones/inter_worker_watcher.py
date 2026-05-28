@@ -25,7 +25,8 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from swarm.drones.log import DroneAction, LogCategory
+from swarm.drones.log import DroneAction, LogCategory, SystemAction
+from swarm.drones.nudge_guard import ESCALATE, SILENT, RepeatNudgeGuard
 from swarm.logging import get_logger
 from swarm.worker.worker import QUEEN_WORKER_NAME, WorkerState
 
@@ -116,6 +117,7 @@ class InterWorkerMessageWatcher:
         rate_limit_check: Callable[[str], bool] | None = None,
         task_board: TaskBoard | None = None,
         spawn_handoff_task: Callable[[str, Message], Awaitable[bool]] | None = None,
+        escalate_to_operator: Callable[[str, str], None] | None = None,
     ) -> None:
         self._config = drone_config
         self._message_store = message_store
@@ -123,6 +125,11 @@ class InterWorkerMessageWatcher:
         self._send_to_worker = send_to_worker
         self._rate_limit_check = rate_limit_check
         self._task_board = task_board
+        # Task #546: stop nudging + escalate to operator after
+        # idle_nudge_max_repeats consecutive no-progress nudges, instead of
+        # re-poking a worker about the same unread inbox forever.
+        self._escalate_to_operator = escalate_to_operator
+        self._nudge_guard = RepeatNudgeGuard()
         # task #442: callback that turns an actionable cross-worker
         # handoff to an idle, task-less recipient into a *tracked* task
         # assigned to that recipient — so the IdleWatcher then carries
@@ -152,6 +159,12 @@ class InterWorkerMessageWatcher:
     @property
     def debounce_seconds(self) -> float:
         return float(self._config.idle_nudge_debounce_seconds or 0.0)
+
+    @property
+    def _max_repeats(self) -> int:
+        """Task #546: consecutive no-progress nudges before escalate-and-quiet.
+        Read live from config so hot-reload picks it up; 0 disables the cap."""
+        return int(getattr(self._config, "idle_nudge_max_repeats", 0) or 0)
 
     @property
     def enabled(self) -> bool:
@@ -241,35 +254,88 @@ class InterWorkerMessageWatcher:
                     self._last_skip_log[worker.name] = now
                 continue
             latest = max(actionable, key=lambda m: m.created_at)
-            message = _nudge_message(latest.sender, len(inter_worker))
-            try:
-                await self._send_to_worker(worker.name, message, _log_operator=False)
-            except Exception:
-                _log.warning(
-                    "inter_worker_watcher: send_to_worker failed for %s",
-                    worker.name,
-                    exc_info=True,
-                )
-                continue
-            self._last_nudge[worker.name] = now
-            # Buzz-log detail is path-aware so audits can tell whether
-            # the nudge fired because of an action-required message
-            # (with-task path) or because the worker is idle without a
-            # task (no-task path — any unread counts).
-            path_label = "no-task" if not has_task else "with-task"
+            if await self._dispatch_or_escalate(
+                worker, inter_worker, actionable, latest, has_task, now=now
+            ):
+                sent += 1
+        return sent
+
+    async def _dispatch_or_escalate(
+        self,
+        worker: Worker,
+        inter_worker: list[Message],
+        actionable: list[Message],
+        latest: Message,
+        has_task: bool,
+        *,
+        now: float,
+    ) -> bool:
+        """A nudge is due; send it, or escalate + go quiet (task #546).
+
+        Consults the repeat-guard: after ``idle_nudge_max_repeats``
+        no-progress nudges (same unread-inbox fingerprint), stop poking
+        and escalate to the operator once. The fingerprint is the worker
+        state + unread count + newest message id, so a NEW inbound message
+        (id climbs) or the inbox draining (count drops) counts as progress
+        and resets the streak. Returns True only when a real nudge fired.
+        """
+        fingerprint = (
+            worker.display_state.value,
+            len(inter_worker),
+            max((m.id or 0 for m in inter_worker), default=0),
+        )
+        decision = self._nudge_guard.decide(worker.name, fingerprint, max_repeats=self._max_repeats)
+        self._last_nudge[worker.name] = now
+        if decision == SILENT:
+            return False
+        if decision == ESCALATE:
+            detail = (
+                f"unread from {latest.sender} ({len(inter_worker)} msg) across "
+                f"{self._max_repeats} nudges with no progress — escalated to operator"
+            )
             self._drone_log.add(
-                DroneAction.AUTO_NUDGE_MESSAGE,
+                SystemAction.AUTO_NUDGE_ESCALATED,
                 worker.name,
-                (
-                    f"unread from {latest.sender} "
-                    f"({len(inter_worker)} total, "
-                    f"{len(actionable)} actionable: {latest.msg_type}) "
-                    f"[{path_label}]"
-                ),
+                detail,
                 category=LogCategory.DRONE,
             )
-            sent += 1
-        return sent
+            if self._escalate_to_operator is not None:
+                try:
+                    self._escalate_to_operator(worker.name, detail)
+                except Exception:
+                    _log.debug(
+                        "inter_worker_watcher: escalate_to_operator raised for %s",
+                        worker.name,
+                        exc_info=True,
+                    )
+            return False
+        # NUDGE → normal poke.
+        message = _nudge_message(latest.sender, len(inter_worker))
+        try:
+            await self._send_to_worker(worker.name, message, _log_operator=False)
+        except Exception:
+            _log.warning(
+                "inter_worker_watcher: send_to_worker failed for %s",
+                worker.name,
+                exc_info=True,
+            )
+            return False
+        # Buzz-log detail is path-aware so audits can tell whether the nudge
+        # fired because of an action-required message (with-task path) or
+        # because the worker is idle without a task (no-task path).
+        path_label = "no-task" if not has_task else "with-task"
+        self._drone_log.add(
+            DroneAction.AUTO_NUDGE_MESSAGE,
+            worker.name,
+            (
+                f"unread from {latest.sender} "
+                f"({len(inter_worker)} total, "
+                f"{len(actionable)} actionable: {latest.msg_type}) "
+                f"[{path_label}]"
+            ),
+            category=LogCategory.DRONE,
+        )
+        return True
 
     def _should_nudge(self, worker: Worker, *, now: float) -> bool:
         """Cheap filters applied BEFORE we query the message store."""

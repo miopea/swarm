@@ -22,6 +22,7 @@ import time
 from typing import TYPE_CHECKING
 
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
+from swarm.drones.nudge_guard import ESCALATE, SILENT, RepeatNudgeGuard
 from swarm.logging import get_logger
 from swarm.worker.worker import WorkerState
 
@@ -104,6 +105,7 @@ class IdleWatcher:
         mcp_activity_lookup: Callable[[str], float | None] | None = None,
         daemon_start_time: float | None = None,
         mcp_followup_delay_seconds: float = _MCP_FOLLOWUP_DELAY_SECONDS,
+        escalate_to_operator: Callable[[str, str], None] | None = None,
     ) -> None:
         self._config = drone_config
         self._task_board = task_board
@@ -157,6 +159,15 @@ class IdleWatcher:
         # ``/mcp``.
         self._mcp_first_strike: set[str] = set()
         self._last_sweep: float = 0.0
+        # Task #546: stop nudging + escalate to operator after
+        # idle_nudge_max_repeats consecutive no-progress nudges, instead
+        # of looping forever on a task the worker can't progress.
+        # ``escalate_to_operator(worker_name, detail)`` surfaces one
+        # operator-facing attention item; None disables escalation (the
+        # guard then still caps the loop by going SILENT, just without an
+        # operator ping — e.g. in tests).
+        self._escalate_to_operator = escalate_to_operator
+        self._nudge_guard = RepeatNudgeGuard()
 
     @property
     def interval_seconds(self) -> float:
@@ -165,6 +176,12 @@ class IdleWatcher:
     @property
     def debounce_seconds(self) -> float:
         return float(self._config.idle_nudge_debounce_seconds or 0.0)
+
+    @property
+    def _max_repeats(self) -> int:
+        """Task #546: consecutive no-progress nudges before escalate-and-quiet.
+        Read live from config so hot-reload picks it up; 0 disables the cap."""
+        return int(getattr(self._config, "idle_nudge_max_repeats", 0) or 0)
 
     @property
     def enabled(self) -> bool:
@@ -236,25 +253,83 @@ class IdleWatcher:
             ]
             if not fresh_keys:
                 continue
-            message = _nudge_message(numbers)
-            try:
-                await self._send_to_worker(worker.name, message, _log_operator=False)
-            except Exception:
-                # Don't let one failed worker kill the sweep — log and move on.
-                _log.warning(
-                    "idle_watcher: send_to_worker failed for %s", worker.name, exc_info=True
-                )
-                continue
-            for key in fresh_keys:
-                self._last_nudge[key] = now
-            self._drone_log.add(
-                DroneAction.AUTO_NUDGE,
-                worker.name,
-                f"idle with active task(s): {', '.join(f'#{n}' for n in numbers)}",
-                category=LogCategory.DRONE,
-            )
-            sent += 1
+            if await self._dispatch_or_escalate(worker, active, numbers, fresh_keys, now=now):
+                sent += 1
         return sent
+
+    async def _dispatch_or_escalate(
+        self,
+        worker: Worker,
+        active: list,
+        numbers: list[int],
+        fresh_keys: list[tuple[str, str]],
+        *,
+        now: float,
+    ) -> bool:
+        """A nudge is due for ``worker``; send it, or escalate + go quiet.
+
+        Task #546: consult the repeat-guard. If the worker has been nudged
+        ``idle_nudge_max_repeats`` times with no progress, stop poking and
+        escalate to the operator once (then stay SILENT until something
+        changes). Otherwise send the normal nudge. Returns True only when
+        a real nudge was sent (so the caller's ``sent`` tally stays
+        accurate). The fingerprint captures "did anything change worth
+        re-nudging": worker display-state + each active task's
+        (number, status).
+        """
+        fingerprint = (
+            worker.display_state.value,
+            tuple(sorted((t.number, t.status.value) for t in active)),
+        )
+        decision = self._nudge_guard.decide(worker.name, fingerprint, max_repeats=self._max_repeats)
+        # Mark the debounce in all branches so the guard is re-consulted at
+        # most once per debounce window, not on every sweep.
+        for key in fresh_keys:
+            self._last_nudge[key] = now
+        if decision == SILENT:
+            return False  # already escalated; quiet until fingerprint changes
+        if decision == ESCALATE:
+            self._escalate(worker.name, numbers)
+            return False
+        # NUDGE → normal poke.
+        message = _nudge_message(numbers)
+        try:
+            await self._send_to_worker(worker.name, message, _log_operator=False)
+        except Exception:
+            # Don't let one failed worker kill the sweep — log and move on.
+            _log.warning("idle_watcher: send_to_worker failed for %s", worker.name, exc_info=True)
+            return False
+        self._drone_log.add(
+            DroneAction.AUTO_NUDGE,
+            worker.name,
+            f"idle with active task(s): {', '.join(f'#{n}' for n in numbers)}",
+            category=LogCategory.DRONE,
+        )
+        return True
+
+    def _escalate(self, worker_name: str, numbers: list[int]) -> None:
+        """Stop nudging ``worker_name`` and surface one operator attention
+        item (task #546). Best-effort — a callback failure must not break
+        the sweep."""
+        detail = (
+            f"idle on {', '.join(f'#{n}' for n in numbers)} across "
+            f"{self._max_repeats} nudges with no progress — escalated to operator"
+        )
+        self._drone_log.add(
+            SystemAction.AUTO_NUDGE_ESCALATED,
+            worker_name,
+            detail,
+            category=LogCategory.DRONE,
+        )
+        if self._escalate_to_operator is not None:
+            try:
+                self._escalate_to_operator(worker_name, detail)
+            except Exception:
+                _log.debug(
+                    "idle_watcher: escalate_to_operator raised for %s",
+                    worker_name,
+                    exc_info=True,
+                )
 
     def _bucket_active_tasks_by_worker(self) -> dict[str, list]:
         """Snapshot the board's active tasks once and group by assignee.

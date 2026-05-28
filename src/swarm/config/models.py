@@ -142,6 +142,14 @@ class DroneConfig:
     # get spammed.
     idle_nudge_interval_seconds: float = 180.0
     idle_nudge_debounce_seconds: float = 900.0
+    # Task #546: after this many consecutive no-progress nudges (the
+    # worker's state + outstanding-work fingerprint unchanged between
+    # nudges), the watcher STOPS poking and escalates once to the
+    # operator instead of looping forever on a task the worker can't
+    # progress (e.g. a shipped fix awaiting operator verification).
+    # Applies to both the idle-watcher and the inter-worker watcher.
+    # 0 disables the cap → pre-#546 unbounded re-nudging.
+    idle_nudge_max_repeats: int = 3
     # Native /goal seeding: at task dispatch, translate the task's
     # acceptance_criteria into a native ``/goal`` condition on providers
     # whose CLI supports it (Claude Code, Codex). The provider's own

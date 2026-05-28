@@ -110,6 +110,12 @@ class SystemAction(Enum):
     # only infer the clear from the absence of subsequent
     # AUTO_NUDGE_SKIPPED entries.
     BLOCKER_AUTO_CLEARED = "BLOCKER_AUTO_CLEARED"
+    # Task #546: a watcher (idle or inter-worker) stopped nudging a
+    # worker after `idle_nudge_max_repeats` consecutive no-progress
+    # nudges and escalated to the operator instead, rather than
+    # looping forever on a task the worker cannot progress (e.g. a
+    # shipped fix awaiting operator verification, or a stuck worker).
+    AUTO_NUDGE_ESCALATED = "AUTO_NUDGE_ESCALATED"
     # Queen events
     QUEEN_PROPOSAL = "QUEEN_PROPOSAL"
     QUEEN_AUTO_ACTED = "QUEEN_AUTO_ACTED"
