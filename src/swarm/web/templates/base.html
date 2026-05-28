@@ -673,6 +673,19 @@
         }
         /* Capped text width for Assessment/Reasoning paragraphs */
         .queen-text-block { max-width: 540px; line-height: 1.5; }
+        /* Task #541: the ``.queen-card`` selector is defined TWICE in this
+           file — once at the top for the modal-popup cards (Resolution /
+           Escalation / Assignment shown inside ``#queen-result``), then
+           AGAIN further down for the side-panel Queen card with
+           ``display: flex; align-items: center``. CSS cascade picks the
+           later rule, so modal cards inherit ``display: flex`` and their
+           text children pack to min-content width — wrapping prose to
+           1–2 words per line on mobile (the operator-reported "narrow
+           column with most modal width empty" repro). Scope ``display:
+           block`` to anything inside the modal body so the side-panel
+           card keeps its flex layout while modal cards lay out as blocks
+           and text wraps to the modal's actual content width. */
+        #queen-result .queen-card { display: block; }
         .queen-card-assessment { padding: 0.75rem; background: var(--panel); border-radius: 4px; margin-bottom: 1rem; }
         .queen-code-block {
             padding: 0.5rem; background: var(--panel); border: 1px solid var(--border);

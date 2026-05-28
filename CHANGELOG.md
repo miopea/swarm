@@ -10,6 +10,47 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.28.4] - 2026-05-28
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Mobile dashboard: Queen modal body no longer renders as a
+  1-2-words-per-line vertical strip (task #541).** Operator reported
+  the "Queen — Hive Conductor" modal on mobile rendering its body
+  content in a super-narrow column (~30-40px wide) at the left side
+  with most of the modal width unused.
+  - **Root cause**: `.queen-card` is defined TWICE in
+    `src/swarm/web/templates/base.html` — once at line 657 for the
+    modal-popup cards (Resolution / Escalation / Assignment shown
+    inside `#queen-result`), then AGAIN at line 1104 for the side-
+    panel Queen card with `display: flex; align-items: center`. CSS
+    cascade picks the LATER rule, so the modal cards inherited
+    `display: flex` and their text children packed to min-content
+    width — wrapping prose to 1-2 words per line on any narrow
+    viewport. Cleanly visible at mobile widths where there's less
+    fallback room.
+  - **Fix**: added a scoped override at the modal context —
+    `#queen-result .queen-card { display: block; }`. The side-panel
+    Queen card keeps its flex layout (intentional — bee-icon +
+    name + meta line up horizontally). The modal cards lay out as
+    blocks and text wraps to the modal's actual content width.
+  - **Minimal change**: 1-rule addition, ~14 LOC including the
+    explanatory comment about the duplicate selector. No other
+    modal styling touched.
+  - **Bug-class note**: the `.queen-card` duplicate-selector
+    pattern is the underlying smell. A future hygiene pass could
+    rename the side-panel queen card to `.queen-sidebar-card` so
+    the modal-vs-sidebar distinction is encoded in the class name
+    rather than relying on a scope-override. Filed as a follow-up
+    note, not addressed here per #541's "minimal scoped change"
+    directive.
+  - **Validation**: full pytest 4779 passed (matches baseline);
+    ruff format + ruff check --max-warnings 0 clean.
+
 ## [2026.5.28.3] - 2026-05-28
 
 ### Features
