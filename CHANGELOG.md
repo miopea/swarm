@@ -10,6 +10,29 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.28.8] - 2026-05-28
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Auto-focus the Queen PTY terminal when the Queen view (Command Center)
+  opens** (#551). Opening the Queen view embedded her live PTY via
+  `mountQueenEmbed()` but never focused it, so the operator needed an extra
+  click before typing. `mountQueenEmbed()` now schedules a staged re-focus
+  (80 ms + 250 ms) after its refit ladder — mirroring the worker-view focus in
+  `showTermEntry()` — surviving the WS reset/reconnect it performs. The actual
+  focus is factored into a shared `focusTermEntryNow(entry)` helper (extracted
+  from `focusInlineTerm`, no behavior change for worker terminals). A new
+  `isTermInputFocused()` helper teaches the four global keyboard-shortcut
+  yield-guards (Ctrl+L/D, Alt+letter, `?`, Escape) to recognize the Queen embed
+  textarea as well as the active worker terminal, so focusing the Queen PTY
+  doesn't leak Alt+A/K/N or Ctrl+L/D shortcuts through while typing. New
+  Playwright acceptance probe `scripts/check_queen_focus.py` covers all four
+  criteria. All changes in `src/swarm/web/static/dashboard.js`.
+
 ## [2026.5.28.7] - 2026-05-28
 
 ### Features
