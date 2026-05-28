@@ -10,6 +10,56 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.28] - 2026-05-28
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Auto-handoff tasks no longer get re-routed to a random worker on
+  send-failure (task #527).** When `start_task` failed to deliver a
+  task body to its recipient (PTY not ready / transient OSError),
+  the unassign-on-failure handler dropped the task into the pending
+  pool — where the queen's auto-assigner could (and did) re-route
+  it to a different idle worker, ignoring the original recipient
+  intent. For tasks tagged `"auto-handoff"` (the #442 inter-worker
+  watcher's spawn output), that's a misroute by construction: the
+  watcher resolved THIS recipient from a direct message addressed
+  to them.
+  - Concrete bite: task #525 (platform → rcg-networks via message
+    #1156) ended up completed by public-website after rcg-networks's
+    send failed. DB history: ASSIGNED rcg-networks → UNASSIGNED
+    "send failed" → ASSIGNED queen → public-website. Operator's
+    stated theory was "recipient resolution bug" in the auto-spawn,
+    but DB evidence falsified that — the original assignment was
+    correct; the bug was downstream in the failure-recovery path.
+  - Fix: extend the exception handler in
+    `src/swarm/server/task_coordinator.py::start_task` to detect
+    `"auto-handoff" in task.tags` and KEEP the task ASSIGNED to
+    the original recipient instead of unassigning. The
+    IdleWatcher's nudge-on-RESTING-with-ASSIGNED path will retry
+    delivery once the recipient's PTY recovers; the auto-spawn's
+    `_spawned_msg_ids` dedup prevents re-spawn in the interim.
+  - Operator visibility preserved: the `TASK_SEND_FAILED` buzz
+    entry and the `task_send_failed` WS broadcast still fire on
+    either branch. The buzz detail now carries
+    `[auto-handoff: kept ASSIGNED for retry]` so the operator can
+    see what was done differently.
+  - Non-handoff tasks are unchanged — they still unassign and
+    rejoin the pending pool. Only the `tags=["auto-handoff"]`
+    branch (set by `spawn_handoff_task` and nowhere else) gets
+    the no-requeue treatment.
+  - 2 regression tests in `tests/server/test_task_coordinator.py`:
+    one pinning the #525 repro (auto-handoff task kept ASSIGNED
+    on send failure), one pinning the inverse (regular task still
+    unassigns).
+  - Takes effect on the next operator-initiated daemon reload.
+    Combined with the deferred #524 stop-hook fix and #442
+    itself, the next reload activates all three coordination
+    changes together.
+
 ## [2026.5.27.12] - 2026-05-27
 
 ### Features

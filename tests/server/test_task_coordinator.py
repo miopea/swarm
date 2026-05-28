@@ -368,3 +368,135 @@ class TestRetryDraftReply:
         d.email.send_completion_reply = AsyncMock()
         await d.tasks_coord.retry_draft_reply(task.id)
         d.email.send_completion_reply.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# start_task — send-failure handling for auto-handoff tasks (#527)
+#
+# Before #527: a send failure on ANY task unassigned it and dropped it into
+# the pending pool, where the queen's auto-assigner could route it to a
+# random idle worker. For tasks tagged "auto-handoff" (the #442 inter-
+# worker spawn output), that's a misroute by construction — the watcher
+# resolved a specific recipient from a direct message, and rerouting
+# silently violates that intent. Concrete bite: task #525 (platform →
+# rcg-networks, message #1156) ended up completed by public-website
+# after rcg-networks's send failed.
+#
+# Fix: KEEP auto-handoff tasks ASSIGNED on send failure so the
+# IdleWatcher's retry path can re-deliver once the recipient recovers.
+# Non-handoff tasks are unchanged — they still unassign and rejoin the
+# pending pool.
+# ---------------------------------------------------------------------------
+
+
+class TestStartTaskSendFailureHandling:
+    """Send-failure branches the unassign vs keep-assigned decision."""
+
+    @pytest.mark.asyncio
+    async def test_send_failure_keeps_auto_handoff_assigned(self, monkeypatch) -> None:
+        """Task #527 / #525 repro: auto-handoff tasks must NOT requeue on
+        send failure. The recipient is the original target by construction,
+        and the queen's auto-assigner would otherwise re-route to a random
+        worker (the public-website misroute pattern)."""
+        from swarm.drones.log import SystemAction
+        from swarm.pty.process import ProcessError
+        from swarm.tasks.history import TaskAction
+        from tests.conftest import make_worker
+
+        d = make_daemon(monkeypatch, workers=[make_worker(name="rcg-networks")])
+        # Auto-handoff task: tagged + assigned to the original recipient.
+        task = d.task_board.create(title="Spec amendment for #523", tags=["auto-handoff"])
+        d.task_board.assign(task.id, "rcg-networks")
+        # Force the send to raise the same exception class start_task catches.
+        monkeypatch.setattr(
+            d,
+            "send_to_worker",
+            AsyncMock(side_effect=ProcessError("PTY not ready")),
+        )
+        # Spy on the history append (the JSONL persistence isn't wired in
+        # the test fixture; the call surface is what we care about anyway).
+        history_calls: list[tuple[str, TaskAction, str, str]] = []
+        original_append = d.task_history.append
+
+        def spy_append(
+            task_id: str,
+            action: TaskAction,
+            actor: str = "user",
+            detail: str = "",
+        ) -> object:
+            history_calls.append((task_id, action, actor, detail))
+            return original_append(task_id, action, actor, detail)
+
+        monkeypatch.setattr(d.task_history, "append", spy_append)
+
+        ok = await d.tasks_coord.start_task(task.id)
+
+        assert ok is False
+        # Task is STILL ASSIGNED — not unassigned and not back in the pool.
+        reloaded = d.task_board.get(task.id)
+        assert reloaded.status == TaskStatus.ASSIGNED
+        assert reloaded.assigned_worker == "rcg-networks"
+        # No TaskAction.UNASSIGNED in the task history (the original
+        # unassign-on-failure behaviour did append one — that path is
+        # what this fix steers around for auto-handoff tasks).
+        actions = [a for (_, a, _, _) in history_calls]
+        assert TaskAction.UNASSIGNED not in actions
+        assert TaskAction.EDITED in actions
+        edited_details = [d_ for (_, a, _, d_) in history_calls if a == TaskAction.EDITED]
+        assert any("keeping ASSIGNED" in d_ for d_ in edited_details)
+        # Operator still sees the failure in the buzz log; detail flags the
+        # ASSIGNED-retained intent so a future operator audit understands
+        # why the task didn't bounce.
+        buzz = [e for e in d.drone_log.entries if e.action == SystemAction.TASK_SEND_FAILED]
+        assert len(buzz) == 1
+        assert "[auto-handoff: kept ASSIGNED for retry]" in buzz[0].detail
+
+    @pytest.mark.asyncio
+    async def test_send_failure_unassigns_regular_task(self, monkeypatch) -> None:
+        """Inverse case: a non-handoff task still unassigns on send failure
+        (today's behaviour preserved). Only the "auto-handoff" tag triggers
+        the new keep-ASSIGNED branch."""
+        from swarm.drones.log import SystemAction
+        from swarm.pty.process import ProcessError
+        from swarm.tasks.history import TaskAction
+        from tests.conftest import make_worker
+
+        d = make_daemon(monkeypatch, workers=[make_worker(name="api")])
+        # Regular task — no "auto-handoff" tag.
+        task = d.task_board.create(title="ordinary task")
+        d.task_board.assign(task.id, "api")
+        monkeypatch.setattr(
+            d,
+            "send_to_worker",
+            AsyncMock(side_effect=ProcessError("PTY not ready")),
+        )
+        # Spy on history append (same rationale as the auto-handoff test).
+        history_calls: list[tuple[str, TaskAction, str, str]] = []
+        original_append = d.task_history.append
+
+        def spy_append(
+            task_id: str,
+            action: TaskAction,
+            actor: str = "user",
+            detail: str = "",
+        ) -> object:
+            history_calls.append((task_id, action, actor, detail))
+            return original_append(task_id, action, actor, detail)
+
+        monkeypatch.setattr(d.task_history, "append", spy_append)
+
+        ok = await d.tasks_coord.start_task(task.id)
+
+        assert ok is False
+        # Status reverted to UNASSIGNED (back in the pending pool) — the
+        # pre-#527 behaviour the fix intentionally preserves for
+        # non-handoff tasks.
+        reloaded = d.task_board.get(task.id)
+        assert reloaded.status == TaskStatus.UNASSIGNED
+        actions = [a for (_, a, _, _) in history_calls]
+        assert TaskAction.UNASSIGNED in actions
+        # Buzz entry still fires; detail does NOT contain the auto-handoff
+        # marker (since this isn't an auto-handoff task).
+        buzz = [e for e in d.drone_log.entries if e.action == SystemAction.TASK_SEND_FAILED]
+        assert len(buzz) == 1
+        assert "auto-handoff" not in buzz[0].detail

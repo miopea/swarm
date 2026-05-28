@@ -206,20 +206,50 @@ class TaskCoordinator:
                     await proc.send_enter()
         except (TimeoutError, ProcessError, OSError):
             _log.warning("failed to send task message to %s", worker_name, exc_info=True)
-            d.task_board.unassign(task_id)
-            d.task_history.append(
-                task_id,
-                TaskAction.UNASSIGNED,
-                actor="system",
-                detail=f"send failed to {worker_name} — returned to pending",
-            )
+            # Task #527: auto-handoff tasks (the inter-worker watcher's
+            # #442 spawn output, tagged "auto-handoff") are worker-
+            # specific by construction. The watcher resolved THIS
+            # recipient from a direct message addressed to them, so
+            # routing the task to anyone else is a bug — yet today's
+            # unassign-on-send-failure drops the task into the pending
+            # pool where the queen's auto-assigner can pick it up and
+            # route it to a random idle worker. That's the #525 misroute
+            # pattern (platform → rcg-networks message #1156 ended up
+            # completed by public-website after rcg-networks's send
+            # failed). KEEP the task ASSIGNED to the original recipient
+            # so the IdleWatcher's nudge-on-RESTING-with-ASSIGNED path
+            # retries delivery once the recipient's PTY recovers. The
+            # auto-spawn's _spawned_msg_ids dedup prevents re-spawning
+            # the same handoff in the interim.
+            is_auto_handoff = "auto-handoff" in (task.tags or [])
+            if is_auto_handoff:
+                d.task_history.append(
+                    task_id,
+                    TaskAction.EDITED,
+                    actor="system",
+                    detail=(
+                        f"send failed to {worker_name} — keeping ASSIGNED "
+                        f"(auto-handoff tasks are not requeueable)"
+                    ),
+                )
+            else:
+                d.task_board.unassign(task_id)
+                d.task_history.append(
+                    task_id,
+                    TaskAction.UNASSIGNED,
+                    actor="system",
+                    detail=f"send failed to {worker_name} — returned to pending",
+                )
             d.broadcast_ws(
                 {"type": "task_send_failed", "worker": worker_name, "task_title": task.title}
+            )
+            buzz_detail = task.title + (
+                " [auto-handoff: kept ASSIGNED for retry]" if is_auto_handoff else ""
             )
             d.drone_log.add(
                 SystemAction.TASK_SEND_FAILED,
                 worker_name,
-                task.title,
+                buzz_detail,
                 category=LogCategory.TASK,
                 is_notification=True,
             )
