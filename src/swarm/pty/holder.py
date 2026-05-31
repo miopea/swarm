@@ -373,7 +373,21 @@ class PtyHolder:
                 self._broadcast_death(name, worker.exit_code)
                 self._release_fd(worker)
                 return
-            raise
+            if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                # Spurious readable wakeup — nothing to read yet. Retry on the
+                # next callback; raising here would re-fire the still-registered
+                # reader in a tight loop.
+                return
+            # Unexpected read error: stop this reader to avoid that tight
+            # re-fire loop, log it, and leave the worker for higher layers to
+            # reconcile. Mirrors the EOF path below (remove reader, no close).
+            _log.warning("unexpected read error on worker %s: %s", name, e, exc_info=True)
+            if self._loop:
+                try:
+                    self._loop.remove_reader(worker.master_fd)
+                except (ValueError, OSError):
+                    pass
+            return
         if not data:
             # EOF — remove reader but leave worker in dict for kill_worker
             if self._loop:
@@ -528,7 +542,10 @@ class PtyHolder:
                 return True
             finally:
                 fcntl.fcntl(fd, fcntl.F_SETFL, flags)
-        except OSError:
+        except OSError as e:
+            # Normal backpressure (PTY buffer full) is handled above via
+            # BlockingIOError; reaching here is a genuine write failure.
+            _log.warning("write to worker %s failed: %s", name, e, exc_info=True)
             return False
 
     def resize_worker(self, name: str, cols: int, rows: int) -> bool:
@@ -543,7 +560,8 @@ class PtyHolder:
             if worker.alive:
                 os.killpg(os.getpgid(worker.pid), signal.SIGWINCH)
             return True
-        except (OSError, ProcessLookupError):
+        except (OSError, ProcessLookupError) as e:
+            _log.warning("resize of worker %s failed: %s", name, e, exc_info=True)
             return False
 
     def signal_worker(self, name: str, sig: int) -> bool:
@@ -554,7 +572,8 @@ class PtyHolder:
         try:
             os.killpg(os.getpgid(worker.pid), sig)
             return True
-        except OSError:
+        except OSError as e:
+            _log.warning("signal %d to worker %s failed: %s", sig, name, e, exc_info=True)
             return False
 
     def list_workers(self) -> list[dict[str, object]]:

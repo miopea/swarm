@@ -478,7 +478,7 @@ class ProcessPool:
                     fut.set_exception(ProcessError("Disconnected"))
             self._pending.clear()
 
-    async def _send_cmd(self, msg: dict[str, object]) -> dict[str, object]:
+    async def _send_cmd(self, msg: dict[str, Any]) -> dict[str, Any]:
         """Send a command and wait for the response.
 
         Uses a lock to serialize the write + future registration, but
@@ -511,7 +511,7 @@ class ProcessPool:
         finally:
             self._pending.pop(cmd_id, None)
 
-    def _dispatch_message(self, msg: dict[str, object]) -> None:
+    def _dispatch_message(self, msg: dict[str, Any]) -> None:
         """Route a single holder message to the appropriate handler."""
         if "output" in msg:
             name = msg["output"]

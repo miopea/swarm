@@ -10,6 +10,32 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.31.7] - 2026-05-31
+
+### Features
+
+### Changes
+
+- Type safety: aligned `ProcessPool._send_cmd`/`_dispatch_message` to
+  `dict[str, Any]` to match the `_SendCmd` protocol alias (was `dict[str, object]`).
+
+### Fixes
+
+- **PTY holder read loop is more resilient.** `_on_pty_readable` re-raised any
+  `OSError` other than EIO/EBADF straight out of the asyncio `add_reader`
+  callback — which leaves the reader registered and re-fires in a tight loop.
+  It now treats `EAGAIN`/`EWOULDBLOCK` as a spurious wakeup (retry) and, on any
+  other unexpected error, logs at WARNING and removes the reader (mirroring the
+  EOF path) instead of spinning.
+- **Process-control failures are no longer silent.** `write_to_worker`,
+  `signal_worker`, and `resize_worker` swallowed `OSError`/`ProcessLookupError`
+  with a bare `return False`; they now log at WARNING with `exc_info` per the
+  ops-visibility rule. Normal write backpressure stays quiet (it's handled
+  separately via `BlockingIOError`), so this doesn't spam.
+- Added `tests/test_command_handler.py` — unit coverage for the holder's JSON
+  command dispatcher (dispatch routing, spawn/write/signal/resize validation,
+  snapshot), previously only exercised indirectly through the socket protocol.
+
 ## [2026.5.31.6] - 2026-05-31
 
 ### Features
