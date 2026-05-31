@@ -10,6 +10,7 @@ import os
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -92,31 +93,31 @@ class SwarmDB:
             self._apply_migrations(db_version)
 
     def _apply_migrations(self, from_version: int) -> None:
-        """Apply incremental migrations."""
+        """Apply incremental migrations.
+
+        Data-driven registry: each entry is ``(version, migrate_fn)`` and runs
+        when the DB is older than that version. Append new migrations here and
+        bump ``CURRENT_VERSION`` in schema.py (plus the matching fresh DDL).
+        """
         assert self._conn is not None
         _log.info("migrating schema from v%d to v%d", from_version, CURRENT_VERSION)
-        if from_version < 2:
-            self._migrate_v2_indexes()
-        if from_version < 3:
-            self._migrate_v3_group_worker_order()
-        if from_version < 4:
-            self._migrate_v4_composite_index()
-        if from_version < 5:
-            self._migrate_v5_skills()
-        if from_version < 6:
-            self._migrate_v6_queen_chat()
-        if from_version < 7:
-            self._migrate_v7_worker_blockers()
-        if from_version < 8:
-            self._migrate_v8_verification_fields()
-        if from_version < 9:
-            self._migrate_v9_status_rename()
-        if from_version < 10:
-            self._migrate_v10_playbooks()
-        if from_version < 11:
-            self._migrate_v11_block_reason()
-        if from_version < 12:
-            self._migrate_v12_messages_dedup_index()
+        migrations: list[tuple[int, Callable[[], None]]] = [
+            (2, self._migrate_v2_indexes),
+            (3, self._migrate_v3_group_worker_order),
+            (4, self._migrate_v4_composite_index),
+            (5, self._migrate_v5_skills),
+            (6, self._migrate_v6_queen_chat),
+            (7, self._migrate_v7_worker_blockers),
+            (8, self._migrate_v8_verification_fields),
+            (9, self._migrate_v9_status_rename),
+            (10, self._migrate_v10_playbooks),
+            (11, self._migrate_v11_block_reason),
+            (12, self._migrate_v12_messages_dedup_index),
+            (13, self._migrate_v13_query_indexes),
+        ]
+        for version, migrate in migrations:
+            if from_version < version:
+                migrate()
         self._conn.execute(
             "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
             (CURRENT_VERSION, time.time()),
@@ -394,6 +395,30 @@ class SwarmDB:
             _log.info("v12: added idx_messages_dedup composite index")
         except sqlite3.OperationalError:
             _log.debug("v12 migration: messages table missing, skipping index")
+
+    def _migrate_v13_query_indexes(self) -> None:
+        """v13: indexes for the Queen's triage scans over growing tables.
+
+        ``buzz_log`` is filtered by ``category`` + ``timestamp`` (the
+        drone-actions view) and ``messages`` by a bare ``created_at`` range
+        (the message-stream view) — neither was index-covered. Both tables
+        grow unbounded, so these scans degrade over a long-running daemon.
+
+        ``CREATE INDEX IF NOT EXISTS`` is idempotent; wrapped in try/except so
+        legacy-bootstrap DBs missing a table don't break the chain (fresh DBs
+        always have both via SCHEMA_V1).
+        """
+        assert self._conn is not None
+        try:
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_buzz_category_time ON buzz_log(category, timestamp)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)"
+            )
+            _log.info("v13: added idx_buzz_category_time + idx_messages_created_at")
+        except sqlite3.OperationalError:
+            _log.debug("v13 migration: a target table is missing, skipping index")
 
     def close(self) -> None:
         """Close the database connection."""

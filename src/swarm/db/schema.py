@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 12
+CURRENT_VERSION = 13
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -183,6 +183,7 @@ CREATE INDEX IF NOT EXISTS idx_buzz_worker ON buzz_log(worker_name);
 CREATE INDEX IF NOT EXISTS idx_buzz_action ON buzz_log(action);
 CREATE INDEX IF NOT EXISTS idx_buzz_category ON buzz_log(category);
 CREATE INDEX IF NOT EXISTS idx_buzz_worker_time ON buzz_log(worker_name, timestamp);
+CREATE INDEX IF NOT EXISTS idx_buzz_category_time ON buzz_log(category, timestamp);
 
 -- ============================================================
 -- MESSAGES
@@ -206,6 +207,10 @@ CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages(recipient, read_at);
 -- table scan on every message.
 CREATE INDEX IF NOT EXISTS idx_messages_dedup
   ON messages(sender, recipient, msg_type, created_at);
+-- v13: the queen_view_messages / message_stream triage queries scan
+-- ``WHERE created_at >= ? ORDER BY created_at DESC`` — the dedup index
+-- above starts with ``sender`` so it can't serve a bare created_at range.
+CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at);
 
 -- ============================================================
 -- PIPELINES

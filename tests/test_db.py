@@ -582,3 +582,55 @@ class TestQueenChatStore:
         cols = db.fetchall("PRAGMA table_info(proposals)")
         names = {c["name"] for c in cols}
         assert "thread_id" in names
+
+
+class TestSchemaConsistency:
+    """Fresh-vs-migrated divergence guard.
+
+    Every column an ``ALTER TABLE ... ADD COLUMN`` migration introduces, and
+    every ``CREATE INDEX`` a migration creates, MUST also exist in the
+    fresh-create schema (SCHEMA_V1). If not, a fresh install and an upgraded
+    install end up with different schemas — the single most dangerous DB bug
+    class. This test introspects the migration source, so any future migration
+    is covered automatically (it fails if you add a migration column/index but
+    forget to mirror it into schema.py).
+    """
+
+    @staticmethod
+    def _migration_source() -> str:
+        import inspect
+
+        from swarm.db import core, migrate
+
+        return inspect.getsource(core) + inspect.getsource(migrate)
+
+    def test_migration_added_columns_present_in_fresh_schema(self, db: SwarmDB) -> None:
+        import re
+
+        adds = re.findall(
+            r"ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+(\w+)",
+            self._migration_source(),
+            re.IGNORECASE,
+        )
+        assert adds, "expected to find ADD COLUMN migrations to check"
+        missing = []
+        for table, col in adds:
+            cols = {r["name"] for r in db.fetchall(f"PRAGMA table_info({table})")}
+            if col not in cols:
+                missing.append(f"{table}.{col}")
+        assert not missing, f"migration columns absent from fresh schema (divergence): {missing}"
+
+    def test_migration_created_indexes_present_in_fresh_schema(self, db: SwarmDB) -> None:
+        import re
+
+        names = re.findall(
+            r"CREATE INDEX IF NOT EXISTS\s+(\w+)",
+            self._migration_source(),
+            re.IGNORECASE,
+        )
+        assert names, "expected to find CREATE INDEX migrations to check"
+        fresh = {
+            r["name"] for r in db.fetchall("SELECT name FROM sqlite_master WHERE type='index'")
+        }
+        missing = [n for n in names if n not in fresh]
+        assert not missing, f"migration indexes absent from fresh schema (divergence): {missing}"

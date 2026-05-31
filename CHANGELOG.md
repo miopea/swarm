@@ -10,6 +10,29 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.31.11] - 2026-05-31
+
+### Features
+
+### Changes
+
+- **DB schema v13: two indexes for the Queen's triage scans.** Added
+  `idx_buzz_category_time` on `buzz_log(category, timestamp)` (serves the
+  drone-actions view) and `idx_messages_created_at` on `messages(created_at)`
+  (serves the message-stream view) — both tables grow unbounded and were
+  previously range-scanned. Applied to fresh DBs (schema) and existing DBs
+  (v12→13 migration); verified both paths produce identical schemas.
+- Refactored `SwarmDB._apply_migrations` into a data-driven `(version, fn)`
+  registry (behaviour-identical; lower complexity; trivial to extend).
+
+### Fixes
+
+- Added `tests/test_db.py::TestSchemaConsistency` — a fresh-vs-migrated
+  divergence guard that introspects every migration `ADD COLUMN` / `CREATE
+  INDEX` and asserts each exists in the fresh-create schema. Catches the most
+  dangerous DB bug class (a migration column/index not mirrored into the fresh
+  DDL) automatically for all future migrations.
+
 ## [2026.5.31.10] - 2026-05-31
 
 ### Features
