@@ -10,6 +10,10 @@ import os
 import time
 from pathlib import Path
 
+from swarm.logging import get_logger
+
+_log = get_logger("queen.session")
+
 STATE_DIR = Path.home() / ".swarm" / "queen"
 
 
@@ -59,6 +63,7 @@ def _save_to_db(name: str, session_id: str) -> bool:
         db.close()
         return True
     except Exception:
+        _log.warning("failed to save queen session %r to DB", name, exc_info=True)
         return False
 
 
@@ -76,6 +81,7 @@ def _load_from_db(name: str) -> str | None:
         db.close()
         return row[0] if row else None
     except Exception:
+        _log.warning("failed to load queen session %r from DB", name, exc_info=True)
         return None
 
 
@@ -89,4 +95,4 @@ def _clear_from_db(name: str) -> None:
         db.delete("queen_sessions", "name = ?", (name,))
         db.close()
     except Exception:
-        pass
+        _log.warning("failed to clear queen session %r from DB", name, exc_info=True)

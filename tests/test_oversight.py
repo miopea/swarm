@@ -520,3 +520,38 @@ class TestConfigIntegration:
         assert "oversight" in data["queen"]
         assert data["queen"]["oversight"]["enabled"] is True
         assert data["queen"]["oversight"]["buzzing_threshold_minutes"] == 15.0
+
+
+class TestCheckResourcePressure:
+    """OversightMonitor.check_resource_pressure — fires only on HIGH/CRITICAL
+    memory pressure that has persisted for more than two minutes."""
+
+    def _monitor(self) -> OversightMonitor:
+        return OversightMonitor(OversightConfig(enabled=True))
+
+    def test_fires_on_high_pressure_when_persistent(self) -> None:
+        sig = self._monitor().check_resource_pressure("high", 180.0)
+        assert sig is not None
+        assert sig.signal_type == SignalType.RESOURCE_PRESSURE
+        assert sig.worker_name == ""
+        assert "high" in sig.description
+
+    def test_fires_on_critical_pressure_when_persistent(self) -> None:
+        sig = self._monitor().check_resource_pressure("critical", 300.0)
+        assert sig is not None
+        assert sig.signal_type == SignalType.RESOURCE_PRESSURE
+        assert "critical" in sig.description
+
+    def test_ignores_brief_pressure(self) -> None:
+        assert self._monitor().check_resource_pressure("critical", 119.0) is None
+
+    def test_at_threshold_boundary_does_not_fire(self) -> None:
+        # Strictly less-than 120s does not fire; exactly 120s is not "< 120".
+        assert self._monitor().check_resource_pressure("high", 119.9) is None
+        assert self._monitor().check_resource_pressure("high", 120.0) is not None
+
+    def test_ignores_low_and_unknown_pressure_levels(self) -> None:
+        m = self._monitor()
+        assert m.check_resource_pressure("low", 600.0) is None
+        assert m.check_resource_pressure("medium", 600.0) is None
+        assert m.check_resource_pressure("", 600.0) is None

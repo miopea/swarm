@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import time
 from typing import TYPE_CHECKING, Any
 
 from swarm.config import QueenConfig
 from swarm.logging import get_logger
+from swarm.queen.json_extract import extract_json as _extract_json
 from swarm.queen.session import clear_session, load_session, save_session
 from swarm.worker.worker import TokenUsage
 
@@ -128,83 +128,6 @@ continue, done=false) rather than guessing.
 Operate fast, tight, and conservatively. Defer to the operator when
 unsure.
 """
-
-# Matches a fenced JSON code block — the Queen often adds markdown text after
-# the closing fence which broke the old starts/endswith parser.
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.DOTALL)
-
-
-def _find_balanced_braces(text: str) -> str | None:
-    """Find the first balanced ``{...}`` block in *text* via bracket matching."""
-    start = text.find("{")
-    if start == -1:
-        return None
-    depth = 0
-    in_string = False
-    escape = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return None
-
-
-def _extract_json(text: str) -> dict[str, Any] | None:
-    """Extract and parse JSON from Queen output text.
-
-    Handles four formats:
-    1. Plain JSON string
-    2. JSON inside markdown code fences (possibly with trailing text)
-    3. JSON with leading/trailing whitespace
-    4. First ``{...}`` block found via bracket matching (fallback)
-    """
-    stripped = text.strip()
-
-    # Try plain JSON first (no fences)
-    try:
-        parsed = json.loads(stripped)
-        if isinstance(parsed, dict):
-            return parsed
-    except json.JSONDecodeError:
-        pass
-
-    # Try extracting from markdown code fences
-    m = _JSON_FENCE_RE.search(stripped)
-    if m:
-        try:
-            parsed = json.loads(m.group(1))
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            _log.debug("JSON fence found but parse failed")
-
-    # Fallback: find first balanced {...} block via bracket matching
-    block = _find_balanced_braces(stripped)
-    if block:
-        try:
-            parsed = json.loads(block)
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-
-    _log.debug("Queen inner JSON parse failed")
-    return None
 
 
 class Queen:

@@ -10,6 +10,30 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.31.2] - 2026-05-31
+
+### Features
+
+### Changes
+
+- **Queen audit — JSON-extraction dedupe.** The headless Queen and the
+  verifier previously each carried their own copy of the `claude -p`
+  JSON-extraction logic (`_JSON_FENCE_RE` + plain/fenced/balanced-brace
+  parsing). Consolidated into a single shared `swarm/queen/json_extract.py`;
+  `queen.py` and `verifier.py` now import it (also tightens verifier's bare
+  `dict` return to `dict[str, Any]`).
+
+### Fixes
+
+- **Queen session persistence no longer swallows DB errors silently.**
+  `_save_to_db` / `_load_from_db` / `_clear_from_db` in `queen/session.py`
+  caught all exceptions and returned without logging — a silent failure mode
+  for Queen session continuity. They now log at WARNING with `exc_info`
+  (ops-visibility rule). Removed a dead `field(default_factory=list)`
+  assignment in `OversightMonitor.__init__` (immediately overwritten). Added
+  unit tests for the previously-untested
+  `OversightMonitor.check_resource_pressure` heuristic.
+
 ## [2026.5.31] - 2026-05-31
 
 ### Features

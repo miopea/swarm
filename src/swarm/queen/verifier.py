@@ -32,13 +32,12 @@ not a CI re-runner.
 from __future__ import annotations
 
 import asyncio
-import json
 import os
-import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from swarm.logging import get_logger
+from swarm.queen.json_extract import extract_json as _extract_json
 
 if TYPE_CHECKING:
     from swarm.providers.base import LLMProvider
@@ -54,10 +53,6 @@ _VERIFIER_TIMEOUT = 120
 # no Write/Edit, no test execution. Workers must run /check themselves
 # (tier-1 drone enforces evidence) — the verifier judges *content*.
 _VERIFIER_ALLOWED_TOOLS = "Read,Glob,Grep"
-
-# JSON envelope shape the verifier prompt asks for. Kept as a compiled
-# regex so a single helper handles both fenced and bare-JSON output.
-_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.DOTALL)
 
 
 VERIFIER_PROMPT = """\
@@ -364,59 +359,3 @@ def _parse_criteria(value: object) -> list[dict]:
             continue
         out.append({"text": text.strip(), "passed": passed})
     return out
-
-
-def _extract_json(text: str) -> dict | None:
-    """Find a JSON object in ``text`` whether plain or markdown-fenced."""
-    stripped = text.strip()
-    return _try_plain(stripped) or _try_fenced(stripped) or _try_balanced(stripped)
-
-
-def _try_plain(text: str) -> dict | None:
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
-def _try_fenced(text: str) -> dict | None:
-    m = _JSON_FENCE_RE.search(text)
-    if not m:
-        return None
-    try:
-        parsed = json.loads(m.group(1))
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
-def _try_balanced(text: str) -> dict | None:
-    """Bracket-match the first balanced ``{...}`` block and parse it."""
-    start = text.find("{")
-    if start == -1:
-        return None
-    depth = 0
-    in_string = False
-    escape = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if escape:
-            escape = False
-            continue
-        if ch == "\\":
-            escape = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch == "{":
-            depth += 1
-            continue
-        if ch == "}":
-            depth -= 1
-            if depth == 0:
-                return _try_plain(text[start : i + 1])
-    return None

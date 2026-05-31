@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -78,8 +78,7 @@ class OversightMonitor:
         # Per-worker last drift check timestamp
         self._last_drift_check: dict[str, float] = {}
         # Track interventions for status reporting
-        self._interventions: list[dict[str, Any]] = field(default_factory=list)
-        self._interventions = []
+        self._interventions: list[dict[str, Any]] = []
         # Auto-park (operator-blocked-stall guard): per (worker, task_id)
         # consecutive no-progress drift cycles, last-seen task.updated_at,
         # own cadence timer, and post-reject backoff.
