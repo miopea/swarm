@@ -10,6 +10,29 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.31.14] - 2026-05-31
+
+### Features
+
+### Changes
+
+- Pipelines DRY: extracted `_get_pipeline_or_raise` / `_get_step_or_raise`
+  (deduped 7 + 4 copy-pasted lookup blocks in `engine.py`), and the engine now
+  reuses `schedule.normalize_schedule` instead of an inlined copy of the legacy
+  HH:MM→cron logic (drops the duplicate `_LEGACY_HHMM` regex). `fail_step` now
+  returns `list[PipelineStep]` like its sibling step methods.
+
+### Fixes
+
+- **A malformed pipeline no longer hangs silently.** A pipeline with a circular
+  (`a↔b`) or missing (`depends_on=["ghost"]`) dependency previously started
+  `RUNNING` and stuck forever with no runnable step (never DONE/FAILED).
+  `start_pipeline` now calls `Pipeline.validate_dependencies()`, which raises
+  `ValueError` (→ clean 400 via the route's `@handle_errors`) on a missing or
+  circular dependency. Added regression tests for both.
+- `pipeline_from_dict` no longer crashes on an explicit `"depends_on": null` in
+  stored JSON (coerces to `[]` instead of passing `None` into `ready_steps`).
+
 ## [2026.5.31.13] - 2026-05-31
 
 ### Features

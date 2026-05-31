@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
@@ -16,6 +15,7 @@ from swarm.pipelines.models import (
     StepStatus,
     StepType,
 )
+from swarm.pipelines.schedule import normalize_schedule
 from swarm.pipelines.store import PipelineStore
 from swarm.pipelines.template import load_template
 from swarm.tasks.task import TYPE_MAP, TaskType
@@ -25,9 +25,6 @@ if TYPE_CHECKING:
     from swarm.tasks.board import TaskBoard
 
 _log = get_logger("pipelines.engine")
-
-# Legacy HH:MM shorthand — "14:30", "*:30", "14:*", "*:*"
-_LEGACY_HHMM = re.compile(r"^(\*|\d{1,2}):(\*|\d{1,2})$")
 
 
 class PipelineEngine(EventEmitter):
@@ -167,13 +164,28 @@ class PipelineEngine(EventEmitter):
 
     # -- Lifecycle -------------------------------------------------------------
 
-    def start_pipeline(self, pipeline_id: str) -> list[PipelineStep]:
-        """Start a DRAFT pipeline, advancing first steps."""
+    def _get_pipeline_or_raise(self, pipeline_id: str) -> Pipeline:
         pipeline = self._pipelines.get(pipeline_id)
         if not pipeline:
             raise ValueError(f"Pipeline {pipeline_id} not found")
+        return pipeline
+
+    @staticmethod
+    def _get_step_or_raise(pipeline: Pipeline, step_id: str) -> PipelineStep:
+        step = pipeline.get_step(step_id)
+        if not step:
+            raise ValueError(f"Step {step_id} not found in pipeline {pipeline.id}")
+        return step
+
+    def start_pipeline(self, pipeline_id: str) -> list[PipelineStep]:
+        """Start a DRAFT pipeline, advancing first steps."""
+        pipeline = self._get_pipeline_or_raise(pipeline_id)
         if pipeline.status != PipelineStatus.DRAFT:
             raise ValueError(f"Pipeline {pipeline_id} is {pipeline.status.value}, not draft")
+        # Reject malformed dependency graphs up front so a bad pipeline fails
+        # loudly (the route maps ValueError → 400) instead of starting RUNNING
+        # and hanging forever with no runnable step.
+        pipeline.validate_dependencies()
 
         newly_ready = pipeline.start()
         tasks_created = self._create_tasks_for_steps(pipeline, newly_ready)
@@ -188,17 +200,13 @@ class PipelineEngine(EventEmitter):
         return newly_ready
 
     def pause_pipeline(self, pipeline_id: str) -> None:
-        pipeline = self._pipelines.get(pipeline_id)
-        if not pipeline:
-            raise ValueError(f"Pipeline {pipeline_id} not found")
+        pipeline = self._get_pipeline_or_raise(pipeline_id)
         pipeline.pause()
         self._persist()
         self.emit("change")
 
     def resume_pipeline(self, pipeline_id: str) -> list[PipelineStep]:
-        pipeline = self._pipelines.get(pipeline_id)
-        if not pipeline:
-            raise ValueError(f"Pipeline {pipeline_id} not found")
+        pipeline = self._get_pipeline_or_raise(pipeline_id)
         newly_ready = pipeline.resume()
         self._create_tasks_for_steps(pipeline, newly_ready)
         self._persist()
@@ -217,12 +225,8 @@ class PipelineEngine(EventEmitter):
 
         Returns newly ready steps.
         """
-        pipeline = self._pipelines.get(pipeline_id)
-        if not pipeline:
-            raise ValueError(f"Pipeline {pipeline_id} not found")
-        step = pipeline.get_step(step_id)
-        if not step:
-            raise ValueError(f"Step {step_id} not found in pipeline {pipeline_id}")
+        pipeline = self._get_pipeline_or_raise(pipeline_id)
+        step = self._get_step_or_raise(pipeline, step_id)
 
         step.complete(result)
         newly_ready = pipeline.advance()
@@ -237,28 +241,22 @@ class PipelineEngine(EventEmitter):
         )
         return newly_ready
 
-    def fail_step(self, pipeline_id: str, step_id: str, error: str = "") -> None:
-        """Mark a step as failed."""
-        pipeline = self._pipelines.get(pipeline_id)
-        if not pipeline:
-            raise ValueError(f"Pipeline {pipeline_id} not found")
-        step = pipeline.get_step(step_id)
-        if not step:
-            raise ValueError(f"Step {step_id} not found")
+    def fail_step(self, pipeline_id: str, step_id: str, error: str = "") -> list[PipelineStep]:
+        """Mark a step as failed. Returns any steps that became ready (parallels
+        complete_step / skip_step / retry_step, which all return the new set)."""
+        pipeline = self._get_pipeline_or_raise(pipeline_id)
+        step = self._get_step_or_raise(pipeline, step_id)
 
         step.fail(error)
-        pipeline.advance()  # updates pipeline status
+        newly_ready = pipeline.advance()  # updates pipeline status
         self._persist()
         self.emit("change")
+        return newly_ready
 
     def skip_step(self, pipeline_id: str, step_id: str) -> list[PipelineStep]:
         """Skip a step and advance the pipeline."""
-        pipeline = self._pipelines.get(pipeline_id)
-        if not pipeline:
-            raise ValueError(f"Pipeline {pipeline_id} not found")
-        step = pipeline.get_step(step_id)
-        if not step:
-            raise ValueError(f"Step {step_id} not found")
+        pipeline = self._get_pipeline_or_raise(pipeline_id)
+        step = self._get_step_or_raise(pipeline, step_id)
 
         step.skip()
         newly_ready = pipeline.advance()
@@ -314,12 +312,8 @@ class PipelineEngine(EventEmitter):
         Raises ``ValueError`` for not-found and for non-eligible targets;
         the route handler maps those to 404 / 409 respectively.
         """
-        pipeline = self._pipelines.get(pipeline_id)
-        if not pipeline:
-            raise ValueError(f"Pipeline {pipeline_id} not found")
-        step = pipeline.get_step(step_id)
-        if not step:
-            raise ValueError(f"Step {step_id} not found")
+        pipeline = self._get_pipeline_or_raise(pipeline_id)
+        step = self._get_step_or_raise(pipeline, step_id)
         self._assert_retry_eligible(step, confirmed=confirmed)
 
         # Collect the target + every FAILED descendant. BFS forward through
@@ -473,10 +467,8 @@ class PipelineEngine(EventEmitter):
         if not schedule:
             return False
 
-        cron_expr = _LEGACY_HHMM.match(schedule)
-        if cron_expr:
-            hour, minute = cron_expr.group(1), cron_expr.group(2)
-            schedule = f"{minute} {hour} * * *"
+        # Canonicalize legacy HH:MM → cron via the single shared implementation.
+        schedule = normalize_schedule(schedule)
 
         try:
             from croniter import croniter  # imported lazily — optional in tests

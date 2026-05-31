@@ -128,6 +128,36 @@ class Pipeline:
             and all(d in satisfied_ids for d in s.depends_on)
         ]
 
+    def validate_dependencies(self) -> None:
+        """Raise ValueError if a step depends on an unknown step or if the
+        dependency graph contains a cycle.
+
+        Without this, a malformed pipeline (missing or circular ``depends_on``)
+        starts RUNNING but no step ever becomes ready — it hangs forever, never
+        reaching COMPLETED/FAILED. Call before ``start`` so the operator gets a
+        clear error instead of a silently-stuck pipeline.
+        """
+        by_id = {s.id: s for s in self.steps}
+        for s in self.steps:
+            for dep in s.depends_on:
+                if dep not in by_id:
+                    raise ValueError(f"step {s.id!r} depends on unknown step {dep!r}")
+        # Cycle detection via DFS coloring (WHITE=0, GREY=1, BLACK=2).
+        color: dict[str, int] = dict.fromkeys(by_id, 0)
+
+        def _visit(sid: str) -> None:
+            color[sid] = 1
+            for dep in by_id[sid].depends_on:
+                if color[dep] == 1:
+                    raise ValueError(f"circular dependency detected at step {dep!r}")
+                if color[dep] == 0:
+                    _visit(dep)
+            color[sid] = 2
+
+        for s in self.steps:
+            if color[s.id] == 0:
+                _visit(s.id)
+
     def advance(self) -> list[PipelineStep]:
         """Mark ready steps as READY and return them.
 
@@ -228,7 +258,9 @@ def step_from_dict(d: dict[str, Any]) -> PipelineStep:
         step_type=StepType(d.get("step_type", "agent")),
         status=StepStatus(d.get("status", "pending")),
         description=d.get("description", ""),
-        depends_on=d.get("depends_on", []),
+        # ``or []`` (not a .get default): an explicit ``null`` in the JSON
+        # would otherwise pass None through and crash ready_steps().
+        depends_on=d.get("depends_on") or [],
         task_type=d.get("task_type", "chore"),
         assigned_worker=d.get("assigned_worker"),
         task_id=d.get("task_id"),

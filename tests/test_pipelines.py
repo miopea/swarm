@@ -883,3 +883,92 @@ steps:
 
         with pytest.raises(FileNotFoundError):
             load_template("nonexistent", str(tmp_path))
+
+
+class TestDependencyValidation:
+    """A malformed dependency graph (missing or circular depends_on) must fail
+    loudly at start, not start RUNNING and hang forever with no runnable step.
+    """
+
+    def _engine(self, tmp_path: Path) -> Any:
+        from swarm.pipelines.engine import PipelineEngine
+
+        return PipelineEngine(store=PipelineStore(path=tmp_path / "p.json"), task_board=TaskBoard())
+
+    def test_missing_dependency_rejected_at_start(self, tmp_path: Path) -> None:
+        engine = self._engine(tmp_path)
+        p = engine.create("miss", steps=[PipelineStep(id="x", name="X", depends_on=["ghost"])])
+        with pytest.raises(ValueError, match="unknown step"):
+            engine.start_pipeline(p.id)
+
+    def test_circular_dependency_rejected_at_start(self, tmp_path: Path) -> None:
+        engine = self._engine(tmp_path)
+        p = engine.create(
+            "circ",
+            steps=[
+                PipelineStep(id="a", name="A", depends_on=["b"]),
+                PipelineStep(id="b", name="B", depends_on=["a"]),
+            ],
+        )
+        with pytest.raises(ValueError, match="circular dependency"):
+            engine.start_pipeline(p.id)
+
+    def test_valid_dag_starts_cleanly(self, tmp_path: Path) -> None:
+        engine = self._engine(tmp_path)
+        p = engine.create(
+            "ok",
+            steps=[
+                PipelineStep(id="a", name="A"),
+                PipelineStep(id="b", name="B", depends_on=["a"]),
+            ],
+        )
+        ready = engine.start_pipeline(p.id)
+        assert [s.id for s in ready] == ["a"]
+
+    def test_from_dict_null_depends_on_coerced(self) -> None:
+        # An explicit null in stored JSON must not crash ready_steps().
+        p = pipeline_from_dict(
+            {
+                "id": "p1",
+                "name": "n",
+                "steps": [{"id": "a", "name": "A", "depends_on": None}],
+            }
+        )
+        assert p.steps[0].depends_on == []
+        # Sanity: advancing doesn't raise.
+        p.start()
+
+
+class TestPipelineRoundTrip:
+    def test_every_step_field_survives(self, tmp_path: Path) -> None:
+        """Guard: a fully-populated pipeline survives save -> load with all
+        step fields intact (mirrors the FileTaskStore round-trip guard)."""
+        store = PipelineStore(path=tmp_path / "p.json")
+        step = PipelineStep(
+            id="s1",
+            name="Step One",
+            step_type=StepType.AGENT,
+            description="desc",
+            depends_on=[],
+            task_type="content",
+            assigned_worker="hub",
+            service="svc",
+            config={"k": "v"},
+            schedule="30 14 * * *",
+        )
+        step.start()
+        step.task_id = "task-123"
+        p = Pipeline(
+            name="rt", description="d", tags=["t"], timezone="America/New_York", steps=[step]
+        )
+        store.save({p.id: p})
+        loaded = store.load()[p.id]
+        s2 = loaded.steps[0]
+        assert loaded.timezone == "America/New_York"
+        assert loaded.tags == ["t"]
+        assert s2.assigned_worker == "hub"
+        assert s2.service == "svc"
+        assert s2.config == {"k": "v"}
+        assert s2.schedule == "30 14 * * *"
+        assert s2.task_id == "task-123"
+        assert s2.started_at == step.started_at
