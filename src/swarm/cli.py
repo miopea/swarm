@@ -506,7 +506,7 @@ def init(  # noqa: C901
         # the DB on first start.
         from swarm.config import discover_projects, write_config
 
-        ported_settings: dict | None = None
+        ported_settings: dict[str, Any] | None = None
         scan_dir = Path(projects_dir) if projects_dir else Path.home() / "projects"
         projects = discover_projects(scan_dir)
 
@@ -1243,7 +1243,7 @@ def _parse_window(spec: str) -> float | None:
     return n * multipliers[unit]
 
 
-def _print_tool_usage_table(stats: list, since: str, total: int) -> None:
+def _print_tool_usage_table(stats: list[dict[str, Any]], since: str, total: int) -> None:
     click.echo(f"MCP tool usage (last {since}): {total} calls across {len(stats)} tools")
     if not stats:
         click.echo("  (no mcp:* entries in window)")

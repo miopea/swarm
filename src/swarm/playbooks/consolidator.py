@@ -17,10 +17,11 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
-from swarm.playbooks.models import PlaybookStatus
+from swarm.playbooks.models import Playbook, PlaybookStatus
 
 if TYPE_CHECKING:
     from swarm.db.playbook_store import PlaybookStore
+    from swarm.drones.log import SystemLog
 
 _log = get_logger("playbooks.consolidator")
 
@@ -35,7 +36,7 @@ class PlaybookConsolidator:
         *,
         queen: _Queen,
         store: PlaybookStore,
-        drone_log: Any | None = None,
+        drone_log: SystemLog | None = None,
     ) -> None:
         self._queen = queen
         self._store = store
@@ -51,7 +52,7 @@ class PlaybookConsolidator:
         except Exception:
             _log.debug("consolidation buzz failed", exc_info=True)
 
-    def _prompt(self, a, b) -> str:
+    def _prompt(self, a: Playbook, b: Playbook) -> str:
         return (
             "DECISION SHAPE: Playbook consolidation. Two same-scope playbooks "
             "may be near-duplicates.\n\n"

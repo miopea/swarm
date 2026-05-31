@@ -9,6 +9,7 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from swarm.logging import get_logger
 from swarm.tasks.task import TaskStatus
@@ -220,6 +221,12 @@ class ProposalStore:
         with self._lock:
             return [p for p in self._proposals.values() if p.status == ProposalStatus.PENDING]
 
+    def has_pending(self) -> bool:
+        """Cheap existence check mirroring SqliteProposalStore.has_pending —
+        the hot-path gate only needs a bool, not the full proposal list."""
+        with self._lock:
+            return any(p.status == ProposalStatus.PENDING for p in self._proposals.values())
+
     def pending_for_task(self, task_id: str) -> list[AssignmentProposal]:
         with self._lock:
             return [
@@ -332,7 +339,7 @@ class ProposalStore:
 
     # --- Persistence ---
 
-    def _serialize_proposal(self, p: AssignmentProposal) -> dict:
+    def _serialize_proposal(self, p: AssignmentProposal) -> dict[str, Any]:
         return {
             "id": p.id,
             "worker_name": p.worker_name,

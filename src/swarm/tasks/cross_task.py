@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from swarm.tasks.task import DEPENDENCY_TYPE_MAP, PRIORITY_MAP, TYPE_MAP
 
@@ -15,7 +16,7 @@ _MAX_CRITERIA = 20
 _MAX_REFS = 20
 
 
-def _validate_required_string(data: dict, field: str) -> str | None:
+def _validate_required_string(data: dict[str, Any], field: str) -> str | None:
     """Check that *field* is a non-empty string in *data*."""
     val = data.get(field, "")
     if not val or not isinstance(val, str) or not val.strip():
@@ -23,7 +24,9 @@ def _validate_required_string(data: dict, field: str) -> str | None:
     return None
 
 
-def _validate_enum_field(data: dict, field: str, valid: dict, default: str) -> str | None:
+def _validate_enum_field(
+    data: dict[str, Any], field: str, valid: dict[str, Any], default: str
+) -> str | None:
     """Check that *field* (if present) is one of *valid* keys."""
     val = data.get(field, default)
     if val and val not in valid:
@@ -31,7 +34,7 @@ def _validate_enum_field(data: dict, field: str, valid: dict, default: str) -> s
     return None
 
 
-def _validate_list_field(data: dict, field: str, max_len: int) -> str | None:
+def _validate_list_field(data: dict[str, Any], field: str, max_len: int) -> str | None:
     """Check that *field* is a list with at most *max_len* items."""
     val = data.get(field, [])
     if not isinstance(val, list):
@@ -41,7 +44,7 @@ def _validate_list_field(data: dict, field: str, max_len: int) -> str | None:
     return None
 
 
-def validate_cross_task(data: dict) -> str | None:
+def validate_cross_task(data: dict[str, Any]) -> str | None:
     """Validate a cross-task payload. Returns error message or None if valid."""
     if not isinstance(data, dict):
         return "payload must be a JSON object"
@@ -79,7 +82,7 @@ def validate_cross_task(data: dict) -> str | None:
     return None
 
 
-def parse_cross_task_file(path: Path) -> dict | None:
+def parse_cross_task_file(path: Path) -> dict[str, Any] | None:
     """Read and validate a JSON cross-task file. Returns parsed dict or None."""
     try:
         data = json.loads(path.read_text())
@@ -91,11 +94,11 @@ def parse_cross_task_file(path: Path) -> dict | None:
     return data
 
 
-def scan_cross_task_dir() -> list[tuple[Path, dict]]:
+def scan_cross_task_dir() -> list[tuple[Path, dict[str, Any]]]:
     """Scan the cross-task directory for unprocessed .json files."""
     if not CROSS_TASK_DIR.is_dir():
         return []
-    results: list[tuple[Path, dict]] = []
+    results: list[tuple[Path, dict[str, Any]]] = []
     for path in sorted(CROSS_TASK_DIR.glob("*.json")):
         data = parse_cross_task_file(path)
         if data is not None:

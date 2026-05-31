@@ -26,8 +26,12 @@ from swarm.playbooks.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from swarm.config.models import PlaybookConfig
     from swarm.db.playbook_store import PlaybookStore
+    from swarm.drones.log import SystemLog
+    from swarm.tasks.task import SwarmTask
 
 _log = get_logger("playbooks.synthesizer")
 
@@ -50,8 +54,8 @@ class PlaybookSynthesizer:
         queen: _Queen,
         store: PlaybookStore,
         config: PlaybookConfig,
-        drone_log: Any | None = None,
-        now: Any = time.time,
+        drone_log: SystemLog | None = None,
+        now: Callable[[], float] = time.time,
     ) -> None:
         self._queen = queen
         self._store = store
@@ -65,7 +69,7 @@ class PlaybookSynthesizer:
 
     # -- gating --------------------------------------------------------
 
-    def _eligible(self, task: Any, resolution: str) -> bool:
+    def _eligible(self, task: SwarmTask, resolution: str) -> bool:
         if not self._cfg.enabled:
             return False
         ttype = getattr(task.task_type, "value", task.task_type)
@@ -90,7 +94,7 @@ class PlaybookSynthesizer:
 
     # -- prompt --------------------------------------------------------
 
-    def _build_prompt(self, task: Any, resolution: str) -> str:
+    def _build_prompt(self, task: SwarmTask, resolution: str) -> str:
         ttype = getattr(task.task_type, "value", task.task_type)
         repo = getattr(task, "repo", "") or getattr(task, "project", "")
         return (
@@ -109,7 +113,7 @@ class PlaybookSynthesizer:
 
     # -- main ----------------------------------------------------------
 
-    async def synthesize(self, task: Any, *, worker: str, resolution: str) -> Playbook | None:
+    async def synthesize(self, task: SwarmTask, *, worker: str, resolution: str) -> Playbook | None:
         """Best-effort. Returns the saved Playbook or None. Never raises
         except ``asyncio.CancelledError`` (cooperative shutdown)."""
         key = (worker, str(getattr(task, "id", "")))
@@ -155,7 +159,7 @@ class PlaybookSynthesizer:
         return saved
 
     def _verdict_to_playbook(
-        self, result: dict[str, Any], task: Any, worker: str
+        self, result: dict[str, Any], task: SwarmTask, worker: str
     ) -> Playbook | None:
         """Validate the Queen's JSON verdict into a candidate Playbook,
         or None (logging the skip reason). Kept separate so ``synthesize``

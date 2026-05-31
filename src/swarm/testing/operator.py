@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from swarm.logging import get_logger
 from swarm.server.daemon import TaskOperationError as _TaskOperationError
@@ -180,7 +180,7 @@ class TestOperator:
             reasoning,
         )
 
-    async def _queen_evaluate(self, proposal: AssignmentProposal) -> dict:
+    async def _queen_evaluate(self, proposal: AssignmentProposal) -> dict[str, Any]:
         """Ask the Queen to evaluate whether a proposal should be approved."""
         queen = self._daemon.queen
 

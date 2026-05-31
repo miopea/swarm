@@ -182,7 +182,7 @@ def _parse_jira_section(jira_data: dict[str, object]) -> JiraConfig:
     )
 
 
-def _apply_config_layering(data: dict) -> list[dict]:
+def _apply_config_layering(data: dict[str, Any]) -> list[dict[str, Any]]:
     """Merge defaults → group settings → worker settings (later wins).
 
     Supports a top-level ``defaults:`` section and per-group overrides

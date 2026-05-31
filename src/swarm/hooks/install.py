@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from swarm.logging import get_logger
 from swarm.providers import get_provider
@@ -117,7 +118,7 @@ def install(global_install: bool = False, sandbox: object | None = None) -> None
     settings_path.write_text(json.dumps(settings, indent=2) + "\n")
 
 
-def _apply_sandbox(settings: dict, sandbox_cfg: object | None) -> None:
+def _apply_sandbox(settings: dict[str, Any], sandbox_cfg: object | None) -> None:
     """Merge sandbox overrides into ``settings["sandbox"]`` when enabled.
 
     Gated on three conditions, any of which skip the write (logged):
@@ -196,7 +197,7 @@ def _parse_version(text: str) -> tuple[int, int, int] | None:
     return (major, minor, patch)
 
 
-def _remove_legacy_hook(settings: dict) -> None:
+def _remove_legacy_hook(settings: dict[str, Any]) -> None:
     """Remove the old broken PreToolUse auto-allow hook that used the wrong JSON schema."""
     hooks = settings.get("hooks", {})
     pre_tool = hooks.get("PreToolUse", [])
@@ -250,7 +251,7 @@ _CROSS_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "cross-task-hook.sh"
 _COMPLETE_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "complete-task-hook.sh"
 
 
-def _remove_legacy_post_tool_hooks(settings: dict) -> None:
+def _remove_legacy_post_tool_hooks(settings: dict[str, Any]) -> None:
     """Remove cross-task and complete-task PostToolUse hooks.
 
     These are replaced by MCP tools (swarm_create_task, swarm_complete_task).
@@ -278,7 +279,7 @@ def _remove_legacy_post_tool_hooks(settings: dict) -> None:
 def _install_hook_script(
     src: Path,
     dst: Path,
-    settings: dict,
+    settings: dict[str, Any],
     event_name: str,
     matcher: str | None,
     script_suffix: str,
@@ -308,7 +309,7 @@ def _install_hook_script(
         event_hooks.append(entry)
 
 
-def _install_approval_hook(settings: dict) -> None:
+def _install_approval_hook(settings: dict[str, Any]) -> None:
     """Register PreToolUse hook for drone-based tool approval."""
     _install_hook_script(
         _APPROVAL_HOOK_SRC,
@@ -320,7 +321,7 @@ def _install_approval_hook(settings: dict) -> None:
     )
 
 
-def _install_session_end_hook(settings: dict) -> None:
+def _install_session_end_hook(settings: dict[str, Any]) -> None:
     """Register SessionEnd hook for immediate STUNG detection."""
     _install_hook_script(
         _SESSION_END_HOOK_SRC,
@@ -333,7 +334,7 @@ def _install_session_end_hook(settings: dict) -> None:
     )
 
 
-def _install_session_start_hook(settings: dict) -> None:
+def _install_session_start_hook(settings: dict[str, Any]) -> None:
     """Register SessionStart hook for worker bootstrap (task + unread messages)."""
     _install_hook_script(
         _SESSION_START_HOOK_SRC,
@@ -346,7 +347,7 @@ def _install_session_start_hook(settings: dict) -> None:
     )
 
 
-def _install_event_hooks(settings: dict) -> None:
+def _install_event_hooks(settings: dict[str, Any]) -> None:
     """Register lifecycle event hooks (SubagentStart/Stop, PreCompact/PostCompact)."""
     events = ["SubagentStart", "SubagentStop", "PreCompact", "PostCompact"]
     for event_name in events:
@@ -435,7 +436,7 @@ def install_worker_skills(worker_path: Path) -> int:
     return written
 
 
-def _install_mcp_server(settings: dict) -> None:
+def _install_mcp_server(settings: dict[str, Any]) -> None:
     """Register Swarm as an MCP server via project-level .mcp.json.
 
     Project-level .mcp.json files are visible in Claude Code's /mcp dialog,

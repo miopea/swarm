@@ -1164,3 +1164,98 @@ class TestRefreshTask:
         # Stale tail dropped, fresh body is the only content
         assert "stale comments here" not in task.description
         assert "fresh body" in task.description
+
+
+class TestFormatCommentAuthor:
+    def test_display_name_preferred(self) -> None:
+        from swarm.integrations.jira import _format_comment_author
+
+        assert _format_comment_author({"displayName": "Ada", "emailAddress": "a@x.io"}) == "Ada"
+
+    def test_email_fallback(self) -> None:
+        from swarm.integrations.jira import _format_comment_author
+
+        assert _format_comment_author({"emailAddress": "a@x.io"}) == "a@x.io"
+
+    def test_non_dict_is_unknown(self) -> None:
+        from swarm.integrations.jira import _format_comment_author
+
+        assert _format_comment_author(None) == "Unknown"
+        assert _format_comment_author({}) == "Unknown"
+
+
+class TestFormatCommentTimestamp:
+    def test_iso_with_milliseconds_and_offset(self) -> None:
+        from swarm.integrations.jira import _format_comment_timestamp
+
+        assert _format_comment_timestamp("2026-03-30T12:02:11.123-0400") == "2026-03-30 12:02"
+
+    def test_iso_without_milliseconds(self) -> None:
+        from swarm.integrations.jira import _format_comment_timestamp
+
+        assert _format_comment_timestamp("2026-03-30T12:02:11-0400") == "2026-03-30 12:02"
+
+    def test_unparseable_falls_back_to_raw(self) -> None:
+        from swarm.integrations.jira import _format_comment_timestamp
+
+        assert _format_comment_timestamp("not a date") == "not a date"
+
+    def test_empty_string(self) -> None:
+        from swarm.integrations.jira import _format_comment_timestamp
+
+        assert _format_comment_timestamp("") == ""
+
+
+class TestTruncate:
+    def test_under_limit_unchanged(self) -> None:
+        from swarm.integrations.jira import _truncate
+
+        assert _truncate("hello", 10) == "hello"
+
+    def test_exactly_at_limit_unchanged(self) -> None:
+        from swarm.integrations.jira import _truncate
+
+        assert _truncate("hello", 5) == "hello"
+
+    def test_over_limit_truncates_with_ellipsis(self) -> None:
+        from swarm.integrations.jira import _truncate
+
+        out = _truncate("hello world", 6)
+        assert len(out) == 6
+        assert out.endswith("…")
+        assert out == "hello…"
+
+
+class TestBuildSyncedDescription:
+    def test_base_only_has_no_sync_marker(self) -> None:
+        from swarm.integrations.jira import _JIRA_SYNC_MARKER, _build_synced_description
+
+        out = _build_synced_description("just the body", {}, [])
+        assert out == "just the body"
+        assert _JIRA_SYNC_MARKER.strip() not in out
+
+    def test_comments_appended_under_marker(self) -> None:
+        from swarm.integrations.jira import _build_synced_description
+
+        fields = {
+            "comment": {"comments": [{"author": {"displayName": "Ada"}, "body": "looks good"}]}
+        }
+        out = _build_synced_description("body", fields, [])
+        assert "--- Jira sync ---" in out
+        assert "Comments:" in out
+        assert "looks good" in out
+
+    def test_local_attachment_paths_listed(self) -> None:
+        from swarm.integrations.jira import _build_synced_description
+
+        out = _build_synced_description("body", {}, ["/uploads/a.png", "/uploads/b.pdf"])
+        assert "Local attachment paths:" in out
+        assert "- /uploads/a.png" in out
+        assert "- /uploads/b.pdf" in out
+
+    def test_truncated_to_budget(self) -> None:
+        from swarm.integrations.jira import _DESC_BUDGET, _build_synced_description
+
+        out = _build_synced_description("x" * (_DESC_BUDGET + 500), {}, [])
+        assert len(out) == _DESC_BUDGET
+        assert out.endswith("…")

@@ -10,6 +10,32 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.31] - 2026-05-31
+
+### Features
+
+### Changes
+
+- **Audit remediation — type safety.** Replaced `Any`/untyped parameters in
+  the playbooks module (`synthesizer.py`, `consolidator.py`) with concrete
+  types (`SwarmTask`, `Playbook`, `SystemLog`, `Callable[[], float]`), and
+  tightened bare `dict`/`list` annotations to `dict[str, Any]` / `list[...]`
+  across `config/loader.py`, `hooks/install.py`, `cli.py`, `tasks/cross_task.py`,
+  `tasks/proposal.py`, `db/proposal_store.py`, `drones/store.py`,
+  `testing/operator.py`, and `web/routes/partials.py`.
+
+### Fixes
+
+- **Proposal-existence hot-path no longer fetches the full pending list.**
+  Added `ProposalStore.has_pending()` / `SqliteProposalStore.has_pending()`
+  (a `SELECT 1 … LIMIT 1` / `any(...)` existence check) and wired the
+  poll-loop gate (`daemon.set_pending_proposals_check`) to it, instead of
+  building and discarding a full list of deserialized proposals on every
+  send-message / assign-task decision.
+- Added 18 unit tests covering previously-untested Jira pure helpers
+  (`_format_comment_author`, `_format_comment_timestamp`, `_truncate`,
+  `_build_synced_description`).
+
 ## [2026.5.30.2] - 2026-05-30
 
 ### Features

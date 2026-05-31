@@ -6,7 +6,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from swarm.db.base_store import BaseStore
 from swarm.logging import get_logger
@@ -72,6 +72,14 @@ class SqliteProposalStore(BaseStore):
                 "SELECT * FROM proposals WHERE status = 'pending' ORDER BY created_at"
             )
             return [_row_to_proposal(r) for r in rows]
+
+    def has_pending(self) -> bool:
+        """Cheap existence check for the hot-path gate. Avoids fetching and
+        deserializing every pending proposal just to test truthiness — the
+        poll loop calls this on every send-message / assign-task decision."""
+        with self._lock:
+            row = self._db.fetchone("SELECT 1 FROM proposals WHERE status = 'pending' LIMIT 1")
+            return row is not None
 
     def pending_for_task(self, task_id: str) -> list[AssignmentProposal]:
         with self._lock:
@@ -220,7 +228,7 @@ class SqliteProposalStore(BaseStore):
             )
 
 
-def _proposal_to_row(p: AssignmentProposal) -> dict:
+def _proposal_to_row(p: AssignmentProposal) -> dict[str, Any]:
     return {
         "id": p.id,
         "worker_name": p.worker_name,
@@ -246,7 +254,7 @@ def _proposal_to_row(p: AssignmentProposal) -> dict:
     }
 
 
-def _row_to_proposal(row: dict) -> AssignmentProposal:
+def _row_to_proposal(row: dict[str, Any]) -> AssignmentProposal:
     return AssignmentProposal(
         id=row["id"] or uuid.uuid4().hex[:12],
         worker_name=row["worker_name"] or "",

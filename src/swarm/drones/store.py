@@ -10,6 +10,7 @@ import json
 import sqlite3
 import threading
 from pathlib import Path
+from typing import Any
 
 from swarm.logging import get_logger
 
@@ -189,7 +190,7 @@ class LogStore:
         overridden: bool | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Query log entries with filters.  Returns list of dicts."""
         if not self._conn:
             return []
@@ -264,7 +265,7 @@ class LogStore:
             except sqlite3.Error:
                 return 0
 
-    def get_by_id(self, row_id: int) -> dict | None:
+    def get_by_id(self, row_id: int) -> dict[str, Any] | None:
         """Fetch a single log entry by row ID."""
         if not self._conn:
             return None
@@ -278,7 +279,7 @@ class LogStore:
                 _log.warning("failed to get entry %d", row_id, exc_info=True)
                 return None
 
-    def rule_analytics(self, *, since: float | None = None) -> list[dict]:
+    def rule_analytics(self, *, since: float | None = None) -> list[dict[str, Any]]:
         """Aggregate per-rule firing statistics from decision log metadata.
 
         Groups by (rule_pattern, source) extracted from the JSON metadata column.
@@ -369,7 +370,7 @@ class LogStore:
                 self._conn = None
 
     @staticmethod
-    def _row_to_dict(row: sqlite3.Row) -> dict:
+    def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
         """Convert a sqlite3.Row to a plain dict."""
         d = dict(row)
         d["is_notification"] = bool(d.get("is_notification", 0))

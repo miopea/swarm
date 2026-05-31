@@ -660,7 +660,7 @@ class SwarmDaemon(EventEmitter):
         self.pilot.on_state_changed(self._on_state_changed)
         self.pilot.on_proposal(self.queue_proposal)
         self.pilot.on_task_done(self._on_task_done)
-        self.pilot.set_pending_proposals_check(lambda: bool(self.proposal_store.pending))
+        self.pilot.set_pending_proposals_check(self.proposal_store.has_pending)
         self.pilot.set_pending_proposals_for_worker(
             lambda name: bool(self.proposal_store.pending_for_worker(name))
         )

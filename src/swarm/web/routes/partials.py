@@ -14,7 +14,7 @@ from swarm.web.log_filter import LOG_LEVEL_INCLUSIVE, line_matches_level
 from swarm.worker.worker import WorkerState
 
 
-def _paginate(request: web.Request, items: list) -> tuple[int, list, bool]:
+def _paginate(request: web.Request, items: list[Any]) -> tuple[int, list[Any], bool]:
     """Apply limit/offset pagination from query params. Returns (total, page, has_more).
 
     Default + cap match ``MAX_QUERY_LIMIT`` so this partial mirrors the
