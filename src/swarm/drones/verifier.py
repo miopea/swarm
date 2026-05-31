@@ -53,7 +53,7 @@ from swarm.tasks.task import VerificationStatus
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from swarm.drones.log import DroneLog
+    from swarm.drones.log import DroneEntry, DroneLog, SystemEntry
     from swarm.queen.verifier import VerifierClient
     from swarm.tasks.board import TaskBoard
     from swarm.tasks.task import SwarmTask
@@ -391,7 +391,7 @@ async def fire_and_forget(drone: VerifierDrone, task: SwarmTask) -> None:
         _log.warning("verifier fire-and-forget raised for #%d", task.number, exc_info=True)
 
 
-def has_check_evidence(buzz_entries: list, worker_name: str) -> bool:
+def has_check_evidence(buzz_entries: list[DroneEntry | SystemEntry], worker_name: str) -> bool:
     """Inspect recent buzz-log entries for ``/check`` evidence by *worker_name*.
 
     Helper extracted so the daemon can wire :class:`VerifierDrone` with a

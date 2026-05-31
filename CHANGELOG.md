@@ -10,6 +10,28 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.31.3] - 2026-05-31
+
+### Features
+
+### Changes
+
+- **Drones audit — type safety.** Filled in missing/bare type annotations
+  across the drones module (explicit-types rule): `idle_watcher`
+  (`_active_blocker -> Blocker | None`, `_on_auto_clear(b: Blocker)`,
+  `drone_config: DroneConfig`, `active: list[SwarmTask]`),
+  `inter_worker_watcher` (`drone_config: DroneConfig`), `backoff`
+  (`workers: list[Worker]`), `rules` (`is_user_question_fn: Callable[[str],
+  bool]`), `task_lifecycle` (Queen-assignment list → `list[dict[str, Any]]`),
+  and `verifier` (`buzz_entries: list[DroneEntry | SystemEntry]`).
+
+### Fixes
+
+- Added `tests/test_directives.py` covering `DirectiveExecutor`'s static
+  prompt-detection helpers (`has_operator_text_at_prompt`,
+  `has_pending_bash_approval`, `has_idle_prompt`) — previously only mocked,
+  never exercised against the real regex/substring logic.
+
 ## [2026.5.31.2] - 2026-05-31
 
 ### Features

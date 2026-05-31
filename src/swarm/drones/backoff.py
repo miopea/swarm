@@ -8,11 +8,12 @@ from swarm.worker.worker import WorkerState
 
 if TYPE_CHECKING:
     from swarm.config import DroneConfig
+    from swarm.worker.worker import Worker
 
 
 def compute_backoff(
     *,
-    workers: list,
+    workers: list[Worker],
     config: DroneConfig,
     idle_streak: int,
     base_interval: float,

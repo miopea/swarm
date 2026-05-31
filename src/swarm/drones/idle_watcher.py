@@ -29,9 +29,11 @@ from swarm.worker.worker import WorkerState
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from swarm.config import DroneConfig
     from swarm.drones.log import DroneLog
-    from swarm.tasks.blockers import BlockerStore
+    from swarm.tasks.blockers import Blocker, BlockerStore
     from swarm.tasks.board import TaskBoard
+    from swarm.tasks.task import SwarmTask
     from swarm.worker.worker import Worker
 
 
@@ -95,7 +97,7 @@ class IdleWatcher:
     def __init__(
         self,
         *,
-        drone_config,
+        drone_config: DroneConfig,
         task_board: TaskBoard | None,
         drone_log: DroneLog,
         send_to_worker: Callable[..., Awaitable[None]],
@@ -260,7 +262,7 @@ class IdleWatcher:
     async def _dispatch_or_escalate(
         self,
         worker: Worker,
-        active: list,
+        active: list[SwarmTask],
         numbers: list[int],
         fresh_keys: list[tuple[str, str]],
         *,
@@ -360,7 +362,7 @@ class IdleWatcher:
                 return False
         return True
 
-    def _active_blocker(self, worker_name: str):
+    def _active_blocker(self, worker_name: str) -> Blocker | None:
         """Return the first still-active blocker for ``worker_name``, or None.
 
         Delegates to :meth:`BlockerStore.has_active_blocker`, wiring in
@@ -380,7 +382,7 @@ class IdleWatcher:
                     return t.status.value == "done"
             return False
 
-        def _on_auto_clear(b, reason: str) -> None:
+        def _on_auto_clear(b: Blocker, reason: str) -> None:
             """Task #529: surface the auto-clear in the buzz log so an
             operator audit can see WHY a previously-blocked worker is
             being nudged again (without this, the only signal is the

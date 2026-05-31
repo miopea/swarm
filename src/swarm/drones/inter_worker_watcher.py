@@ -33,6 +33,7 @@ from swarm.worker.worker import QUEEN_WORKER_NAME, WorkerState
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from swarm.config import DroneConfig
     from swarm.drones.log import DroneLog
     from swarm.messages.store import Message, MessageStore
     from swarm.tasks.board import TaskBoard
@@ -110,7 +111,7 @@ class InterWorkerMessageWatcher:
     def __init__(
         self,
         *,
-        drone_config,
+        drone_config: DroneConfig,
         message_store: MessageStore | None,
         drone_log: DroneLog,
         send_to_worker: Callable[..., Awaitable[None]],

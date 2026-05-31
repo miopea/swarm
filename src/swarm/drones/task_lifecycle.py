@@ -7,7 +7,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
 from swarm.logging import get_logger
@@ -495,7 +495,7 @@ class TaskLifecycle:
 
     async def _ask_queen_for_assignments(
         self, queen_tasks: list[SwarmTask], idle_for_queen: list[Worker]
-    ) -> list | None:
+    ) -> list[dict[str, Any]] | None:
         """Phase 2: ask Queen for the remaining tasks. None on cancel/error."""
         task_dicts = [
             {
@@ -569,7 +569,7 @@ class TaskLifecycle:
 
     def _process_queen_assignments(
         self,
-        assignments: list,
+        assignments: list[dict[str, Any]],
         idle_for_queen: list[Worker],
         floor: float,
         auto_approve: bool,

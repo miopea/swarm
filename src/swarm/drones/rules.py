@@ -13,6 +13,8 @@ from swarm.config import DroneApprovalRule, DroneConfig
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from swarm.providers.base import LLMProvider
     from swarm.providers.events import TerminalEvent
 
@@ -161,7 +163,7 @@ def _check_user_question(
     label: str,
     events: list[TerminalEvent] | None,
     _esc: dict[str, float],
-    is_user_question_fn: object,
+    is_user_question_fn: Callable[[str], bool],
 ) -> DroneDecision | None:
     """Escalate if prompt is a user question. Returns None if not a question."""
     if events is not None:
