@@ -1953,6 +1953,59 @@
             }
         }
 
+        /* Mobile D-pad: directional keys + a center Enter circle, floating
+           bottom-right of a worker terminal. Sits above the jump-to-bottom
+           pill when it shows, otherwise in the pill's corner. Touch-first —
+           hidden on desktop where a real keyboard is available. */
+        .term-dpad {
+            position: absolute;
+            right: 12px;
+            bottom: 12px;
+            display: none;
+            grid-template-columns: repeat(3, 44px);
+            grid-template-rows: repeat(3, 44px);
+            gap: 4px;
+            z-index: 11;
+            transition: bottom 150ms ease;
+        }
+        .term-dpad.dpad-raised { bottom: 64px; }  /* clear the pill */
+        .term-dpad-btn {
+            -webkit-appearance: none;
+            appearance: none;
+            border: 1px solid rgba(255,255,255,0.18);
+            background: rgba(20,16,10,0.62);
+            color: var(--leaf);
+            font-size: 20px;
+            line-height: 1;
+            font-family: inherit;
+            border-radius: 10px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+            -webkit-backdrop-filter: blur(4px);
+            backdrop-filter: blur(4px);
+            transition: background 120ms ease, transform 80ms ease;
+        }
+        .term-dpad-btn:active { transform: scale(0.92); background: rgba(140,179,105,0.30); }
+        .term-dpad-btn:focus-visible { outline: 2px solid var(--leaf); outline-offset: 2px; }
+        .term-dpad-up    { grid-column: 2; grid-row: 1; }
+        .term-dpad-left  { grid-column: 1; grid-row: 2; }
+        .term-dpad-center {
+            grid-column: 2; grid-row: 2;
+            border-radius: 50%;
+            background: var(--leaf);
+            color: #1a1209;
+            font-weight: 700;
+        }
+        .term-dpad-center:active { background: #9cc275; }
+        .term-dpad-right { grid-column: 3; grid-row: 2; }
+        .term-dpad-down  { grid-column: 2; grid-row: 3; }
+        @media (max-width: 768px) {
+            .term-dpad { display: grid; }
+        }
+
         /* Spinner animation */
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes pulse-glow {

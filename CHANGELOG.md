@@ -10,6 +10,23 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.31.5] - 2026-05-31
+
+### Features
+
+- **Mobile D-pad for worker terminals.** Each worker terminal now shows a
+  floating directional pad (↑ ← → ↓) with a **center Enter circle** in the
+  bottom-right corner, on mobile (`≤768px`) only. Arrows send
+  `/action/arrow-{up,down,left,right}/{worker}`; the center circle sends
+  `/action/continue/{worker}` (Enter). It rides above the jump-to-bottom pill
+  when that's showing and drops into the pill's corner otherwise. Each button
+  targets its own terminal's worker (correct for worker views and the Queen
+  embed) and does not refocus the terminal, so it won't pop the soft keyboard.
+
+### Changes
+
+### Fixes
+
 ## [2026.5.31.4] - 2026-05-31
 
 ### Features

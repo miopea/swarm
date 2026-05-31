@@ -3786,6 +3786,40 @@
         container.appendChild(jumpBtn);
         entry._jumpBtn = jumpBtn;
 
+        // Floating D-pad (touch/mobile): arrow keys around a center Enter
+        // circle, anchored bottom-right above the jump-to-bottom pill. Each
+        // button targets THIS entry's worker by name so it stays correct for
+        // both worker views and the Queen embed (never the global
+        // selectedWorker). It does NOT refocus the terminal — that would pop
+        // the mobile soft keyboard, defeating the d-pad's purpose.
+        var dpad = document.createElement('div');
+        dpad.className = 'term-dpad';
+        dpad.setAttribute('role', 'group');
+        dpad.setAttribute('aria-label', 'Directional keys for ' + name);
+        [
+            ['term-dpad-up', '↑', 'arrow-up', 'Arrow up'],
+            ['term-dpad-left', '←', 'arrow-left', 'Arrow left'],
+            ['term-dpad-center', '↵', 'enter', 'Enter'],
+            ['term-dpad-right', '→', 'arrow-right', 'Arrow right'],
+            ['term-dpad-down', '↓', 'arrow-down', 'Arrow down']
+        ].forEach(function(spec) {
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'term-dpad-btn ' + spec[0];
+            b.textContent = spec[1];
+            b.setAttribute('aria-label', spec[3] + ' to ' + name);
+            b.addEventListener('click', function(ev) {
+                ev.preventDefault();
+                var path = (spec[2] === 'enter')
+                    ? '/action/continue/' + encodeURIComponent(name)
+                    : '/action/' + spec[2] + '/' + encodeURIComponent(name);
+                actionFetch(path, { method: 'POST' });
+            });
+            dpad.appendChild(b);
+        });
+        container.appendChild(dpad);
+        entry._dpad = dpad;
+
         // Terminal events: bell notification + title tracking
         entry._onBellDisposable = entry.term.onBell(function() {
             showToast('Bell from ' + name, false, BEE.surprised);
@@ -4169,12 +4203,13 @@
     }
 
     function updateJumpToBottomPill(entry) {
-        if (!entry || !entry._jumpBtn) return;
-        if (entry.stickyBottom) {
-            entry._jumpBtn.classList.remove('show');
-        } else {
-            entry._jumpBtn.classList.add('show');
-        }
+        if (!entry) return;
+        var showing = !entry.stickyBottom;
+        // Pill is visible only when scrolled away from the bottom; the d-pad
+        // rides above it then, and drops back into the pill's corner when the
+        // pill is hidden.
+        if (entry._jumpBtn) entry._jumpBtn.classList.toggle('show', showing);
+        if (entry._dpad) entry._dpad.classList.toggle('dpad-raised', showing);
     }
 
     function resyncTermViewport(name, entry, stickToBottom) {
