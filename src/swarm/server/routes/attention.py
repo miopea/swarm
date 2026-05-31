@@ -96,10 +96,10 @@ def _gather_threads(chat: object, limit: int) -> list[attention_model.ThreadSnap
         latest: str | None = None
         if t.kind in _DETAIL_KINDS:
             try:
-                msgs = chat.list_messages(t.id, limit=500)
-                latest = msgs[-1].content if msgs else None
+                msg = chat.latest_message(t.id)
+                latest = msg.content if msg else None
             except Exception:
-                _log.debug("attention: list_messages(%s) failed", t.id, exc_info=True)
+                _log.debug("attention: latest_message(%s) failed", t.id, exc_info=True)
         out.append(
             attention_model.ThreadSnap(
                 id=t.id,
@@ -144,6 +144,25 @@ def _gather_workers(d: object, buzz: object, now: float) -> list[attention_model
 
     pilot = getattr(d, "pilot", None)
     waiting = getattr(pilot, "_waiting_content", {}) or {}
+
+    # Batch the buzz-log lookups once rather than 2 queries per STUNG worker.
+    # query() returns newest-first, so the first WORKER_STUNG row seen per
+    # worker is its most recent stung detail.
+    revive_counts: dict[str, int] = {}
+    last_stung_by_worker: dict[str, str | None] = {}
+    if buzz is not None:
+        try:
+            for r in buzz.query(action="REVIVED", since=now - _CRASH_LOOP_WINDOW, limit=1000):
+                wname = r.get("worker_name")
+                if wname:
+                    revive_counts[wname] = revive_counts.get(wname, 0) + 1
+            for r in buzz.query(action="WORKER_STUNG", since=now - 3600, limit=1000):
+                wname = r.get("worker_name")
+                if wname and wname not in last_stung_by_worker:
+                    last_stung_by_worker[wname] = r.get("detail")
+        except Exception:
+            _log.debug("attention: buzz batch query failed", exc_info=True)
+
     out: list[attention_model.WorkerSnap] = []
     for w in getattr(d, "workers", []):
         if w.name == QUEEN_WORKER_NAME:
@@ -152,14 +171,8 @@ def _gather_workers(d: object, buzz: object, now: float) -> list[attention_model
         revive_at = getattr(w, "_revive_at", 0.0)
         grace = getattr(w, "revive_grace", 15.0)
         in_grace = revive_at > 0 and (now - revive_at) < grace
-        revive_count = 0
-        last_stung: str | None = None
-        if state == "STUNG" and buzz is not None:
-            revive_count = buzz.count(
-                worker_name=w.name, action="REVIVED", since=now - _CRASH_LOOP_WINDOW
-            )
-            rows = buzz.query(worker_name=w.name, action="WORKER_STUNG", since=now - 3600, limit=1)
-            last_stung = rows[0].get("detail") if rows else None
+        revive_count = revive_counts.get(w.name, 0) if state == "STUNG" else 0
+        last_stung = last_stung_by_worker.get(w.name) if state == "STUNG" else None
         out.append(
             attention_model.WorkerSnap(
                 name=w.name,
@@ -191,14 +204,14 @@ def _gather_blocked(d: object) -> set[str]:
     store = getattr(d, "blocker_store", None)
     if store is None:
         return set()
-    blocked: set[str] = set()
-    for w in getattr(d, "workers", []):
-        try:
-            if store.list_for_worker(w.name):
-                blocked.add(w.name)
-        except Exception:
-            _log.debug("attention: list_for_worker(%s) failed", w.name, exc_info=True)
-    return blocked
+    try:
+        # One query for the whole board instead of one per worker.
+        blocked = store.active_worker_names()
+    except Exception:
+        _log.debug("attention: active_worker_names failed", exc_info=True)
+        return set()
+    worker_names = {w.name for w in getattr(d, "workers", [])}
+    return {name for name in blocked if name in worker_names}
 
 
 @handle_errors

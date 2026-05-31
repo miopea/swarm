@@ -277,6 +277,20 @@ class QueenChatStore(BaseStore):
             )
             return [_row_to_message(r, self) for r in rows]
 
+    def latest_message(self, thread_id: str) -> QueenMessage | None:
+        """Return the most recent message in a thread, or None.
+
+        Cheaper than ``list_messages(...)[-1]`` for callers (e.g. the
+        attention queue) that only need the latest line — fetches one row
+        instead of the whole thread.
+        """
+        with self._lock:
+            rows = self._db.fetchall(
+                "SELECT * FROM queen_messages WHERE thread_id = ? ORDER BY ts DESC LIMIT 1",
+                (thread_id,),
+            )
+            return _row_to_message(rows[0], self) if rows else None
+
     # ------------------------------------------------------------------
     # Learnings
     # ------------------------------------------------------------------

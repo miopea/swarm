@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from aiohttp import web
 
 from swarm.pipelines.models import PipelineStep, StepType
-from swarm.server.helpers import get_daemon, json_error
+from swarm.server.helpers import get_daemon, handle_errors, json_error
 
 if TYPE_CHECKING:
     from swarm.pipelines.engine import PipelineEngine
@@ -58,12 +58,14 @@ def _get_engine(request: web.Request) -> PipelineEngine:
     return engine
 
 
+@handle_errors
 async def handle_list(request: web.Request) -> web.Response:
     engine = _get_engine(request)
     pipelines = engine.list_all()
     return web.json_response([p.to_dict() for p in pipelines])
 
 
+@handle_errors
 async def handle_services(request: web.Request) -> web.Response:
     """List registered automated-step services with example configs.
 
@@ -79,6 +81,7 @@ async def handle_services(request: web.Request) -> web.Response:
     return web.json_response({"services": registry.describe()})
 
 
+@handle_errors
 async def handle_schedule_preview(request: web.Request) -> web.Response:
     """Project a cron expression into a human description + next firings.
 
@@ -96,6 +99,7 @@ async def handle_schedule_preview(request: web.Request) -> web.Response:
     return web.json_response(preview_schedule(expr, tz=tz, count=count))
 
 
+@handle_errors
 async def handle_get(request: web.Request) -> web.Response:
     engine = _get_engine(request)
     pipeline_id = request.match_info["pipeline_id"]
@@ -105,6 +109,7 @@ async def handle_get(request: web.Request) -> web.Response:
     return web.json_response(pipeline.to_dict())
 
 
+@handle_errors
 async def handle_create(request: web.Request) -> web.Response:
     engine = _get_engine(request)
     body = await request.json()
@@ -156,6 +161,7 @@ async def handle_create(request: web.Request) -> web.Response:
     return web.json_response(pipeline.to_dict(), status=201)
 
 
+@handle_errors
 async def handle_update(request: web.Request) -> web.Response:
     engine = _get_engine(request)
     pipeline_id = request.match_info["pipeline_id"]
@@ -209,6 +215,7 @@ async def handle_update(request: web.Request) -> web.Response:
     return web.json_response(result.to_dict())
 
 
+@handle_errors
 async def handle_delete(request: web.Request) -> web.Response:
     engine = _get_engine(request)
     pipeline_id = request.match_info["pipeline_id"]
@@ -217,6 +224,7 @@ async def handle_delete(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+@handle_errors
 async def handle_start(request: web.Request) -> web.Response:
     engine = _get_engine(request)
     pipeline_id = request.match_info["pipeline_id"]
@@ -232,6 +240,7 @@ async def handle_start(request: web.Request) -> web.Response:
     )
 
 
+@handle_errors
 async def handle_pause(request: web.Request) -> web.Response:
     engine = _get_engine(request)
     pipeline_id = request.match_info["pipeline_id"]
@@ -242,6 +251,7 @@ async def handle_pause(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+@handle_errors
 async def handle_resume(request: web.Request) -> web.Response:
     engine = _get_engine(request)
     pipeline_id = request.match_info["pipeline_id"]
@@ -257,6 +267,7 @@ async def handle_resume(request: web.Request) -> web.Response:
     )
 
 
+@handle_errors
 async def handle_complete_step(request: web.Request) -> web.Response:
     engine = _get_engine(request)
     pipeline_id = request.match_info["pipeline_id"]
@@ -274,6 +285,7 @@ async def handle_complete_step(request: web.Request) -> web.Response:
     )
 
 
+@handle_errors
 async def handle_fail_step(request: web.Request) -> web.Response:
     engine = _get_engine(request)
     pipeline_id = request.match_info["pipeline_id"]
@@ -286,6 +298,7 @@ async def handle_fail_step(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+@handle_errors
 async def handle_skip_step(request: web.Request) -> web.Response:
     engine = _get_engine(request)
     pipeline_id = request.match_info["pipeline_id"]
@@ -302,6 +315,7 @@ async def handle_skip_step(request: web.Request) -> web.Response:
     )
 
 
+@handle_errors
 async def handle_retry_step(request: web.Request) -> web.Response:
     """Reset a FAILED step plus its FAILED downstream and re-fire (P3).
 

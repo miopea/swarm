@@ -121,6 +121,24 @@ class BlockerStore:
             for r in rows
         ]
 
+    def active_worker_names(self) -> set[str]:
+        """Return the set of workers that currently have any blocker.
+
+        One query for the whole board — callers that only need the
+        "is this worker blocked?" boolean (e.g. the attention queue)
+        should use this instead of N per-worker ``list_for_worker`` calls.
+        """
+        conn = self._db._conn
+        if conn is None:
+            return set()
+        try:
+            with self._db._lock:
+                rows = conn.execute("SELECT DISTINCT worker FROM worker_blockers").fetchall()
+        except sqlite3.Error:
+            _log.warning("blocker active_worker_names failed", exc_info=True)
+            return set()
+        return {r[0] for r in rows}
+
     def clear(self, worker: str, task_number: int) -> bool:
         """Remove the blocker for ``(worker, task_number)``. Returns True if a row was deleted."""
         conn = self._db._conn

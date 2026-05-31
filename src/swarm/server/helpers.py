@@ -159,6 +159,11 @@ def handle_errors(
             return json_error(str(e), 409)
         except ValueError as e:
             return json_error(str(e))
+        except web.HTTPException:
+            # aiohttp's own HTTP responses (e.g. a handler raising
+            # ``web.HTTPServiceUnavailable``) are intentional responses, not
+            # crashes — let them propagate instead of masking them as a 500.
+            raise
         except Exception:
             eid = uuid.uuid4().hex[:12]
             rid = request.get("request_id", "")

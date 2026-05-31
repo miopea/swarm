@@ -17,6 +17,7 @@ from swarm.server.helpers import (
 )
 from swarm.tasks.cross_task import validate_cross_task
 from swarm.tasks.task import (
+    SwarmTask,
     TaskPriority,
     TaskType,
     validate_priority,
@@ -84,7 +85,7 @@ def _validate_edit_body(body: dict[str, Any]) -> web.Response | None:
     return None
 
 
-def _task_dict(t) -> dict[str, object]:
+def _task_dict(t: SwarmTask) -> dict[str, object]:
     return {
         "id": t.id,
         "title": t.title,
@@ -96,7 +97,7 @@ def _task_dict(t) -> dict[str, object]:
     }
 
 
-def _task_full_dict(t) -> dict[str, object]:
+def _task_full_dict(t: SwarmTask) -> dict[str, object]:
     """Full task dict for the editor — every field the modal reads.
 
     Cleanup batch follow-up to the P1-P6 series: the dashboard's task
@@ -489,7 +490,6 @@ async def handle_upload_attachment(request: web.Request) -> web.Response:
     return web.json_response({"status": "uploaded", "path": path}, status=201)
 
 
-@handle_errors
 @handle_errors
 async def handle_search_task_history(request: web.Request) -> web.Response:
     """Search across all task history entries."""

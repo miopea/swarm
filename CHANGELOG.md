@@ -10,6 +10,34 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.5.31.4] - 2026-05-31
+
+### Features
+
+### Changes
+
+- **Server audit — attention queue de-N+1'd.** `GET /api/attention` (polled by
+  the dashboard) previously queried the blocker store once per worker, ran two
+  buzz-log queries per STUNG worker, and fetched up to 500 messages per thread
+  just to read the latest line. Added `BlockerStore.active_worker_names()` (one
+  `SELECT DISTINCT`) and `QueenChatStore.latest_message()` (one row), and
+  batched the buzz lookups into two action-scoped queries. Behaviour-preserving.
+
+### Fixes
+
+- **Pipeline routes now map errors to clean HTTP statuses.** All 14
+  `routes/pipelines.py` handlers were missing `@handle_errors`, so bad input
+  (`request.json()`, `int(count)`, `StepType(...)`) surfaced as raw 500s
+  instead of 400s. Decorated them, and hardened `handle_errors` to re-raise
+  `web.HTTPException` (e.g. a handler's own `503`) instead of masking it as a
+  500.
+- Removed a doubled `@handle_errors` decorator on `handle_search_task_history`
+  (`routes/tasks.py`).
+- Type safety: typed `_task_dict`/`_task_full_dict` params as `SwarmTask`
+  (`routes/tasks.py`) and `_record_tool_activity`'s `worker` as `Worker`
+  (`routes/hooks.py`). Added `tests/test_attention_routes.py` covering the
+  batched gather helpers.
+
 ## [2026.5.31.3] - 2026-05-31
 
 ### Features

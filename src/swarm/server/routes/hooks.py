@@ -391,7 +391,7 @@ def _check_file_lock(
     return None
 
 
-def _record_tool_activity(worker: Any, tool_name: str, tool_input: dict[str, Any]) -> None:
+def _record_tool_activity(worker: Worker, tool_name: str, tool_input: dict[str, Any]) -> None:
     """Append tool call to worker's recent_tools list (max 5)."""
     desc = tool_name
     if tool_name == "Bash" and "command" in tool_input:
