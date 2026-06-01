@@ -10,6 +10,28 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.1] - 2026-06-01
+
+### Features
+
+### Changes
+
+- `webhook_notify` no longer mutates the caller's config dict — it copies
+  `config["headers"]` before `setdefault`-ing `Content-Type` (the shared dict
+  is reused across pipeline runs).
+
+### Fixes
+
+- **`file_uploader` no longer blocks the event loop or hangs forever.** The
+  upload-file `read_bytes()` and credentials `read_text()` ran synchronously
+  inside `async execute()` (a large upload file stalled the whole daemon loop)
+  — both now run via `asyncio.to_thread`. Added an `aiohttp.ClientTimeout` to
+  the upload session so a hung Google API call can't hang the step indefinitely.
+- Added `tests/test_service_executors.py` covering the previously-untested
+  `ShellCommand` (success / non-zero exit / missing command / timeout) and
+  `WebhookNotify` (success / HTTP error / missing url / no-config-mutation)
+  service handlers.
+
 ## [2026.5.31.14] - 2026-05-31
 
 ### Features

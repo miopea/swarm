@@ -29,7 +29,9 @@ class WebhookNotify:
         if not url:
             return ServiceResult(success=False, error="url is required")
 
-        headers = config.get("headers", {})
+        # Copy: setdefault would otherwise mutate the caller's config dict,
+        # which is reused across pipeline runs.
+        headers = dict(config.get("headers", {}))
         headers.setdefault("Content-Type", "application/json")
 
         payload = {

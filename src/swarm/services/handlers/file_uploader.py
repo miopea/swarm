@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
@@ -108,7 +109,7 @@ class FileUploader:
             return ServiceResult(success=False, error=f"File not found: {file_path}")
 
         try:
-            sa_info = json.loads(Path(creds_path).read_text())
+            sa_info = json.loads(await asyncio.to_thread(Path(creds_path).read_text))
         except (json.JSONDecodeError, OSError) as exc:
             return ServiceResult(success=False, error=f"Invalid credentials: {exc}")
 
@@ -116,7 +117,8 @@ class FileUploader:
         folder_id = config.get("folder_id")
 
         try:
-            async with aiohttp.ClientSession() as session:
+            timeout = aiohttp.ClientTimeout(total=120)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
                 access_token = await _get_access_token(session, sa_info)
 
                 # Build multipart upload
@@ -128,7 +130,7 @@ class FileUploader:
                     meta_part = mpw.append_json(metadata)
                     meta_part.set_content_disposition("form-data", name="metadata")
 
-                    file_bytes = Path(file_path).read_bytes()
+                    file_bytes = await asyncio.to_thread(Path(file_path).read_bytes)
                     file_part = mpw.append(
                         file_bytes,
                         {"Content-Type": mime_type},
