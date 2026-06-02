@@ -10,6 +10,32 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.2.2] - 2026-06-02
+
+### Features
+
+### Changes
+
+- Jira sync: consolidated the seven copy-pasted API-error `except` handlers
+  (`last_error` / `errors++` / log) into a single `JiraSyncService._record_error`
+  helper.
+- Jira ADF→markdown extractor: hoisted three per-issue regexes to module level
+  (matching the existing `_SAFE_FILENAME_RE` convention); typed the
+  `uploads_dir` parameter as `str | Path` instead of bare `object`.
+
+### Fixes
+
+- Jira ADF import no longer silently drops inline `status` and `date` nodes —
+  a status badge's label (`attrs.text`) and a date node's epoch-ms timestamp
+  carry no content children, so the generic fallback walker discarded them.
+  They now render as the badge label and an ISO `YYYY-MM-DD` (UTC) date.
+- Jira JQL: the `import_label` value is now escaped before interpolation, so a
+  label containing a `"` or `\` can't break out of the query string literal.
+- Jira status export: added the missing `blocked` → `In Progress` mapping to
+  the default `status_map` (both `config/models.py` and `config/loader.py`).
+  Exporting a `BLOCKED` task previously hit an empty mapping and silently
+  no-opped.
+
 ## [2026.6.2] - 2026-06-02
 
 ### Features

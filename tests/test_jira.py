@@ -255,6 +255,54 @@ class TestExtractText:
         }
         assert "[click here](https://example.com)" in _extract_text(adf)
 
+    def test_status_node_text_preserved(self) -> None:
+        """An inline ``status`` badge keeps its label in ``attrs.text`` with no
+        content children — the fallback walker would drop it, so it needs a
+        dedicated emitter."""
+        adf = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {"type": "text", "text": "State: "},
+                        {"type": "status", "attrs": {"text": "In Review", "color": "blue"}},
+                    ],
+                }
+            ],
+        }
+        assert _extract_text(adf) == "State: In Review"
+
+    def test_date_node_rendered_as_iso(self) -> None:
+        """An inline ``date`` node carries only an epoch-ms ``timestamp`` (no
+        text), so without an emitter the value is silently lost."""
+        adf = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {"type": "text", "text": "Due "},
+                        {"type": "date", "attrs": {"timestamp": "1700000000000"}},
+                    ],
+                }
+            ],
+        }
+        # 1700000000s == 2023-11-14 UTC
+        assert _extract_text(adf) == "Due 2023-11-14"
+
+    def test_date_node_bad_timestamp_falls_back_to_raw(self) -> None:
+        adf = {
+            "type": "doc",
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "date", "attrs": {"timestamp": "not-a-number"}}],
+                }
+            ],
+        }
+        assert _extract_text(adf) == "not-a-number"
+
 
 class TestFindTransition:
     def test_match_by_name(self) -> None:
@@ -435,6 +483,18 @@ class TestJiraSyncService:
         task = SwarmTask(title="Test")
         ok = await svc.export_status(task, TaskStatus.ACTIVE)
         assert ok is False
+
+    @pytest.mark.asyncio
+    async def test_export_status_blocked_is_mapped(self) -> None:
+        """TaskStatus.BLOCKED has a default status_map entry, so exporting a
+        blocked task transitions the Jira issue rather than silently no-opping."""
+        svc = self._make_service()
+        svc.client.get_transitions = AsyncMock(return_value=[{"id": "21", "name": "In Progress"}])
+        svc.client.transition_issue = AsyncMock(return_value=True)
+        task = SwarmTask(title="Test", jira_key="PROJ-1")
+        ok = await svc.export_status(task, TaskStatus.BLOCKED)
+        assert ok is True
+        svc.client.transition_issue.assert_called_once_with("PROJ-1", "21")
 
     @pytest.mark.asyncio
     async def test_export_no_matching_transition(self) -> None:
@@ -672,6 +732,14 @@ class TestBuildJql:
         # Nothing except the ORDER BY clause should follow it
         after_order = jql[order_idx:]
         assert "AND" not in after_order
+
+    def test_label_with_quote_is_escaped(self) -> None:
+        """A label containing a double-quote must be escaped so it can't break
+        out of the JQL string literal."""
+        svc = self._make_service(import_label='foo"bar')
+        jql = svc.build_jql()
+        # The embedded quote is backslash-escaped inside the clause.
+        assert r'labels = "foo\"bar"' in jql
 
 
 # --- OAuth ---

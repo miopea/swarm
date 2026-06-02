@@ -14,6 +14,8 @@ from swarm.logging import get_logger
 from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus, TaskType
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from swarm.auth.jira import JiraTokenManager
 
 _log = get_logger("integrations.jira")
@@ -33,6 +35,12 @@ _DESC_BUDGET = 9000
 # Filename safety regex used when downloading Jira attachments to disk.
 _SAFE_FILENAME_RE = re.compile(r"[^a-zA-Z0-9._-]")
 _DIGEST_LEN = 12
+
+# Compiled once: a trailing ORDER BY clause in a JQL filter, and the two
+# whitespace-normalizing passes the ADF→markdown extractor runs per issue.
+_ORDER_BY_RE = re.compile(r"\s+ORDER\s+BY\s+.+$", re.IGNORECASE)
+_TRAILING_WS_RE = re.compile(r"[ \t]+\n")
+_BLANK_RUN_RE = re.compile(r"\n{3,}")
 
 # Jira issue type → Swarm TaskType
 _JIRA_TYPE_MAP: dict[str, TaskType] = {
@@ -321,7 +329,7 @@ class JiraSyncService:
         self,
         config: JiraConfig,
         token_manager: JiraTokenManager | None = None,
-        uploads_dir: object | None = None,
+        uploads_dir: str | Path | None = None,
     ) -> None:
         from pathlib import Path as _Path
 
@@ -346,6 +354,16 @@ class JiraSyncService:
         self._running = False
         await self.client.close()
 
+    def _record_error(self, context: str, exc: Exception) -> None:
+        """Stamp a failed Jira API call onto the sync stats and log a warning.
+
+        Consolidates the identical ``last_error`` / ``errors`` / log triple
+        that every API wrapper repeats in its ``except`` handler.
+        """
+        self.stats.last_error = str(exc)
+        self.stats.errors += 1
+        _log.warning("Jira %s failed: %s", context, exc)
+
     # --- Import: Jira → Swarm ---
 
     def build_jql(self) -> str:
@@ -362,14 +380,17 @@ class JiraSyncService:
         # clauses and re-add it at the very end.
         order_by = ""
         if jql:
-            m = re.search(r"\s+ORDER\s+BY\s+.+$", jql, re.IGNORECASE)
+            m = _ORDER_BY_RE.search(jql)
             if m:
                 order_by = m.group(0)
                 jql = jql[: m.start()]
         # Include label in JQL for server-side filtering; client-side
         # filter remains as a case-insensitive safety net.
         if self._config.import_label and "labels" not in (jql or "").lower():
-            label_clause = f'labels = "{self._config.import_label}"'
+            # Escape so a label containing a backslash or double-quote can't
+            # break out of the JQL string literal.
+            escaped_label = self._config.import_label.replace("\\", "\\\\").replace('"', '\\"')
+            label_clause = f'labels = "{escaped_label}"'
             jql = f"{label_clause} AND {jql}" if jql else label_clause
         # Always exclude completed issues unless the user's custom filter
         # already handles statusCategory.
@@ -394,9 +415,7 @@ class JiraSyncService:
         try:
             issues = await self.client.search_issues(jql)
         except (aiohttp.ClientError, TimeoutError) as e:
-            self.stats.last_error = str(e)
-            self.stats.errors += 1
-            _log.warning("Jira import failed: %s", e)
+            self._record_error("import", e)
             return []
 
         # Build set of existing jira_keys for dedup
@@ -451,9 +470,7 @@ class JiraSyncService:
         try:
             issue = await self.client.get_issue(issue_key)
         except (aiohttp.ClientError, TimeoutError) as e:
-            self.stats.last_error = str(e)
-            self.stats.errors += 1
-            _log.warning("Jira import_one(%s) failed: %s", issue_key, e)
+            self._record_error(f"import_one({issue_key})", e)
             return None
 
         fields = issue.get("fields", {}) or {}
@@ -526,9 +543,7 @@ class JiraSyncService:
         try:
             issue = await self.client.get_issue(task.jira_key)
         except (aiohttp.ClientError, TimeoutError) as e:
-            self.stats.last_error = str(e)
-            self.stats.errors += 1
-            _log.warning("failed to refresh %s: %s", task.jira_key, e)
+            self._record_error(f"refresh {task.jira_key}", e)
             return False
 
         fields = issue.get("fields", {}) or {}
@@ -559,13 +574,7 @@ class JiraSyncService:
         try:
             transitions = await self.client.get_transitions(task.jira_key)
         except (aiohttp.ClientError, TimeoutError) as e:
-            self.stats.last_error = str(e)
-            self.stats.errors += 1
-            _log.warning(
-                "failed to get transitions for %s: %s",
-                task.jira_key,
-                e,
-            )
+            self._record_error(f"get transitions for {task.jira_key}", e)
             return False
 
         # Find transition matching target status name
@@ -585,13 +594,7 @@ class JiraSyncService:
                 transition_id,
             )
         except (aiohttp.ClientError, TimeoutError) as e:
-            self.stats.last_error = str(e)
-            self.stats.errors += 1
-            _log.warning(
-                "failed to transition %s: %s",
-                task.jira_key,
-                e,
-            )
+            self._record_error(f"transition {task.jira_key}", e)
             return False
 
         if ok:
@@ -628,13 +631,7 @@ class JiraSyncService:
                 _log.info("posted completion comment on %s", task.jira_key)
             return ok
         except (aiohttp.ClientError, TimeoutError) as e:
-            self.stats.last_error = str(e)
-            self.stats.errors += 1
-            _log.warning(
-                "failed to comment on %s: %s",
-                task.jira_key,
-                e,
-            )
+            self._record_error(f"comment on {task.jira_key}", e)
             return False
 
     async def assign_to_me(self, task: SwarmTask) -> bool:
@@ -653,9 +650,7 @@ class JiraSyncService:
                 _log.info("assigned %s to current user", task.jira_key)
             return ok
         except (aiohttp.ClientError, TimeoutError) as e:
-            self.stats.last_error = str(e)
-            self.stats.errors += 1
-            _log.warning("failed to assign %s: %s", task.jira_key, e)
+            self._record_error(f"assign {task.jira_key}", e)
             return False
 
     async def create_jira_issue(self, task: SwarmTask) -> str:
@@ -817,7 +812,7 @@ def _build_synced_description(
     return _truncate(full, _DESC_BUDGET)
 
 
-def _save_attachment_bytes(filename: str, data: bytes, uploads_dir: object) -> str:
+def _save_attachment_bytes(filename: str, data: bytes, uploads_dir: str | Path) -> str:
     """Persist *data* to *uploads_dir* using a content-addressed filename.
 
     Mirrors :meth:`swarm.server.email_service.EmailService.save_attachment`
@@ -887,8 +882,8 @@ def _extract_text(adf: str | dict[str, object]) -> str:
     state: _AdfState = {"out": [""], "list_stack": []}
     _walk_adf(adf, state)
     text = "\n".join(state["out"])
-    text = re.sub(r"[ \t]+\n", "\n", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = _TRAILING_WS_RE.sub("\n", text)
+    text = _BLANK_RUN_RE.sub("\n\n", text)
     return text.strip()
 
 
@@ -1058,6 +1053,36 @@ def _adf_emit_inline_card(node: dict[str, Any], state: _AdfState) -> None:
         _adf_set(state, _adf_cur(state) + f"<{href}>")
 
 
+def _adf_emit_status(node: dict[str, Any], state: _AdfState) -> None:
+    """Emit an inline status badge's label.
+
+    The label lives in ``attrs.text`` with no content children, so the
+    generic fallback (descend into ``content``) would drop it silently.
+    """
+    text = str((node.get("attrs") or {}).get("text") or "")
+    if text:
+        _adf_set(state, _adf_cur(state) + text)
+
+
+def _adf_emit_date(node: dict[str, Any], state: _AdfState) -> None:
+    """Emit an inline date node as an ISO ``YYYY-MM-DD`` (UTC).
+
+    A date node carries only an epoch-millis ``attrs.timestamp`` and no text,
+    so without this the value is lost. Falls back to the raw value if the
+    timestamp can't be parsed.
+    """
+    raw = str((node.get("attrs") or {}).get("timestamp") or "").strip()
+    if not raw:
+        return
+    from datetime import UTC, datetime
+
+    try:
+        rendered = datetime.fromtimestamp(int(raw) / 1000, tz=UTC).strftime("%Y-%m-%d")
+    except (ValueError, OverflowError, OSError):
+        rendered = raw
+    _adf_set(state, _adf_cur(state) + rendered)
+
+
 _ADF_HANDLERS: dict[str, Any] = {
     "text": lambda node, state: _adf_emit_text(node, state),
     "hardBreak": lambda node, state: _adf_push(state),
@@ -1071,6 +1096,8 @@ _ADF_HANDLERS: dict[str, Any] = {
     "mention": _adf_emit_mention,
     "emoji": _adf_emit_emoji,
     "inlineCard": _adf_emit_inline_card,
+    "status": _adf_emit_status,
+    "date": _adf_emit_date,
 }
 
 

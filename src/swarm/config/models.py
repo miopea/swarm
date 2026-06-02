@@ -311,6 +311,7 @@ class JiraConfig:
             "unassigned": "To Do",
             "assigned": "To Do",
             "active": "In Progress",
+            "blocked": "In Progress",
             "done": "Done",
             "failed": "To Do",
         }

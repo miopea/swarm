@@ -163,6 +163,7 @@ def _parse_jira_section(jira_data: dict[str, object]) -> JiraConfig:
         "unassigned": "To Do",
         "assigned": "To Do",
         "active": "In Progress",
+        "blocked": "In Progress",
         "done": "Done",
         "failed": "To Do",
     }
