@@ -10,6 +10,23 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.6.3] - 2026-06-06
+
+### Features
+
+### Changes
+
+### Fixes
+
+- INV-1 (one IN-PROGRESS task per worker, #405) was bypassable by the
+  state-tracker drone: on a worker → BUZZING transition it promoted **every**
+  ASSIGNED task for that worker to ACTIVE (raw `task.start()` in a loop — no
+  one-active cap, no `demote_other_active`, no STARTED history). A worker with
+  two assigned tasks going BUZZING ended up with two IN-PROGRESS tasks (the
+  platform #604/#605 violation). Now promotes at most one: if the worker
+  already has an ACTIVE task it promotes nothing, otherwise it promotes the
+  single most-recently-updated ASSIGNED task (`_promote_one_assigned`).
+
 ## [2026.6.6.2] - 2026-06-06
 
 ### Features

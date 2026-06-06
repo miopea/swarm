@@ -266,12 +266,10 @@ class WorkerStateTracker:
             self._any_became_active = True
             # Clear speculation flag when worker starts working
             worker.speculating_task_id = None
-            # Transition assigned tasks to IN_PROGRESS
+            # Reflect that the worker is working by marking ONE assigned task
+            # IN_PROGRESS — never more than one (#405 INV-1).
             if self.task_board:
-                for task in self.task_board.all_tasks:
-                    if task.assigned_worker == worker.name and task.status == TaskStatus.ASSIGNED:
-                        task.start()
-                        self._emit("state_changed", worker)
+                self._promote_one_assigned(worker)
         transitioned = False
         if prev == WorkerState.BUZZING and worker.state in (
             WorkerState.RESTING,
@@ -280,6 +278,31 @@ class WorkerStateTracker:
             transitioned = True
             self._needs_assign_check = True
         return transitioned, True
+
+    def _promote_one_assigned(self, worker: Worker) -> None:
+        """Mark at most one of *worker*'s assigned tasks IN_PROGRESS (#405 INV-1).
+
+        Called when the worker goes BUZZING. Promoting *every* assigned task —
+        the old behaviour — put multiple tasks IN PROGRESS for a single worker
+        (the platform #604/#605 violation: both stayed ACTIVE because this
+        drone path skips ``demote_other_active`` and never capped at one).
+
+        We can't know precisely which task the PTY is on, so: if the worker
+        already shows an ACTIVE task we promote nothing (it's already
+        in-progress); otherwise we promote the single most-recently-updated
+        ASSIGNED task (the latest dispatch). Never more than one.
+        """
+        if self.task_board is None:
+            return
+        mine = [t for t in self.task_board.all_tasks if t.assigned_worker == worker.name]
+        if any(t.status == TaskStatus.ACTIVE for t in mine):
+            return
+        assigned = [t for t in mine if t.status == TaskStatus.ASSIGNED]
+        if not assigned:
+            return
+        assigned.sort(key=lambda t: t.updated_at, reverse=True)
+        assigned[0].start()
+        self._emit("state_changed", worker)
 
     def _log_state_transition(self, worker: Worker, prev: WorkerState) -> None:
         """Record a state transition in the buzz log with diagnostic context.

@@ -308,3 +308,64 @@ class TestHasActiveTurnSignal:
     def test_plain_idle_prompt_is_not_active(self) -> None:
         tracker, _ = _make_tracker()
         assert tracker._has_active_turn_signal("Done.\n> \n? for shortcuts\n") is False
+
+
+class TestBuzzingPromotesOneTask:
+    """#405 INV-1: when a worker goes BUZZING, the state tracker must promote
+    AT MOST ONE assigned task to IN_PROGRESS. Promoting *every* assigned task
+    (the old behaviour) put two tasks IN PROGRESS for one worker — the
+    platform #604/#605 violation."""
+
+    def _board_two_assigned(self, worker_name: str):
+        from swarm.tasks.board import TaskBoard
+
+        board = TaskBoard()
+        t1 = board.create("first")
+        t2 = board.create("second")
+        for t in (t1, t2):
+            board.assign(t.id, worker_name)
+        return board, t1, t2
+
+    def test_buzzing_promotes_at_most_one(self) -> None:
+        from swarm.tasks.task import TaskStatus
+
+        w = _make_worker("platform", WorkerState.BUZZING)
+        tracker, _ = _make_tracker([w])
+        board, t1, t2 = self._board_two_assigned("platform")
+        tracker.task_board = board
+
+        tracker._handle_state_change(w, WorkerState.RESTING)
+
+        active = [t for t in (t1, t2) if t.status == TaskStatus.ACTIVE]
+        assert len(active) == 1  # exactly one IN PROGRESS, never both
+
+    def test_buzzing_skips_when_worker_already_has_active(self) -> None:
+        from swarm.tasks.task import TaskStatus
+
+        w = _make_worker("platform", WorkerState.BUZZING)
+        tracker, _ = _make_tracker([w])
+        board, t1, t2 = self._board_two_assigned("platform")
+        board.activate(t1.id)  # t1 already IN PROGRESS
+        tracker.task_board = board
+
+        tracker._handle_state_change(w, WorkerState.RESTING)
+
+        # The already-active task stays; the other is NOT also promoted.
+        assert t1.status == TaskStatus.ACTIVE
+        assert t2.status == TaskStatus.ASSIGNED
+
+    def test_buzzing_promotes_single_assigned(self) -> None:
+        from swarm.tasks.task import TaskStatus
+
+        w = _make_worker("platform", WorkerState.BUZZING)
+        tracker, _ = _make_tracker([w])
+        from swarm.tasks.board import TaskBoard
+
+        board = TaskBoard()
+        t = board.create("only")
+        board.assign(t.id, "platform")
+        tracker.task_board = board
+
+        tracker._handle_state_change(w, WorkerState.RESTING)
+
+        assert t.status == TaskStatus.ACTIVE  # the normal single-task case still works
