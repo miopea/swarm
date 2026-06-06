@@ -679,3 +679,73 @@ async def test_no_spawn_callback_falls_back_to_nudge() -> None:
 
     assert sent == 1
     assert len(sender.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# #614: nudge "no-progress" must track the unread-message set, not worker state
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_escalates_despite_worker_state_oscillation() -> None:
+    """#614 repro: a recipient that RESPONDS to each nudge (its state flips
+    RESTING↔SLEEPING between windows) but never CLEARS the unread message must
+    still hit max_repeats → escalate once → go silent. The progress signal is
+    the unread-message set, not worker state (which legitimately oscillates).
+
+    This is the aria/#1390 churn: with the old state-in-fingerprint rule, every
+    state flip reset the streak so the worker was nudged forever (72×/22h here)."""
+    msg = _message("project-root", "aria", msg_type="dependency", msg_id=1390)
+    store = _store({"aria": [msg]})  # same unread message forever — never cleared
+    cfg = DroneConfig(
+        idle_nudge_interval_seconds=60.0,
+        idle_nudge_debounce_seconds=0.0,  # no debounce gate; every sweep is a due nudge
+        idle_nudge_max_repeats=3,
+    )
+    sender = _Sender()
+    watcher = InterWorkerMessageWatcher(
+        drone_config=cfg,
+        message_store=store,
+        drone_log=MagicMock(),
+        send_to_worker=sender,
+        task_board=_task_board(),  # no active task → any unread nudges
+    )
+
+    # Worker state alternates each sweep (it keeps responding without clearing).
+    states = [WorkerState.RESTING, WorkerState.SLEEPING] * 4
+    for i, st in enumerate(states):
+        await watcher.sweep([_worker("aria", st)], now=1000.0 + i * 100)
+
+    # Only max_repeats real nudges fire, then escalate-and-quiet — NOT one per
+    # sweep. (Old behaviour: state flip reset the streak every sweep → 8 nudges.)
+    assert len(sender.calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_new_unread_message_resets_streak() -> None:
+    """A genuinely new inbound message (the unread set changes) is real
+    progress → resets the streak so the worker is nudged again."""
+    m1 = _message("project-root", "aria", msg_type="dependency", msg_id=1)
+    unread = {"aria": [m1]}
+    store = _store(unread)
+    cfg = DroneConfig(
+        idle_nudge_interval_seconds=60.0,
+        idle_nudge_debounce_seconds=0.0,
+        idle_nudge_max_repeats=2,
+    )
+    sender = _Sender()
+    watcher = InterWorkerMessageWatcher(
+        drone_config=cfg,
+        message_store=store,
+        drone_log=MagicMock(),
+        send_to_worker=sender,
+        task_board=_task_board(),
+    )
+    # Two nudges exhaust max_repeats; third sweep escalates (no send).
+    for i in range(3):
+        await watcher.sweep([_worker("aria", WorkerState.RESTING)], now=1000.0 + i * 100)
+    assert len(sender.calls) == 2
+    # A NEW message arrives → unread set changes → streak resets → nudge again.
+    unread["aria"] = [m1, _message("project-root", "aria", msg_type="dependency", msg_id=2)]
+    await watcher.sweep([_worker("aria", WorkerState.RESTING)], now=2000.0)
+    assert len(sender.calls) == 3

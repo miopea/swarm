@@ -10,6 +10,24 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.6.9] - 2026-06-06
+
+### Features
+
+### Changes
+
+### Fixes
+
+- (#614) Inter-worker message nudges no longer churn forever on an unread
+  message a worker won't clear. The repeat-nudge guard's "progress" fingerprint
+  is now the **set of unread message ids**, not the worker's display-state —
+  so a recipient that *responds* to a nudge (oscillating RESTING↔SLEEPING↔
+  BUZZING) no longer resets the escalate-and-quiet streak every sweep. A stale
+  unread message now reaches `idle_nudge_max_repeats` → escalates to the
+  operator once → goes silent, instead of re-nudging indefinitely (the aria
+  case: 72 nudges over 22h on one informational `finding`). The idle-watcher
+  task-nudge path is unchanged.
+
 ## [2026.6.6.8] - 2026-06-06
 
 ### Features

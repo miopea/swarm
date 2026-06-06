@@ -275,16 +275,19 @@ class InterWorkerMessageWatcher:
 
         Consults the repeat-guard: after ``idle_nudge_max_repeats``
         no-progress nudges (same unread-inbox fingerprint), stop poking
-        and escalate to the operator once. The fingerprint is the worker
-        state + unread count + newest message id, so a NEW inbound message
-        (id climbs) or the inbox draining (count drops) counts as progress
-        and resets the streak. Returns True only when a real nudge fired.
+        and escalate to the operator once.
+
+        #614: the fingerprint is the SET of unread inter-worker message ids —
+        NOT the worker state. "Progress" means the inbox actually changed (a
+        message was cleared, or a new one arrived), which is the thing a nudge
+        asks the worker to do. Keying on worker state was the churn bug: a
+        recipient that *responds* to a nudge oscillates RESTING↔SLEEPING↔BUZZING
+        between windows, which flipped the fingerprint and reset the streak every
+        sweep — so an unread message it never cleared got nudged forever (the
+        aria/#1390 case: 72 nudges over 22h). Returns True only when a real nudge
+        fired.
         """
-        fingerprint = (
-            worker.display_state.value,
-            len(inter_worker),
-            max((m.id or 0 for m in inter_worker), default=0),
-        )
+        fingerprint = frozenset(m.id for m in inter_worker if m.id is not None)
         decision = self._nudge_guard.decide(worker.name, fingerprint, max_repeats=self._max_repeats)
         self._last_nudge[worker.name] = now
         if decision == SILENT:
