@@ -110,6 +110,30 @@ class TestJiraTokenManager:
         assert token == "cached-at"
 
     @pytest.mark.asyncio
+    async def test_concurrent_get_token_refreshes_once(self) -> None:
+        """#auth-audit E: two concurrent get_token() calls on an expired token
+        must refresh exactly ONCE (lock + re-check), not twice — Atlassian
+        rotates refresh tokens, so a double-refresh can invalidate the token."""
+        import asyncio
+        import time
+
+        mgr = JiraTokenManager("cid", "csecret")
+        mgr._refresh_token = "rt"
+        calls = {"n": 0}
+
+        async def fake_refresh() -> bool:
+            calls["n"] += 1
+            await asyncio.sleep(0)  # force interleave so both callers race
+            mgr._access_token = "fresh-at"
+            mgr._expires_at = time.time() + 3600
+            return True
+
+        mgr._refresh = fake_refresh  # type: ignore[method-assign]
+        results = await asyncio.gather(mgr.get_token(), mgr.get_token())
+        assert results == ["fresh-at", "fresh-at"]
+        assert calls["n"] == 1  # second caller re-checked under the lock, didn't re-refresh
+
+    @pytest.mark.asyncio
     async def test_exchange_code_success(self, tmp_path: Path) -> None:
         token_path = tmp_path / "tokens.json"
         with patch("swarm.auth.jira._TOKEN_PATH", token_path):

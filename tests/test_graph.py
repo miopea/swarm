@@ -194,3 +194,35 @@ class TestGetToken:
             token = await mgr.get_token()
 
         assert token is None
+
+
+class TestConcurrentRefresh:
+    @pytest.mark.asyncio
+    async def test_concurrent_get_token_refreshes_once(self, token_file):
+        """#auth-audit E: two concurrent get_token() on an expired token must
+        refresh exactly once (lock + re-check) — a rotated refresh token would
+        otherwise invalidate the loser."""
+        import asyncio
+
+        mgr = GraphTokenManager("client-id")
+        mgr._refresh_token = "rt"
+        calls = {"n": 0}
+
+        async def fake_refresh() -> bool:
+            calls["n"] += 1
+            await asyncio.sleep(0)  # force the two callers to interleave
+            mgr._access_token = "fresh-at"
+            mgr._expires_at = time.time() + 3600
+            return True
+
+        mgr._refresh = fake_refresh  # type: ignore[method-assign]
+        results = await asyncio.gather(mgr.get_token(), mgr.get_token())
+        assert results == ["fresh-at", "fresh-at"]
+        assert calls["n"] == 1
+
+    @pytest.mark.asyncio
+    async def test_get_token_returns_none_on_refresh_failure(self, token_file):
+        mgr = GraphTokenManager("client-id")
+        mgr._refresh_token = "rt"
+        mgr._refresh = AsyncMock(return_value=False)  # type: ignore[method-assign]
+        assert await mgr.get_token() is None

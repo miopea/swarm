@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -9,6 +10,8 @@ import time
 from pathlib import Path
 
 import aiohttp
+
+from swarm.auth._oauth import apply_token_response, parse_token_error
 
 _TOKEN_PATH = Path.home() / ".swarm" / "jira_tokens.json"
 _AUTH_URL = "https://auth.atlassian.com/authorize"
@@ -37,6 +40,10 @@ class JiraTokenManager:
         self._site_url: str = ""
         self._account_id: str = ""
         self.last_error: str = ""
+        # Serialise token refresh: two concurrent get_token() callers must not
+        # both refresh — Atlassian rotates the refresh token, so the second
+        # refresh would use a now-invalidated token and break auth.
+        self._refresh_lock = asyncio.Lock()
         self._load()
 
     # --- Public API ---
@@ -94,8 +101,13 @@ class JiraTokenManager:
             return None
         if self._access_token and time.time() < self._expires_at - 60:
             return self._access_token
-        if await self._refresh():
-            return self._access_token
+        async with self._refresh_lock:
+            # Re-check under the lock: a concurrent caller may have just
+            # refreshed while we waited, so we don't refresh a second time.
+            if self._access_token and time.time() < self._expires_at - 60:
+                return self._access_token
+            if await self._refresh():
+                return self._access_token
         return None
 
     def disconnect(self) -> None:
@@ -110,7 +122,7 @@ class JiraTokenManager:
 
             save_secret("jira_tokens", {})
         except Exception:
-            pass
+            _log.warning("failed to clear Jira tokens from the secret store", exc_info=True)
         if _TOKEN_PATH.exists():
             _TOKEN_PATH.unlink()
 
@@ -220,14 +232,7 @@ class JiraTokenManager:
                     timeout=aiohttp.ClientTimeout(total=15),
                 ) as resp:
                     if resp.status != 200:
-                        err_body = await resp.text()
-                        try:
-                            err_json = json.loads(err_body)
-                            self.last_error = err_json.get(
-                                "error_description", err_json.get("error", err_body[:300])
-                            )
-                        except json.JSONDecodeError:
-                            self.last_error = err_body[:300]
+                        self.last_error = parse_token_error(await resp.text())
                         _log.warning(
                             "Jira token request failed (%s): %s",
                             resp.status,
@@ -240,10 +245,12 @@ class JiraTokenManager:
             _log.warning("Jira token request exception: %s", exc)
             return False
 
-        self._access_token = body.get("access_token")
-        self._refresh_token = body.get("refresh_token", self._refresh_token)
-        expires_in = body.get("expires_in", 3600)
-        self._expires_at = time.time() + expires_in
+        parsed = apply_token_response(body, prev_refresh=self._refresh_token)
+        if parsed is None:
+            self.last_error = "token response missing access_token"
+            _log.warning("Jira token response had no access_token")
+            return False
+        self._access_token, self._refresh_token, self._expires_at = parsed
         self._save()
         return True
 
@@ -304,8 +311,7 @@ class JiraTokenManager:
         if _TOKEN_PATH == Path.home() / ".swarm" / "jira_tokens.json":
             from swarm.db.secrets import save_secret
 
-            if save_secret("jira_tokens", data):
-                return
+            save_secret("jira_tokens", data)
             return
         _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
         content = json.dumps(data).encode()

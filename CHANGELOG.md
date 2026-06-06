@@ -10,6 +10,30 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.6.10] - 2026-06-06
+
+### Features
+
+### Changes
+
+- Auth audit: extracted the byte-identical OAuth token-response/error parsing
+  shared by `JiraTokenManager` and `GraphTokenManager` into `auth/_oauth.py`
+  (`apply_token_response` / `parse_token_error`), so the two managers can't
+  drift.
+
+### Fixes
+
+- Auth: a token-endpoint 200 with no `access_token` is no longer treated as
+  success (it set `None` but returned True → silent auth failure); both OAuth
+  managers now fail cleanly. A non-numeric `expires_in` falls back to 3600
+  instead of raising an uncaught `TypeError`.
+- Auth: `get_token()` now serializes refresh with an `asyncio.Lock` + re-check,
+  so two concurrent callers can't both refresh — a rotated refresh token (e.g.
+  Atlassian) would otherwise invalidate the second.
+- Auth: `JiraTokenManager.disconnect()` / `GraphTokenManager.disconnect()` log
+  at WARNING when clearing the secret store fails, instead of silently
+  swallowing the error.
+
 ## [2026.6.6.9] - 2026-06-06
 
 ### Features

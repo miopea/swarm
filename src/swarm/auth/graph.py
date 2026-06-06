@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -12,6 +13,8 @@ import time
 from pathlib import Path
 
 import aiohttp
+
+from swarm.auth._oauth import apply_token_response, parse_token_error
 
 _TOKEN_PATH = Path.home() / ".swarm" / "graph_tokens.json"
 _AUTH_BASE = "https://login.microsoftonline.com"
@@ -41,6 +44,9 @@ class GraphTokenManager:
         self._refresh_token: str | None = None
         self._expires_at: float = 0.0
         self.last_error: str = ""
+        # Serialise refresh so two concurrent get_token() callers don't both
+        # refresh (a rotated refresh token would invalidate the loser).
+        self._refresh_lock = asyncio.Lock()
         self._load()
 
     # --- Public API ---
@@ -85,8 +91,12 @@ class GraphTokenManager:
             return None
         if self._access_token and time.time() < self._expires_at - 60:
             return self._access_token
-        if await self._refresh():
-            return self._access_token
+        async with self._refresh_lock:
+            # Re-check under the lock — a concurrent caller may have refreshed.
+            if self._access_token and time.time() < self._expires_at - 60:
+                return self._access_token
+            if await self._refresh():
+                return self._access_token
         return None
 
     async def create_reply_draft(
@@ -232,7 +242,7 @@ class GraphTokenManager:
 
             save_secret("graph_tokens", {})
         except Exception:
-            pass
+            _log.warning("failed to clear Graph tokens from the secret store", exc_info=True)
         if _TOKEN_PATH.exists():
             _TOKEN_PATH.unlink()
 
@@ -262,14 +272,7 @@ class GraphTokenManager:
                     url, data=data, timeout=aiohttp.ClientTimeout(total=15)
                 ) as resp:
                     if resp.status != 200:
-                        err_body = await resp.text()
-                        try:
-                            err_json = json.loads(err_body)
-                            self.last_error = err_json.get(
-                                "error_description", err_json.get("error", err_body[:300])
-                            )
-                        except json.JSONDecodeError:
-                            self.last_error = err_body[:300]
+                        self.last_error = parse_token_error(await resp.text())
                         _log.warning(
                             "Graph token request failed (%s): %s", resp.status, self.last_error
                         )
@@ -280,10 +283,12 @@ class GraphTokenManager:
             _log.warning("Graph token request exception: %s", exc)
             return False
 
-        self._access_token = body.get("access_token")
-        self._refresh_token = body.get("refresh_token", self._refresh_token)
-        expires_in = body.get("expires_in", 3600)
-        self._expires_at = time.time() + expires_in
+        parsed = apply_token_response(body, prev_refresh=self._refresh_token)
+        if parsed is None:
+            self.last_error = "token response missing access_token"
+            _log.warning("Graph token response had no access_token")
+            return False
+        self._access_token, self._refresh_token, self._expires_at = parsed
         self._save()
         return True
 
