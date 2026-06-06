@@ -34,6 +34,21 @@ _SECRET_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     ),
     # Bearer tokens
     (re.compile(r"Bearer\s+[A-Za-z0-9._\-]{20,}"), "Bearer <redacted>"),
+    # Webhook URLs whose secret lives in the PATH (the host alone is safe).
+    (re.compile(r"https://hooks\.slack\.com/services/\S+"), "<slack-webhook>"),
+    (
+        re.compile(r"https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/\S+"),
+        "<discord-webhook>",
+    ),
+    # Secret-bearing query params (ntfy ?auth=, generic ?token=/?key=/?secret=).
+    # Keep the param NAME, blank the value, stop at the next & or whitespace.
+    (
+        re.compile(
+            r"([?&](?:auth|token|access_token|api[_-]?key|key|secret|password)=)[^&\s]+",
+            re.IGNORECASE,
+        ),
+        r"\1<redacted>",
+    ),
     # Generic long hex (session IDs, SHA-256 digests, etc.)
     (re.compile(r"\b[a-fA-F0-9]{32,}\b"), "<hex-secret>"),
 ]

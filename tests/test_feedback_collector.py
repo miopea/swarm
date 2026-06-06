@@ -127,3 +127,31 @@ def test_collect_attachments_config_with_no_daemon(tmp_path, monkeypatch):
     result = collect_attachments(None)
     attachment = next(a for a in result if a.key == "config")
     assert "no daemon" in attachment.content.lower()
+
+
+def test_config_env_refs_extracts_dollar_var_names():
+    """#feedback-audit A: scan the config for $VAR references so their live
+    values can be scrubbed from logs/events."""
+    from swarm.feedback.collector import _config_env_refs
+
+    config = _FakeConfig(jira=_FakeJira(client_secret="$JIRA_SECRET", api_token="literal"))
+    refs = _config_env_refs(_FakeDaemon(config))
+    assert "JIRA_SECRET" in refs
+    assert "literal" not in refs  # only $-prefixed values count
+
+
+def test_collect_attachments_scrubs_env_referenced_secret_from_logs(tmp_path, monkeypatch):
+    """#feedback-audit A: a secret set via an env var the config references
+    ($VAR) is scrubbed out of the LOGS attachment — the env-value scrub layer
+    is now wired through collect_attachments (was dormant)."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    monkeypatch.setenv("FEEDBACK_TEST_SECRET", "env-secret-value-123456")
+    config = _FakeConfig(jira=_FakeJira(client_secret="$FEEDBACK_TEST_SECRET"))
+    log = tmp_path / "swarm.log"
+    log.write_text("worker connected with env-secret-value-123456 ok\n")
+
+    result = collect_attachments(_FakeDaemon(config), log_path=log)
+    logs = next(a for a in result if a.key == "logs")
+    assert "env-secret-value-123456" not in logs.content
+    assert "<env-secret>" in logs.content

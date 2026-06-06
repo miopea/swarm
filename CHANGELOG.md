@@ -10,6 +10,28 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.6.13] - 2026-06-06
+
+### Features
+
+### Changes
+
+### Fixes
+
+- Feedback redaction: activated the dormant env-value scrub. The collector now
+  extracts `$VAR` references from the config (`_config_env_refs`) and threads
+  `env_refs` into every `redact_text` call, so the live values of
+  config-referenced env secrets are scrubbed from the logs/drone-events/config
+  attachments before a report is sent to GitHub. (The scrub existed in
+  `redact.py` but `collect_attachments` never passed `env_refs`.)
+- Feedback redaction: added webhook-URL patterns — Slack/Discord (token in the
+  path) and a generic secret query-param scrubber (ntfy `?auth=`, `?token=`,
+  etc.) — so a configured webhook URL's token no longer survives into the
+  config dump.
+- Feedback `gh` submit: the no-label retry path (`_submit_without_label`) now
+  wraps its subprocess in the same try/except as the main path, so a timeout /
+  OSError surfaces as a clean `GhSubmitError` instead of an uncaught exception.
+
 ## [2026.6.6.12] - 2026-06-06
 
 ### Features

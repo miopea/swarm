@@ -181,16 +181,21 @@ async def _submit_without_label(*, path: str, title: str, body: str, repo: str) 
         "--body-file",
         "-",
     ]
-    proc = await asyncio.create_subprocess_exec(
-        *args,
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await asyncio.wait_for(
-        proc.communicate(input=body.encode("utf-8")),
-        timeout=_GH_TIMEOUT_SECONDS,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(input=body.encode("utf-8")),
+            timeout=_GH_TIMEOUT_SECONDS,
+        )
+    except TimeoutError as e:
+        raise GhSubmitError("gh issue create (no label) timed out") from e
+    except OSError as e:
+        raise GhSubmitError(f"Failed to invoke gh (no label): {e}") from e
     if proc.returncode != 0:
         err = (stderr or b"").decode("utf-8", errors="replace").strip()
         raise GhSubmitError(err or "gh issue create failed without label")

@@ -12,6 +12,7 @@ import collections
 import dataclasses
 import json
 import platform
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,43 @@ if TYPE_CHECKING:
 _DEFAULT_LOG_PATH = Path("~/.swarm/swarm.log").expanduser()
 _DEFAULT_LOG_LINES = 200
 _DEFAULT_DRONE_EVENTS = 50
+
+# A config value that's a bare ``$VAR_NAME`` reference to an environment
+# variable (e.g. ``client_secret: $JIRA_SECRET``). Their live values are
+# scrubbed from logs/events via redact_text's env_refs.
+_ENV_REF_RE = re.compile(r"^\$([A-Za-z_][A-Za-z0-9_]*)$")
+
+
+def _config_env_refs(daemon: SwarmDaemon | None) -> list[str]:
+    """Env-var NAMES the config references via ``$VAR``.
+
+    Passed to :func:`redact_text` so the *live values* of those vars get
+    scrubbed out of collected logs/drone-events (the config itself only stores
+    the ``$VAR`` reference, but a resolved value could surface in a log line).
+    Best-effort — returns ``[]`` on any error so it can't break the report.
+    """
+    if daemon is None or getattr(daemon, "config", None) is None:
+        return []
+    try:
+        raw = dataclasses.asdict(daemon.config)
+    except TypeError:
+        return []
+    refs: set[str] = set()
+
+    def _walk(node: object) -> None:
+        if isinstance(node, dict):
+            for v in node.values():
+                _walk(v)
+        elif isinstance(node, list):
+            for x in node:
+                _walk(x)
+        elif isinstance(node, str):
+            m = _ENV_REF_RE.match(node.strip())
+            if m:
+                refs.add(m.group(1))
+
+    _walk(raw)
+    return sorted(refs)
 
 
 @dataclass
@@ -70,7 +108,9 @@ def _collect_install_id() -> Attachment:
     )
 
 
-def _collect_logs(log_path: Path | None, lines: int) -> Attachment:
+def _collect_logs(
+    log_path: Path | None, lines: int, env_refs: list[str] | None = None
+) -> Attachment:
     path = log_path or _DEFAULT_LOG_PATH
     raw = _tail_file(path, lines)
     if not raw:
@@ -79,7 +119,7 @@ def _collect_logs(log_path: Path | None, lines: int) -> Attachment:
             label=f"Recent logs ({path})",
             content="(no log file found or empty)",
         )
-    redacted, count = redact_text(raw)
+    redacted, count = redact_text(raw, env_refs=env_refs)
     return Attachment(
         key="logs",
         label=f"Recent logs (last {lines} lines, from {path.name})",
@@ -88,7 +128,9 @@ def _collect_logs(log_path: Path | None, lines: int) -> Attachment:
     )
 
 
-def _collect_drone_events(daemon: SwarmDaemon | None, limit: int) -> Attachment:
+def _collect_drone_events(
+    daemon: SwarmDaemon | None, limit: int, env_refs: list[str] | None = None
+) -> Attachment:
     if daemon is None or not hasattr(daemon, "drone_log"):
         return Attachment(
             key="drone_events",
@@ -111,7 +153,7 @@ def _collect_drone_events(daemon: SwarmDaemon | None, limit: int) -> Attachment:
         )
     lines = [entry.display for entry in entries]
     raw = "\n".join(lines)
-    redacted, count = redact_text(raw)
+    redacted, count = redact_text(raw, env_refs=env_refs)
     return Attachment(
         key="drone_events",
         label=f"Recent drone events (last {len(entries)})",
@@ -120,7 +162,7 @@ def _collect_drone_events(daemon: SwarmDaemon | None, limit: int) -> Attachment:
     )
 
 
-def _collect_config(daemon: SwarmDaemon | None) -> Attachment:
+def _collect_config(daemon: SwarmDaemon | None, env_refs: list[str] | None = None) -> Attachment:
     """Serialize the live in-memory HiveConfig, with secrets blanked.
 
     Config is loaded from ``swarm.db`` at startup and held on the daemon,
@@ -157,7 +199,7 @@ def _collect_config(daemon: SwarmDaemon | None) -> Attachment:
         serialized = str(scrubbed)
 
     # Second pass: regex scrub to catch any remaining secret-shaped values.
-    final, regex_count = redact_text(serialized)
+    final, regex_count = redact_text(serialized, env_refs=env_refs)
     return Attachment(
         key="config",
         label=label,
@@ -178,10 +220,11 @@ def collect_attachments(
     The caller (API route) chooses which ones to include based on the
     user's selected category (Bug / Feature / Question).
     """
+    env_refs = _config_env_refs(daemon)
     return [
         _collect_environment(),
         _collect_install_id(),
-        _collect_logs(log_path, log_lines),
-        _collect_drone_events(daemon, drone_event_limit),
-        _collect_config(daemon),
+        _collect_logs(log_path, log_lines, env_refs),
+        _collect_drone_events(daemon, drone_event_limit, env_refs),
+        _collect_config(daemon, env_refs),
     ]

@@ -149,3 +149,50 @@ def test_redact_config_dict_skips_empty_values():
     assert out["password"] is None
     assert out["api_key"] == "<redacted>"
     assert count == 1
+
+
+# --- D: coverage for the GitHub/AWS patterns that existed but were untested ---
+
+
+def test_redact_github_fine_grained_pat():
+    text = "tok github_pat_" + "A" * 82 + " end"
+    out, count = redact_text(text)
+    assert "<github-token>" in out and "github_pat_" not in out and count >= 1
+
+
+def test_redact_github_oauth_and_server_tokens():
+    for prefix in ("gho_", "ghs_"):
+        out, count = redact_text(f"token {prefix}{'b' * 36}")
+        assert "<github-token>" in out and prefix not in out and count >= 1
+
+
+def test_redact_aws_secret_access_key():
+    text = "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    out, count = redact_text(text)
+    assert "wJalrXUtnFEMI" not in out
+    assert "aws_secret_access_key=<redacted>" in out and count >= 1
+
+
+# --- B: webhook URLs (tokens in path or query) ---
+
+
+def test_redact_slack_webhook_url():
+    text = "POST https://hooks.slack.com/services/T00000/B00000/XXXXSECRETxxxx failed"
+    out, count = redact_text(text)
+    assert "XXXXSECRETxxxx" not in out
+    assert "<slack-webhook>" in out and count >= 1
+
+
+def test_redact_discord_webhook_url():
+    text = "url=https://discord.com/api/webhooks/123456789012/AbCdEfSECRET_token-xyz"
+    out, count = redact_text(text)
+    assert "AbCdEfSECRET_token-xyz" not in out
+    assert "<discord-webhook>" in out and count >= 1
+
+
+def test_redact_token_in_query_param():
+    text = "ntfy https://ntfy.sh/mytopic?auth=tk_SECRETvalue123 and ?token=ABCSECRET999"
+    out, count = redact_text(text)
+    assert "tk_SECRETvalue123" not in out
+    assert "ABCSECRET999" not in out
+    assert count >= 2

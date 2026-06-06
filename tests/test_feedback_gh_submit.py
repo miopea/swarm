@@ -139,3 +139,45 @@ async def test_submit_via_gh_timeout():
     ):
         with pytest.raises(GhSubmitError, match="timed out"):
             await submit_via_gh(title="x", body="y", category="bug")
+
+
+@pytest.mark.asyncio
+async def test_submit_via_gh_label_missing_retries_without_label():
+    """#feedback-audit D: when the label doesn't exist, gh fails; we retry once
+    without --label and the report still goes through."""
+    fail = _FakeProc(1, stderr=b"error: could not add label 'bug' to issue")
+    ok = _FakeProc(0, stdout=b"https://github.com/o/r/issues/7\n")
+    calls = {"n": 0}
+
+    async def fake_exec(*args, **kwargs):
+        calls["n"] += 1
+        return fail if calls["n"] == 1 else ok
+
+    with (
+        patch("swarm.feedback.gh_submit._find_gh", return_value="/usr/bin/gh"),
+        patch("swarm.feedback.gh_submit.asyncio.create_subprocess_exec", side_effect=fake_exec),
+    ):
+        result = await submit_via_gh(title="x", body="y", category="bug")
+    assert result.url == "https://github.com/o/r/issues/7"
+    assert calls["n"] == 2  # main call (label fail) + no-label retry
+
+
+@pytest.mark.asyncio
+async def test_submit_via_gh_retry_timeout_raises_clean_error():
+    """#feedback-audit C: a timeout on the no-label RETRY surfaces as a clean
+    GhSubmitError, not a raw TimeoutError."""
+    fail = _FakeProc(1, stderr=b"error: could not add label 'bug' to issue")
+    calls = {"n": 0}
+
+    async def fake_exec(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return fail  # first call: label-missing → triggers retry
+        raise TimeoutError  # retry's create_subprocess_exec/wait_for path
+
+    with (
+        patch("swarm.feedback.gh_submit._find_gh", return_value="/usr/bin/gh"),
+        patch("swarm.feedback.gh_submit.asyncio.create_subprocess_exec", side_effect=fake_exec),
+        pytest.raises(GhSubmitError),
+    ):
+        await submit_via_gh(title="x", body="y", category="bug")
