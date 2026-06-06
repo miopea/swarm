@@ -10,6 +10,23 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.6.5] - 2026-06-06
+
+### Features
+
+### Changes
+
+- (#611 P2) `_recon_inv1` / `reconcile_active_per_worker` now keep the
+  **earliest-started** ACTIVE task per worker and demote the rest, instead of
+  keeping newest-by-`updated_at`. `updated_at` bumps on any edit, so the old
+  rule could demote a long-running in-flight job (it would have demoted #604's
+  27k-record run rather than the newer #605). Each demotion logs at WARNING
+  with both task numbers. New `tasks.started_at` field (set in `task.start()`,
+  persisted via a v14 schema migration; legacy/NULL rows fall back to
+  `created_at`).
+
+### Fixes
+
 ## [2026.6.6.4] - 2026-06-06
 
 ### Features

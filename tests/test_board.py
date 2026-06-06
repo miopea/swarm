@@ -245,9 +245,10 @@ class TestActiveExclusivity:
         assert demoted == []
         assert t.status == TaskStatus.ACTIVE
 
-    def test_reconcile_keeps_most_recently_updated(self):
-        import time
-
+    def test_reconcile_keeps_earliest_started(self):
+        """#611 P2: reconcile keeps the EARLIEST-STARTED (in-flight) ACTIVE task
+        and demotes the rest — not the newest-by-updated_at, which could demote
+        a long-running job. started_at wins even when updated_at disagrees."""
         board = _make_board()
         t1 = board.create("a")
         t2 = board.create("b")
@@ -256,17 +257,18 @@ class TestActiveExclusivity:
             board.assign(t.id, "alice")
             t.start()
 
-        t1.updated_at = time.time() - 100
-        t2.updated_at = time.time() - 50
-        t3.updated_at = time.time()  # most recent
+        # t1 started first; t3 was updated most recently. started_at decides.
+        t1.started_at, t1.updated_at = 1000.0, 1000.0
+        t2.started_at, t2.updated_at = 2000.0, 2000.0
+        t3.started_at, t3.updated_at = 3000.0, 3000.0
 
         result = board.reconcile_active_per_worker()
 
         assert "alice" in result
-        assert set(result["alice"]) == {t1.id, t2.id}
-        assert t3.status == TaskStatus.ACTIVE
-        assert t1.status == TaskStatus.ASSIGNED
+        assert set(result["alice"]) == {t2.id, t3.id}
+        assert t1.status == TaskStatus.ACTIVE  # earliest-started kept
         assert t2.status == TaskStatus.ASSIGNED
+        assert t3.status == TaskStatus.ASSIGNED
 
     def test_reconcile_no_op_when_one_active_per_worker(self):
         board = _make_board()

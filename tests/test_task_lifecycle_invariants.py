@@ -120,3 +120,51 @@ def test_reconcile_blocked_when_blocker_binding(board):
     repairs = board.reconcile_invariants(working_workers=set(), blocked_task_ids={a.id})
     assert board.get(a.id).status == TaskStatus.BLOCKED
     assert repairs
+
+
+# --- P2 (#611): started_at + safe _recon_inv1 tiebreak ---
+
+
+def test_start_stamps_started_at():
+    """#611 P2: task.start() records when work began."""
+    t = SwarmTask(title="x")
+    assert t.started_at is None
+    t.start()
+    assert t.started_at is not None and t.started_at > 0
+
+
+def test_reconcile_inv1_keeps_earliest_started_not_newest_updated(board):
+    """#611 P2: with >1 ACTIVE per worker, keep the EARLIEST-STARTED task (the
+    in-flight job), NOT the newest-by-updated_at. Demoting the long-running task
+    would interrupt it — this is what would have killed #604's 27k-record run.
+
+    Red under the old tiebreak: updated_at favours `new`, so `old` (in-flight)
+    gets demoted."""
+    old = _assigned(board, "in-flight", "w1")
+    new = _assigned(board, "newer", "w1")
+    old.status = TaskStatus.ACTIVE
+    new.status = TaskStatus.ACTIVE
+    # started earlier but every field disagrees with the old updated_at rule:
+    old.started_at, old.updated_at = 1000.0, 1000.0
+    new.started_at, new.updated_at = 2000.0, 2000.0
+
+    board.reconcile_invariants(working_workers={"w1"})
+
+    assert board.get(old.id).status == TaskStatus.ACTIVE  # earliest-started survives
+    assert board.get(new.id).status == TaskStatus.ASSIGNED
+
+
+def test_reconcile_inv1_null_started_at_falls_back_to_created_at(board):
+    """Legacy ACTIVE tasks (started_at NULL) sort by created_at."""
+    first = _assigned(board, "first", "w1")
+    second = _assigned(board, "second", "w1")
+    first.status = TaskStatus.ACTIVE
+    second.status = TaskStatus.ACTIVE
+    first.started_at = None
+    second.started_at = None
+    first.created_at, second.created_at = 1000.0, 2000.0
+
+    board.reconcile_invariants(working_workers={"w1"})
+
+    assert board.get(first.id).status == TaskStatus.ACTIVE  # earliest created survives
+    assert board.get(second.id).status == TaskStatus.ASSIGNED

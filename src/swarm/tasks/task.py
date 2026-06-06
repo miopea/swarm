@@ -110,6 +110,11 @@ class SwarmTask:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     completed_at: float | None = None
+    # #611 P2: when the task last went ACTIVE — the signal _recon_inv1 uses to
+    # keep the in-flight task (earliest-started) rather than newest-by-updated_at
+    # (updated_at bumps on any edit, so it could demote a long-running job).
+    # None for never-started / legacy tasks → callers fall back to created_at.
+    started_at: float | None = None
     depends_on: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)  # file paths
@@ -154,12 +159,14 @@ class SwarmTask:
         self.updated_at = time.time()
 
     def start(self) -> None:
+        now = time.time()
         self.status = TaskStatus.ACTIVE
+        self.started_at = now
         # Resuming clears any stale hold reason — covers the operator
         # unpark of an operator-blocked task (BLOCKED→ACTIVE via
         # board.activate) and any #405 blocker-binding resume.
         self.block_reason = ""
-        self.updated_at = time.time()
+        self.updated_at = now
 
     def block(self, reason: str = "") -> None:
         """#405 INV-2: park this task off-ACTIVE on a blocker binding.

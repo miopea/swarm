@@ -23,6 +23,14 @@ _PRIORITY_ORDER = {
 }
 
 
+def _active_keep_key(t: SwarmTask) -> float:
+    """Sort key (ascending) for which ACTIVE task to KEEP under INV-1: the
+    earliest-started, i.e. the in-flight job. ``started_at`` is None for
+    legacy/never-started tasks → fall back to ``created_at``. (#611 P2)
+    """
+    return t.started_at if t.started_at is not None else t.created_at
+
+
 class TaskBoard(EventEmitter):
     """In-memory task board for tracking and assigning work."""
 
@@ -578,15 +586,31 @@ class TaskBoard(EventEmitter):
         return by_worker
 
     def _recon_inv1(self, now: float, repairs: list[dict[str, str]]) -> None:
-        """>1 ACTIVE per worker → keep newest, demote the rest."""
+        """>1 ACTIVE per worker → keep the earliest-started (in-flight) task,
+        demote the rest.
+
+        #611 P2: keyed on ``started_at`` (fallback ``created_at``), NOT
+        ``updated_at``. ``updated_at`` bumps on any edit, so the old "keep
+        newest-updated" rule could demote a long-running in-flight job whose
+        timestamp moved for an unrelated reason (it would have killed #604's
+        27k-record run). Each demotion is logged at WARNING with both task
+        numbers so a wrong demotion is forensically visible.
+        """
         by_worker = self._group_active_by_worker()
         for wname, tasks in by_worker.items():
             if len(tasks) <= 1:
                 continue
-            tasks.sort(key=lambda t: t.updated_at, reverse=True)
+            tasks.sort(key=_active_keep_key)
+            keep = tasks[0]
             for task in tasks[1:]:
                 task.status = TaskStatus.ASSIGNED
                 task.updated_at = now
+                _log.warning(
+                    "INV-1: worker %s had >1 ACTIVE — keeping in-flight #%s, demoting #%s",
+                    wname,
+                    keep.number,
+                    task.number,
+                )
                 repairs.append(self._repair(task, "assigned", f"INV-1: {wname} had >1 ACTIVE"))
 
     def _recon_inv2(
@@ -619,10 +643,11 @@ class TaskBoard(EventEmitter):
         """Ensure each worker has at most one ACTIVE task.
 
         Sweeps all workers; for each worker with >1 ACTIVE task, keeps the
-        most recently updated one and demotes the rest to ASSIGNED. Used at
-        daemon startup to clean up state left behind by older code paths
+        earliest-started (in-flight) one and demotes the rest to ASSIGNED. Used
+        at daemon startup to clean up state left behind by older code paths
         that allowed multiple concurrent ACTIVE tasks per worker. Returns a
-        mapping of worker_name → demoted task IDs.
+        mapping of worker_name → demoted task IDs. (#611 P2: matches
+        ``_recon_inv1`` — keeps earliest-started, not newest-updated.)
         """
         import time
 
@@ -633,7 +658,7 @@ class TaskBoard(EventEmitter):
             for worker_name, tasks in by_worker.items():
                 if len(tasks) <= 1:
                     continue
-                tasks.sort(key=lambda t: t.updated_at, reverse=True)
+                tasks.sort(key=_active_keep_key)
                 demoted_ids: list[str] = []
                 for task in tasks[1:]:
                     task.status = TaskStatus.ASSIGNED

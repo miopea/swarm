@@ -114,6 +114,7 @@ class SwarmDB:
             (11, self._migrate_v11_block_reason),
             (12, self._migrate_v12_messages_dedup_index),
             (13, self._migrate_v13_query_indexes),
+            (14, self._migrate_v14_started_at),
         ]
         for version, migrate in migrations:
             if from_version < version:
@@ -370,6 +371,19 @@ class SwarmDB:
             _log.info("v11: added tasks.block_reason")
         except sqlite3.OperationalError:
             _log.debug("v11 migration: block_reason column likely already exists")
+
+    def _migrate_v14_started_at(self) -> None:
+        """v14 (#611 P2): add ``tasks.started_at`` (when the task last went
+        ACTIVE) for the INV-1 earliest-started tiebreak. Nullable — legacy rows
+        stay NULL and fall back to ``created_at``. ALTER wrapped in try/except —
+        fresh DBs already have it via SCHEMA_V1.
+        """
+        assert self._conn is not None
+        try:
+            self._conn.execute("ALTER TABLE tasks ADD COLUMN started_at REAL")
+            _log.info("v14: added tasks.started_at")
+        except sqlite3.OperationalError:
+            _log.debug("v14 migration: started_at column likely already exists")
 
     def _migrate_v12_messages_dedup_index(self) -> None:
         """v12: composite index matching MessageStore.send()'s dedup probe.
