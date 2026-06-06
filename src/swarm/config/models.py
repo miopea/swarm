@@ -142,6 +142,12 @@ class DroneConfig:
     # get spammed.
     idle_nudge_interval_seconds: float = 180.0
     idle_nudge_debounce_seconds: float = 900.0
+    # #611 P1: periodic INV-1/2 reconcile sweep, independent of worker state
+    # changes. The reactive trigger only fires when a worker leaves a working
+    # state, so a >1-ACTIVE violation created while a worker stays BUZZING would
+    # otherwise persist until it idled/restarted (the platform #604/#605 case).
+    # 0 disables. Floored at 15s so a misconfig can't busy-loop.
+    reconcile_interval_seconds: float = 90.0
     # Task #546: after this many consecutive no-progress nudges (the
     # worker's state + outstanding-work fingerprint unchanged between
     # nudges), the watcher STOPS poking and escalates once to the

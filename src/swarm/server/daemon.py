@@ -851,6 +851,7 @@ class SwarmDaemon(EventEmitter):
         self.loop_runner.register("pipeline_schedule", self._pipeline_schedule_loop)
         self.loop_runner.register("db_maintenance", self._db_maintenance_loop)
         self.loop_runner.register("playbook_consolidation", self._playbook_consolidation_loop)
+        self.loop_runner.register("invariant_reconcile", self._invariant_reconcile_loop)
         self.loop_runner.start_all()
 
     async def _db_maintenance_loop(self) -> None:
@@ -885,6 +886,33 @@ class SwarmDaemon(EventEmitter):
                         last_backup = time.time()
                     except Exception:
                         _log.debug("DB backup failed", exc_info=True)
+        except asyncio.CancelledError:
+            return
+
+    async def _invariant_reconcile_loop(self) -> None:
+        """Periodic INV-1/2 reconcile, independent of worker state changes.
+
+        The reactive trigger (``_on_state_changed``) only fires when a worker
+        leaves a working state, so a >1-ACTIVE violation created while a worker
+        stays BUZZING would otherwise persist until it idled or the daemon
+        restarted (the platform #604/#605 case — both tasks stayed ACTIVE for
+        ~1.5h while platform kept working). This low-frequency sweep closes that
+        window. ``reconcile_invariants`` only writes when a violation actually
+        exists, so the steady-state cost is one cheap in-memory scan. ``0``
+        disables; floored at 15s so a misconfig can't busy-loop.
+        """
+        try:
+            while True:
+                interval = float(self.config.drones.reconcile_interval_seconds)
+                await asyncio.sleep(max(15.0, interval) if interval > 0 else 90.0)
+                if interval <= 0:
+                    continue  # disabled — idle-poll the config for runtime enable
+                try:
+                    self._run_invariant_reconciliation("periodic")
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning("periodic invariant reconcile failed", exc_info=True)
         except asyncio.CancelledError:
             return
 

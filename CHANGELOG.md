@@ -10,6 +10,23 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.6.4] - 2026-06-06
+
+### Features
+
+### Changes
+
+- (#611 P1) Added a periodic invariant-reconcile sweep so INV-1/INV-2 are healed
+  on a timer, not only on worker state changes. The reactive trigger fires only
+  when a worker *leaves* a working state, so a >1-ACTIVE violation created while
+  a worker stays BUZZING previously persisted until it idled or the daemon
+  restarted (platform #604/#605 lasted ~1.5h that way). New daemon loop
+  `_invariant_reconcile_loop` runs `reconcile_invariants` every
+  `DroneConfig.reconcile_interval_seconds` (default 90s; 0 disables; floored at
+  15s). Cheap — only writes when a violation actually exists.
+
+### Fixes
+
 ## [2026.6.6.3] - 2026-06-06
 
 ### Features

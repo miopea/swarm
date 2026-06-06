@@ -335,6 +335,7 @@ def _parse_config(path: Path) -> HiveConfig:
         speculation_enabled=drones_data.get("speculation_enabled", False),
         idle_nudge_interval_seconds=drones_data.get("idle_nudge_interval_seconds", 180.0),
         idle_nudge_debounce_seconds=drones_data.get("idle_nudge_debounce_seconds", 900.0),
+        reconcile_interval_seconds=drones_data.get("reconcile_interval_seconds", 90.0),
         assign_affinity_floor=drones_data.get("assign_affinity_floor", 0.5),
         assign_operator_engagement_minutes=drones_data.get(
             "assign_operator_engagement_minutes", 10.0

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
+from swarm.config import DroneConfig
 from swarm.drones.log import SystemAction
 from swarm.tasks.task import TaskStatus
 from swarm.worker.worker import Worker, WorkerState
@@ -108,3 +111,59 @@ def test_complete_task_force_closes_blocked(daemon):
     closed = daemon.task_board.get(t.id)
     assert closed.status == TaskStatus.DONE
     assert closed.resolution == "done e2e"
+
+
+# --- P1 (#611): periodic invariant-reconcile loop ---
+
+
+def test_drone_config_has_reconcile_interval():
+    """#611 P1: DroneConfig exposes a periodic-reconcile interval (default 90s)."""
+    assert DroneConfig().reconcile_interval_seconds == 90.0
+
+
+@pytest.mark.asyncio
+async def test_invariant_reconcile_loop_ticks(daemon, monkeypatch):
+    """#611 P1: the periodic loop calls _run_invariant_reconciliation on each
+    tick, independent of any worker state change (closes the unhealed-while-
+    BUZZING window that left platform #604/#605 both ACTIVE)."""
+    daemon.config.drones.reconcile_interval_seconds = 90.0
+    calls: list[str] = []
+    monkeypatch.setattr(
+        daemon, "_run_invariant_reconciliation", lambda reason: calls.append(reason)
+    )
+
+    # First sleep returns; second raises CancelledError to break the loop after
+    # exactly one reconcile tick.
+    state = {"n": 0}
+
+    async def fake_sleep(_seconds):
+        state["n"] += 1
+        if state["n"] >= 2:
+            raise asyncio.CancelledError
+        return None
+
+    monkeypatch.setattr("swarm.server.daemon.asyncio.sleep", fake_sleep)
+    await daemon._invariant_reconcile_loop()
+    assert calls == ["periodic"]
+
+
+@pytest.mark.asyncio
+async def test_invariant_reconcile_loop_disabled_skips(daemon, monkeypatch):
+    """interval <= 0 disables the reconcile (loop idles without reconciling)."""
+    daemon.config.drones.reconcile_interval_seconds = 0.0
+    calls: list[str] = []
+    monkeypatch.setattr(
+        daemon, "_run_invariant_reconciliation", lambda reason: calls.append(reason)
+    )
+
+    state = {"n": 0}
+
+    async def fake_sleep(_seconds):
+        state["n"] += 1
+        if state["n"] >= 2:
+            raise asyncio.CancelledError
+        return None
+
+    monkeypatch.setattr("swarm.server.daemon.asyncio.sleep", fake_sleep)
+    await daemon._invariant_reconcile_loop()
+    assert calls == []  # disabled — never reconciles
