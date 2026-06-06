@@ -5,9 +5,48 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from swarm.config.models import WebhookConfig
+from swarm.notify import webhook as webhook_mod
 from swarm.notify.bus import EventType, NotificationBus, NotifyEvent, Severity
-from swarm.notify.webhook import make_webhook_backend
+from swarm.notify.webhook import _sanitize_url, make_webhook_backend
+
+
+@pytest.fixture(autouse=True)
+def _run_detached_inline(monkeypatch):
+    """#notify-audit A: the webhook POST now runs on a daemon thread so it can't
+    block the event loop. Run it inline in tests so assertions on the mocked
+    urlopen are deterministic (no thread race)."""
+    monkeypatch.setattr(webhook_mod, "run_detached", lambda fn, **kw: fn())
+
+
+class TestSanitizeUrl:
+    def test_drops_path_query_and_userinfo(self) -> None:
+        # Slack-style token in the PATH must not survive.
+        assert (
+            _sanitize_url("https://hooks.slack.com/services/T0/B0/SECRETxyz")
+            == "https://hooks.slack.com"
+        )
+        # ntfy-style token in the QUERY must not survive.
+        out = _sanitize_url("https://ntfy.sh/mytopic?auth=tk_secret")
+        assert "tk_secret" not in out and out == "https://ntfy.sh"
+
+    def test_failure_logs_sanitized_url_not_token(self, caplog) -> None:
+        import logging
+
+        with patch(
+            "swarm.notify.webhook.urllib.request.urlopen",
+            side_effect=ConnectionError("refused"),
+        ):
+            backend = make_webhook_backend(
+                WebhookConfig(url="https://hooks.slack.com/services/T/B/SECRETxyz")
+            )
+            with caplog.at_level(logging.WARNING):
+                backend(NotifyEvent(event_type=EventType.WORKER_STUNG, title="x", message="y"))
+        joined = " ".join(r.getMessage() for r in caplog.records)
+        assert "SECRETxyz" not in joined  # token not leaked
+        assert "hooks.slack.com" in joined  # host still identifiable
 
 
 class TestMakeWebhookBackend:

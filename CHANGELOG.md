@@ -10,6 +10,28 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.6.12] - 2026-06-06
+
+### Features
+
+### Changes
+
+- Notify: removed the dead `osc777_backend` (never wired to config or the bus);
+  `make_webhook_backend` return type is now `Callable[[NotifyEvent], None]`;
+  hoisted desktop.py's per-function `threading` imports to module scope.
+
+### Fixes
+
+- Notify: the email (`smtplib`) and webhook (`urllib`) backends no longer block
+  the daemon's async event loop. `bus.emit()` dispatches backends synchronously,
+  so a slow/hung SMTP or webhook server previously froze the whole daemon (WS
+  broadcasts, polling) for the backend's timeout. Both now run their blocking
+  send on a daemon thread via `notify._util.run_detached` (matching desktop's
+  existing offload).
+- Notify: a failed webhook POST now logs only `scheme://host` — the configured
+  URL can embed a token in its path (Slack/Discord) or query (ntfy), which must
+  not land in the logs.
+
 ## [2026.6.6.11] - 2026-06-06
 
 ### Features

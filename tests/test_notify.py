@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 import swarm.notify.desktop as _desktop_mod
 from swarm.notify.bus import EventType, NotificationBus, NotifyEvent, Severity
 from swarm.notify.desktop import (
@@ -264,6 +266,15 @@ class TestDesktopBackend:
 
 
 class TestEmailBackend:
+    @pytest.fixture(autouse=True)
+    def _run_detached_inline(self, monkeypatch):
+        """#notify-audit A: the SMTP send now runs on a daemon thread (so a slow
+        server can't block the event loop). Run it inline here so the mocked
+        smtplib assertions are deterministic."""
+        import swarm.notify.email as email_mod
+
+        monkeypatch.setattr(email_mod, "run_detached", lambda fn, **kw: fn())
+
     def test_sends_email(self):
         from swarm.config.models import EmailConfig
         from swarm.notify.email import make_email_backend
@@ -337,3 +348,32 @@ class TestEmailBackend:
                     message="crash",
                 )
             )
+
+
+class TestRunDetached:
+    def test_runs_fn_on_a_thread(self):
+        """#notify-audit A: run_detached executes fn off the calling thread so a
+        blocking backend can't freeze the event loop."""
+        import threading
+
+        from swarm.notify._util import run_detached
+
+        done = threading.Event()
+        seen = {}
+
+        def fn():
+            seen["thread"] = threading.current_thread().name
+            done.set()
+
+        run_detached(fn, name="unit-test-notify")
+        assert done.wait(timeout=2), "detached fn did not run"
+        assert seen["thread"] == "unit-test-notify"  # ran on the named daemon thread
+
+    def test_thread_start_failure_is_swallowed(self, monkeypatch):
+        from swarm.notify import _util
+
+        monkeypatch.setattr(
+            _util.threading, "Thread", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+        )
+        # Must not raise into the emit path.
+        _util.run_detached(lambda: None, name="x")

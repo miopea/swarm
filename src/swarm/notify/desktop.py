@@ -5,6 +5,7 @@ from __future__ import annotations
 import platform
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 from swarm.logging import get_logger
@@ -95,7 +96,6 @@ def _send_wsl_toast(title: str, message: str) -> None:
             stderr=subprocess.DEVNULL,
         )
         # Reap after timeout to prevent zombie processes
-        import threading
 
         threading.Thread(
             target=lambda: proc.wait(timeout=10), daemon=True, name="toast-reaper"
@@ -120,7 +120,6 @@ def _send_notify_send(title: str, message: str, urgency: str = "normal") -> None
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        import threading
 
         threading.Thread(
             target=lambda: proc.wait(timeout=10), daemon=True, name="notify-reaper"
@@ -144,7 +143,6 @@ def _send_macos_notification(title: str, message: str) -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        import threading
 
         threading.Thread(
             target=lambda: proc.wait(timeout=10), daemon=True, name="osascript-reaper"

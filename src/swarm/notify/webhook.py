@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from swarm.logging import get_logger
+from swarm.notify._util import run_detached
 from swarm.notify.bus import NotifyEvent
 
 if TYPE_CHECKING:
@@ -17,7 +20,22 @@ _log = get_logger("notify.webhook")
 _TIMEOUT = 5  # seconds
 
 
-def make_webhook_backend(config: WebhookConfig) -> callable:
+def _sanitize_url(url: str) -> str:
+    """Return ``scheme://host`` only — drop path, query, and userinfo.
+
+    Webhook tokens can live in the query (ntfy ``?auth=``) AND in the path
+    (Slack ``/services/T/B/secret``, Discord ``/api/webhooks/id/token``), so the
+    only safe-to-log part is scheme+host. Keeps enough to identify which webhook
+    failed without leaking the secret into logs.
+    """
+    try:
+        p = urllib.parse.urlsplit(url)
+        return urllib.parse.urlunsplit((p.scheme, p.hostname or "", "", "", "")) or "<webhook>"
+    except ValueError:
+        return "<webhook>"
+
+
+def make_webhook_backend(config: WebhookConfig) -> Callable[[NotifyEvent], None]:
     """Create a webhook backend callable from a WebhookConfig.
 
     Returns a function compatible with NotificationBus.add_backend().
@@ -48,10 +66,18 @@ def make_webhook_backend(config: WebhookConfig) -> callable:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        try:
-            with urllib.request.urlopen(req, timeout=_TIMEOUT):
-                pass
-        except Exception:
-            _log.warning("webhook POST to %s failed", url, exc_info=True)
+
+        def _deliver() -> None:
+            try:
+                with urllib.request.urlopen(req, timeout=_TIMEOUT):
+                    pass
+            except Exception:
+                # Log a sanitized URL — the configured webhook URL can embed a
+                # token (ntfy/Slack) that must not land in the logs.
+                _log.warning("webhook POST to %s failed", _sanitize_url(url), exc_info=True)
+
+        # urllib is blocking; run the POST off the event loop so a slow/hung
+        # webhook endpoint can't freeze the daemon (bounded by _TIMEOUT anyway).
+        run_detached(_deliver, name="webhook-notify")
 
     return webhook_backend

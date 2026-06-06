@@ -8,6 +8,7 @@ from email.message import EmailMessage
 from typing import TYPE_CHECKING
 
 from swarm.logging import get_logger
+from swarm.notify._util import run_detached
 
 if TYPE_CHECKING:
     from swarm.config.models import EmailConfig
@@ -54,14 +55,19 @@ def make_email_backend(config: EmailConfig) -> Callable[[NotifyEvent], None]:
             f"Worker: {event.worker_name or 'N/A'}\n"
         )
 
-        try:
-            with smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=_TIMEOUT) as server:
-                if config.use_tls:
-                    server.starttls()
-                if config.smtp_user:
-                    server.login(config.smtp_user, config.smtp_password)
-                server.send_message(msg)
-        except Exception:
-            _log.warning("failed to send email notification", exc_info=True)
+        def _deliver() -> None:
+            try:
+                with smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=_TIMEOUT) as server:
+                    if config.use_tls:
+                        server.starttls()
+                    if config.smtp_user:
+                        server.login(config.smtp_user, config.smtp_password)
+                    server.send_message(msg)
+            except Exception:
+                _log.warning("failed to send email notification", exc_info=True)
+
+        # smtplib is blocking (connect/STARTTLS/login can take seconds); run it
+        # off the event loop so a slow SMTP server can't freeze the daemon.
+        run_detached(_deliver, name="email-notify")
 
     return _send
