@@ -188,10 +188,10 @@
             <div class="panel-body tile-grid" id="tile-grid" style="display:none"></div>
             <!-- Mobile send bar (touch devices only) -->
             <div class="mobile-send-bar" id="mobile-send-bar" style="display:none">
-                <input type="text" id="mobile-send-input" placeholder="Type or dictate..."
-                       enterkeyhint="send"
-                       data-enter-action="mobileSend">
-                <button class="btn btn-sm" data-action="mobileSend">Send</button>
+                <textarea id="mobile-send-input" rows="1" placeholder="Type or dictate…"
+                          enterkeyhint="send" autocapitalize="sentences" autocorrect="on"
+                          spellcheck="true" aria-label="Compose a message to the worker"></textarea>
+                <button class="btn btn-sm" data-action="mobileSend" aria-label="Send to worker">Send</button>
             </div>
             <!-- Action bar (shown when a worker is selected) -->
             <div class="action-bar" id="terminal-actions" style="display:none">

@@ -10,6 +10,23 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.8.2] - 2026-06-08
+
+### Features
+
+- Mobile composer: the touch send-bar input is now a multi-line auto-growing
+  `<textarea>` (was a single-line `<input>`), so native autocorrect and voice
+  dictation work properly — the raw xterm keystroke path doesn't get them.
+  Enter sends, Shift+Enter inserts a newline; it auto-grows up to ~5 lines then
+  scrolls, and is styled as the primary, obvious touch input (so composing here
+  is the default over tapping straight into the terminal). Purely additive — the
+  direct-terminal keystroke path, the d-pad, the command buttons, and skills all
+  keep working unchanged. No desktop impact (the composer is touch-only).
+
+### Changes
+
+### Fixes
+
 ## [2026.6.8] - 2026-06-08
 
 ### Features

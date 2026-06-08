@@ -1367,28 +1367,41 @@
             white-space: nowrap;
         }
 
-        /* Mobile send bar — visible text input for touch devices */
+        /* Mobile composer — the primary touch input. A multi-line textarea so
+           native autocorrect / voice dictation work (the raw xterm keystroke
+           path doesn't get them); Enter sends, Shift+Enter inserts a newline
+           (wired in dashboard.js). Auto-grows up to ~5 lines, then scrolls. */
         .mobile-send-bar {
             display: none;
             gap: 0.4rem;
-            padding: 0.3rem 0.5rem;
+            align-items: flex-end;  /* keep Send pinned to the last line as it grows */
+            padding: 0.35rem 0.5rem;
             border-top: 1px solid var(--border);
             background: var(--surface);
         }
-        .mobile-send-bar input {
+        .mobile-send-bar textarea {
             flex: 1;
+            min-width: 0;
             background: var(--hive-bg);
             color: var(--text);
             border: 1px solid var(--border);
             border-radius: 6px;
-            padding: 0.4rem 0.6rem;
-            font-size: 0.85rem;
+            padding: 0.5rem 0.6rem;
+            font-size: 0.95rem;      /* primary input — a touch larger than chrome */
+            line-height: 1.35;
             font-family: inherit;
+            resize: none;            /* height is JS-driven (auto-grow) */
+            overflow-y: auto;
+            min-height: 2.4rem;      /* one comfortable line */
+            max-height: 7.5rem;      /* ~5 lines, then scroll — never eats the screen */
         }
-        .mobile-send-bar input:focus {
+        .mobile-send-bar textarea:focus {
             outline: none;
             border-color: var(--honey);
+            box-shadow: 0 0 0 2px rgba(214,158,46,0.18);  /* make the active composer obvious */
         }
+        .mobile-send-bar textarea::placeholder { opacity: 0.6; }
+        .mobile-send-bar .btn { flex: 0 0 auto; }
 
         /* Toast notifications */
         .toast-container {

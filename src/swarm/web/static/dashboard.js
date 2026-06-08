@@ -4819,12 +4819,17 @@
         attachInlineTerminal(name);
     }
 
-    // Mobile send bar — type/dictate text and send to worker terminal
+    // Mobile send bar — type/dictate text and send to worker terminal.
+    // The composer is a multi-line <textarea> so native autocorrect / voice
+    // dictation work (the raw xterm keystroke path doesn't get them). Embedded
+    // newlines (Shift+Enter) are sent through with the text; the trailing \r
+    // submits — same one-shot send the single-line input used.
     window.mobileSend = function() {
         var input = document.getElementById('mobile-send-input');
         if (!input || !input.value) return;
         var text = input.value;
         input.value = '';
+        input.style.height = '';  // collapse the auto-grown composer back to one line
         if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
             var encoder = new TextEncoder();
             inlineTermWs.send(encoder.encode(text + '\r'));
@@ -4833,6 +4838,26 @@
             form.append('message', text);
             actionFetch('/action/send/' + encodeURIComponent(selectedWorker), { method: 'POST', body: form });
         }
+    };
+
+    // Wire the mobile composer textarea: auto-grow to fit content (capped by the
+    // CSS max-height), Enter sends, Shift+Enter inserts a newline. Idempotent —
+    // the element is static, so this runs once at init.
+    function setupMobileComposer() {
+        var ta = document.getElementById('mobile-send-input');
+        if (!ta || ta._composerWired) return;
+        ta._composerWired = true;
+        var autogrow = function() {
+            ta.style.height = 'auto';
+            ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';  // 120px ≈ max-height 7.5rem
+        };
+        ta.addEventListener('input', autogrow);
+        ta.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();      // Enter submits; Shift+Enter falls through to a newline
+                window.mobileSend();
+            }
+        });
     }
 
     // --- Fullscreen terminal (mobile scroll mode) ---
@@ -11170,6 +11195,7 @@
 
     // ----- Boot -----------------------------------------------------------
     function init() {
+        setupMobileComposer();  // wire the touch composer (auto-grow, Enter=send)
         // If sessionStorage has a worker that the existing dashboard's
         // restoreWorker (line 7830) will mount into detail-body, START
         // in worker mode — otherwise show() would hide detail-body and
