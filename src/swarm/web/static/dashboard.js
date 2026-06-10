@@ -4532,6 +4532,11 @@
 
     window.mountQueenEmbed = mountQueenEmbed;
     window.unmountQueenEmbed = unmountQueenEmbed;
+    // Exposed so the Command Center IIFE's show() can detach the active worker
+    // terminal when switching to the Queen view — without this, the worker
+    // term stays mounted in #detail-body (with its inline display:flex) and
+    // stacks over the Queen panel.
+    window.hideActiveTermEntry = hideActiveTermEntry;
 
     // --- Tile mode (multi-worker terminal grid) ---
     var tileMode = false;
@@ -10351,6 +10356,14 @@
         // Re-apply saved CC panel sizes (defensive — survives any
         // intermediate CSS-var clear during a worker visit).
         applyCcLayoutFromStorage();
+
+        // Detach any active worker terminal FIRST. showTermEntry leaves an
+        // inline `display: flex` on #detail-body; hideActiveTermEntry removes
+        // the worker term from the DOM and clears those inline styles, so the
+        // panel returns to pure CSS (body.cc-active) control. Without this the
+        // worker terminal stays stacked over the Queen panel. Re-selecting the
+        // worker re-mounts it from termCache.
+        try { if (window.hideActiveTermEntry) window.hideActiveTermEntry(); } catch (_) {}
 
         // Mount the Queen's live PTY into the right panel (her real
         // session — the chat relay is gone).

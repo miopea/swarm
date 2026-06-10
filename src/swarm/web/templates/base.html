@@ -2831,10 +2831,15 @@
            os.execv reload, a race in that JS reconciliation could leave BOTH
            painted (worker terminal in #detail-body + Queen panel in
            #command-center). Keying visibility off the class makes the
-           mixed-render impossible at the CSS layer, regardless of JS timing. */
+           mixed-render impossible at the CSS layer, regardless of JS timing.
+           !important is REQUIRED: showTermEntry (dashboard.js) sets an inline
+           `display: flex` on #detail-body when a worker terminal mounts, which
+           would otherwise beat these class rules and leave the worker terminal
+           stacked over the Queen panel — same reason #terminal-actions above
+           needs it. */
         #command-center { display: none; }
-        body.cc-active #command-center { display: block; }
-        body.cc-active #detail-body { display: none; }
+        body.cc-active #command-center { display: block !important; }
+        body.cc-active #detail-body { display: none !important; }
         /* P6: buzz-filter-select is desktop-hidden; only emerges on mobile
            where the chip strip is hidden. JS mirrors selection both ways. */
         .buzz-filter-select-mobile { display: none; }

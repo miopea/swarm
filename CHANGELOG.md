@@ -10,6 +10,24 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.10.3] - 2026-06-10
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Queen-view mixed render (real root cause).** Selecting "Queen Dashboard"
+  while a worker was focused left the worker terminal stacked over the Queen
+  panel. The 2026.6.10.2 CSS-only attempt was insufficient: `showTermEntry`
+  sets an inline `display: flex` on `#detail-body` when a worker terminal
+  mounts, which beat the non-`!important` `body.cc-active #detail-body` rule.
+  Fixed by (1) adding `!important` to the cc-active panel-visibility rules
+  (mirroring the existing `#terminal-actions` precedent), and (2) detaching the
+  active worker terminal in `show()` via a now-exposed `hideActiveTermEntry()`
+  (which also clears the inline styles) before mounting the Queen embed.
+
 ## [2026.6.10.2] - 2026-06-10
 
 ### Features
