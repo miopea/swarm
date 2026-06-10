@@ -197,6 +197,23 @@ class SqliteProposalStore(BaseStore):
             )
             return [_row_to_proposal(r) for r in rows]
 
+    def recent_rejected_escalations(self, limit: int = 10) -> list[AssignmentProposal]:
+        """Recently rejected escalation proposals, newest first.
+
+        Feeds the Queen's rejection-memory context (queen/context.py) so she
+        doesn't re-propose actions the operator already refused. Rejected rows
+        persist in the table (``update_status`` sets ``resolved_at``); ordering
+        is by resolution time even though the dataclass doesn't surface it.
+        """
+        with self._lock:
+            rows = self._db.fetchall(
+                "SELECT * FROM proposals WHERE status = 'rejected' "
+                "AND proposal_type = 'escalation' "
+                "ORDER BY resolved_at DESC LIMIT ?",
+                (limit,),
+            )
+            return [_row_to_proposal(r) for r in rows]
+
     def add_to_history(self, proposal: AssignmentProposal) -> None:
         """Add a resolved proposal (e.g. auto-actions)."""
         with self._lock:

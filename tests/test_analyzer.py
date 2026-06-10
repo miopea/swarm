@@ -13,7 +13,7 @@ from swarm.pty.process import ProcessError
 from swarm.queen.queen import Queen
 from swarm.queen.queue import QueenCallQueue
 from swarm.server.analyzer import QueenAnalyzer
-from swarm.tasks.proposal import AssignmentProposal, ProposalStore
+from swarm.tasks.proposal import AssignmentProposal, ProposalStatus, ProposalStore
 from swarm.tasks.task import SwarmTask
 from swarm.worker.worker import Worker, WorkerState
 from tests.fakes.process import FakeWorkerProcess
@@ -69,6 +69,7 @@ class _Deps:
         self.get_worker_descriptions = MagicMock(return_value={})
         self.get_pool = MagicMock(return_value=None)
         self.clear_escalation = MagicMock()
+        self.is_focused = MagicMock(return_value=False)
 
 
 def _make_queen(monkeypatch, min_confidence: float = 0.7) -> Queen:
@@ -98,6 +99,7 @@ def _make_analyzer(queen: Queen, deps: _Deps, queue: QueenCallQueue) -> QueenAna
         get_config=deps.get_config,
         get_worker_descriptions=deps.get_worker_descriptions,
         clear_escalation=deps.clear_escalation,
+        is_focused=deps.is_focused,
     )
 
 
@@ -624,6 +626,95 @@ class TestAnalyzeEscalation:
         # Verify worker_state was passed to Queen
         call_kwargs = analyzer.queen.analyze_worker.call_args[1]
         assert call_kwargs.get("worker_state") == "WAITING"
+
+
+# ---------------------------------------------------------------------------
+# pre-call dedup tests — skip the Queen invocation when the proposal would
+# only be dropped downstream (operator focused / pending escalation)
+# ---------------------------------------------------------------------------
+
+
+class TestPreCallDedup:
+    """The Queen must not be invoked when the resulting proposal is a no-op."""
+
+    @pytest.mark.asyncio
+    async def test_focused_worker_skips_queen_call(self, analyzer, deps):
+        """Operator focused on the worker → skip the Queen call entirely."""
+        worker = _make_worker()
+        deps.workers = [worker]
+        worker.process.set_content("output")
+        deps.is_focused.return_value = True
+        analyzer.queen.analyze_worker = AsyncMock()
+
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
+            await analyzer.analyze_escalation(worker, "unrecognized state")
+
+        analyzer.queen.analyze_worker.assert_not_called()
+        deps.queue_proposal.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_focused_skip_logs_skipped_focused_entry(self, analyzer, deps):
+        """The focused short-circuit emits a QUEEN_PROPOSAL_SKIPPED_FOCUSED buzz entry."""
+        worker = _make_worker()
+        deps.workers = [worker]
+        worker.process.set_content("output")
+        deps.is_focused.return_value = True
+        analyzer.queen.analyze_worker = AsyncMock()
+
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
+            await analyzer.analyze_escalation(worker, "unrecognized state")
+
+        entries = [
+            e
+            for e in deps.drone_log.entries
+            if e.action == SystemAction.QUEEN_PROPOSAL_SKIPPED_FOCUSED
+        ]
+        assert len(entries) == 1
+        assert entries[0].category == LogCategory.QUEEN
+        # No analysis entry — the call never ran
+        assert not [e for e in deps.drone_log.entries if e.action == SystemAction.QUEEN_ESCALATION]
+
+    @pytest.mark.asyncio
+    async def test_pending_escalation_skips_queen_call(self, analyzer, deps):
+        """A matching pending escalation proposal → skip the Queen call entirely."""
+        worker = _make_worker()
+        deps.workers = [worker]
+        worker.process.set_content("output")
+        existing = AssignmentProposal.escalation(
+            worker_name="api",
+            action="continue",
+            assessment="existing",
+        )
+        deps.proposal_store.add(existing)
+        analyzer.queen.analyze_worker = AsyncMock()
+
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
+            await analyzer.analyze_escalation(worker, "unrecognized state")
+
+        analyzer.queen.analyze_worker.assert_not_called()
+        deps.queue_proposal.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unfocused_no_pending_invokes_queen(self, analyzer, deps):
+        """Happy path: not focused + no pending → Queen is invoked exactly once."""
+        worker = _make_worker()
+        deps.workers = [worker]
+        worker.process.set_content("output")
+        analyzer.queen.analyze_worker = AsyncMock(
+            return_value={
+                "action": "continue",
+                "confidence": 0.5,
+                "assessment": "Stuck",
+                "reasoning": "Idle",
+                "message": "",
+            }
+        )
+
+        with patch.object(analyzer, "gather_context", new_callable=AsyncMock, return_value="ctx"):
+            await analyzer.analyze_escalation(worker, "unrecognized state")
+
+        analyzer.queen.analyze_worker.assert_called_once()
+        deps.queue_proposal.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -1222,6 +1313,96 @@ class TestCompletionAcceptanceCriteria:
 # ---------------------------------------------------------------------------
 # gather_context tests
 # ---------------------------------------------------------------------------
+
+
+class TestGatherContextRejectionMemory:
+    """gather_context feeds recent operator rejections back to the Queen.
+
+    Phase A of the cross-session repeat fix: 'inform' the Queen so she declines
+    to re-propose, rather than hard-suppressing in code.
+    """
+
+    @pytest.mark.asyncio
+    async def test_fresh_rejection_passed_as_proposal_history(self, analyzer, deps):
+        """A rejection from the worker's CURRENT state spell is surfaced."""
+        worker = _make_worker(state_since=time.time() - 100)
+        deps.workers = [worker]
+        rej = AssignmentProposal.escalation(
+            worker_name="api", action="send_message", assessment="select 1", rule_pattern="grep.*"
+        )
+        rej.created_at = time.time() - 50  # raised AFTER state_since → same spell
+        rej.status = ProposalStatus.REJECTED
+        rej.rejection_reason = "no"
+        deps.proposal_store.add(rej)
+
+        captured = {}
+
+        def fake_build(workers, **kwargs):
+            captured.update(kwargs)
+            return "CTX"
+
+        with patch("swarm.queen.context.build_hive_context", side_effect=fake_build):
+            await analyzer.gather_context()
+
+        history = captured.get("proposal_history") or []
+        assert [p.id for p in history] == [rej.id]
+
+    @pytest.mark.asyncio
+    async def test_stale_rejection_dropped(self, analyzer, deps):
+        """A rejection from BEFORE the worker's current state spell is dropped."""
+        worker = _make_worker(state_since=time.time() - 10)  # entered state recently
+        deps.workers = [worker]
+        rej = AssignmentProposal.escalation(
+            worker_name="api", action="send_message", assessment="old", rule_pattern="x"
+        )
+        rej.created_at = time.time() - 500  # raised long before current state → stale
+        rej.status = ProposalStatus.REJECTED
+        deps.proposal_store.add(rej)
+
+        captured = {}
+
+        def fake_build(workers, **kwargs):
+            captured.update(kwargs)
+            return "CTX"
+
+        with patch("swarm.queen.context.build_hive_context", side_effect=fake_build):
+            await analyzer.gather_context()
+
+        assert (captured.get("proposal_history") or []) == []
+
+    @pytest.mark.asyncio
+    async def test_rejection_context_logs_buzz_entry(self, analyzer, deps):
+        """When rejections are injected, a QUEEN_REJECTION_CONTEXT entry is logged."""
+        worker = _make_worker(state_since=time.time() - 100)
+        deps.workers = [worker]
+        rej = AssignmentProposal.escalation(
+            worker_name="api", action="send_message", assessment="select 1"
+        )
+        rej.created_at = time.time() - 50
+        rej.status = ProposalStatus.REJECTED
+        deps.proposal_store.add(rej)
+
+        with patch("swarm.queen.context.build_hive_context", return_value="CTX"):
+            await analyzer.gather_context()
+
+        entries = [
+            e for e in deps.drone_log.entries if e.action == SystemAction.QUEEN_REJECTION_CONTEXT
+        ]
+        assert len(entries) == 1
+        assert entries[0].category == LogCategory.QUEEN
+
+    @pytest.mark.asyncio
+    async def test_no_rejections_no_buzz_entry(self, analyzer, deps):
+        """No rejections → no proposal_history, no buzz entry."""
+        worker = _make_worker(state_since=time.time() - 100)
+        deps.workers = [worker]
+
+        with patch("swarm.queen.context.build_hive_context", return_value="CTX"):
+            await analyzer.gather_context()
+
+        assert not [
+            e for e in deps.drone_log.entries if e.action == SystemAction.QUEEN_REJECTION_CONTEXT
+        ]
 
 
 class TestGatherContext:

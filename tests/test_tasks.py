@@ -697,7 +697,9 @@ class TestWorkflowTemplates:
             tags=["auth"],
         )
         msg = build_task_message(task, plan_mode_for_user_requests=False)
-        assert msg.startswith("/fix-and-ship ")
+        # BUG tasks get the env-causes preamble first, then the skill invocation.
+        assert msg.startswith("Before assuming a code bug")
+        assert "/fix-and-ship " in msg
         assert "Login button broken" in msg
         assert "Clicking login does nothing" in msg
         assert "auth" in msg
@@ -748,13 +750,13 @@ class TestWorkflowTemplates:
             attachments=["/tmp/log.txt", "/tmp/screenshot.png"],
         )
         msg = build_task_message(task, plan_mode_for_user_requests=False)
-        # Skill command is on the first line
-        first_line = msg.split("\n")[0]
-        assert first_line.startswith("/fix-and-ship ")
+        # The skill invocation is on its own line (BUG tasks prepend the
+        # env-causes preamble, so it's no longer line 0).
+        skill_line = next(ln for ln in msg.split("\n") if ln.startswith("/fix-and-ship "))
         # Attachments must NOT be inside the quoted skill argument —
         # they go on separate lines so the worker can see and read them
-        assert "/tmp/log.txt" not in first_line
-        assert "/tmp/screenshot.png" not in first_line
+        assert "/tmp/log.txt" not in skill_line
+        assert "/tmp/screenshot.png" not in skill_line
         assert "/tmp/log.txt" in msg
         assert "/tmp/screenshot.png" in msg
         assert "Attachments" in msg

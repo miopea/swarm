@@ -67,7 +67,7 @@ class ProposalManager:
         operator is hands-on, and a Queen proposal modal would just
         get in the way.
         """
-        if self._is_focused(proposal.worker_name):
+        if self.is_focused(proposal.worker_name):
             self._log_skipped_focused(proposal)
             return
         if self._is_duplicate(proposal):
@@ -80,8 +80,13 @@ class ProposalManager:
         self._notify_proposal(proposal)
         self._broadcast_modal(proposal)
 
-    def _is_focused(self, worker_name: str) -> bool:
-        """True if the operator is currently viewing this worker."""
+    def is_focused(self, worker_name: str) -> bool:
+        """True if the operator is currently viewing this worker.
+
+        Public so the QueenAnalyzer can consult the same focus source
+        *before* invoking the Queen, avoiding a wasted headless call on a
+        proposal that on_proposal would only drop here.
+        """
         pilot = self._get_pilot()
         return bool(pilot and pilot.is_focused(worker_name))
 

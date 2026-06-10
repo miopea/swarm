@@ -250,6 +250,7 @@ class SwarmDaemon(EventEmitter):
             get_worker_descriptions=self._worker_descriptions,
             clear_escalation=lambda name: self.pilot.clear_escalation(name) if self.pilot else None,
             record_completion_verdict=self._record_completion_verdict,
+            is_focused=self.proposals.is_focused,
         )
         # Apply workflow skill overrides from config
         if config.workflows:

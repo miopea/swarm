@@ -73,6 +73,7 @@ class QueenAnalyzer:
         get_worker_descriptions: Callable[[], dict[str, str]],
         clear_escalation: Callable[[str], None],
         record_completion_verdict: Callable[[str, bool, float], None] | None = None,
+        is_focused: Callable[[str], bool] | None = None,
     ) -> None:
         self.queen = queen
         self._queue = queue
@@ -90,6 +91,9 @@ class QueenAnalyzer:
         self._get_worker_descriptions = get_worker_descriptions
         self._clear_escalation = clear_escalation
         self._record_completion_verdict = record_completion_verdict
+        # Focus probe shared with ProposalManager; defaults to "never focused"
+        # so the analyzer is safe to construct without a pilot wired in.
+        self._is_focused = is_focused or (lambda _name: False)
         self._background_tasks: set[asyncio.Task[None]] = set()
 
     def has_inflight_escalation(self, worker_name: str) -> bool:
@@ -156,6 +160,26 @@ class QueenAnalyzer:
         actions (and plans) are surfaced to the user as proposals.
         """
         _start = time.time()
+        # Pre-call dedup: skip the (expensive) headless Queen invocation when
+        # the resulting proposal would only be dropped downstream — the
+        # operator is focused on the worker, or a matching escalation proposal
+        # is already pending. The same gates run again in
+        # ProposalManager.on_proposal as a post-call race guard; checking here
+        # avoids burning a Queen call to produce a no-op proposal.
+        if self._is_focused(worker.name):
+            self._drone_log.add(
+                SystemAction.QUEEN_PROPOSAL_SKIPPED_FOCUSED,
+                worker.name,
+                f"escalation skipped pre-call — operator focused on {worker.name}",
+                category=LogCategory.QUEEN,
+            )
+            return
+        if self._proposal_store.has_pending_escalation(worker.name):
+            _log.debug(
+                "skipping Queen escalation for %s — pending proposal exists",
+                worker.name,
+            )
+            return
         try:
             content = worker.process.get_content()
             hive_ctx = await self.gather_context()
@@ -536,6 +560,14 @@ class QueenAnalyzer:
             except (ProcessError, OSError):
                 _log.debug("failed to capture output for %s in queen flow", w.name)
         config = self._get_config()
+        rejections = self._recent_rejections(list(workers))
+        if rejections:
+            self._drone_log.add(
+                SystemAction.QUEEN_REJECTION_CONTEXT,
+                ", ".join(sorted({p.worker_name for p in rejections})),
+                f"injecting {len(rejections)} prior rejection(s) into Queen context",
+                category=LogCategory.QUEEN,
+            )
         return build_hive_context(
             list(workers),
             worker_outputs=worker_outputs,
@@ -543,7 +575,22 @@ class QueenAnalyzer:
             task_board=self._task_board,
             worker_descriptions=self._get_worker_descriptions(),
             approval_rules=config.drones.approval_rules or None,
+            proposal_history=rejections,
         )
+
+    def _recent_rejections(self, workers: list[Worker]) -> list[AssignmentProposal]:
+        """Recent rejected escalations still relevant to a worker's CURRENT state.
+
+        A rejection raised before the worker entered its current state spell
+        (``created_at < worker.state_since``) is stale — the situation moved
+        on — so it's dropped. This is the 'inform' half of the cross-session
+        repeat fix: surface live rejections so the Queen declines to re-propose.
+        """
+        rejected = self._proposal_store.recent_rejected_escalations(limit=10)
+        if not rejected:
+            return []
+        state_since = {w.name: w.state_since for w in workers}
+        return [p for p in rejected if p.created_at >= state_since.get(p.worker_name, float("inf"))]
 
     async def analyze_worker(self, worker_name: str, *, force: bool = False) -> dict[str, Any]:
         """Run Queen analysis on a specific worker. Returns Queen's analysis dict.

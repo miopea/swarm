@@ -181,6 +181,46 @@ class TestBuildTaskMessage:
         assert "Task #5:" in msg
 
 
+class TestEnvCausesPreamble:
+    """Bug-fix tasks get a 'rule out environmental causes first' note.
+
+    Scoped to ``TaskType.BUG`` only — feature/chore/verify work doesn't hit the
+    'is it stale data or a real bug?' question, so the note would just be noise.
+    """
+
+    _ENV_MARKER = "rule out environmental causes"
+
+    def test_bug_task_gets_env_causes_note(self):
+        # source_worker set → bypasses plan mode, isolating the env note.
+        task = SwarmTask(title="Fix login", task_type=TaskType.BUG, source_worker="platform")
+        msg = build_task_message(task, supports_slash_commands=True)
+        assert self._ENV_MARKER in msg
+
+    def test_bug_task_env_note_in_inline_path(self):
+        task = SwarmTask(title="Fix login", task_type=TaskType.BUG, source_worker="platform")
+        msg = build_task_message(task, supports_slash_commands=False)
+        assert self._ENV_MARKER in msg
+
+    def test_feature_task_no_env_causes_note(self):
+        task = SwarmTask(title="Add export", task_type=TaskType.FEATURE, source_worker="platform")
+        msg = build_task_message(task, supports_slash_commands=True)
+        assert self._ENV_MARKER not in msg
+
+    def test_chore_task_no_env_causes_note(self):
+        task = SwarmTask(title="Clean logs", task_type=TaskType.CHORE, source_worker="platform")
+        msg = build_task_message(task)
+        assert self._ENV_MARKER not in msg
+
+    def test_plan_preamble_precedes_env_note(self):
+        # Operator-created BUG task → requires plan approval. The plan-mode
+        # preamble must stay outermost; the env note sits inside it.
+        task = SwarmTask(title="Fix login", task_type=TaskType.BUG)
+        msg = build_task_message(task, supports_slash_commands=True)
+        assert msg.startswith("This task came from a user request")
+        assert self._ENV_MARKER in msg
+        assert msg.index("Use plan mode BEFORE") < msg.index(self._ENV_MARKER)
+
+
 class TestPlanModePreamble:
     """User-request tasks (Jira/email/operator) gate behind plan-mode approval.
 

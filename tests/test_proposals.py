@@ -322,6 +322,62 @@ def test_history_property():
     assert history[1].id == p1.id
 
 
+def test_recent_rejected_escalations_basic():
+    """Returns only rejected escalations, newest-first, honoring limit."""
+    import time
+
+    store = ProposalStore()
+    # A rejected escalation (should appear)
+    e1 = AssignmentProposal.escalation(
+        worker_name="api", action="send_message", assessment="select 1", rule_pattern="grep.*"
+    )
+    e1.created_at = time.time() - 100
+    e1.status = ProposalStatus.REJECTED
+    e1.rejection_reason = "not now"
+    # A newer rejected escalation (should appear first)
+    e2 = AssignmentProposal.escalation(
+        worker_name="web", action="continue", assessment="nudge", rule_pattern="ls.*"
+    )
+    e2.created_at = time.time()
+    e2.status = ProposalStatus.REJECTED
+    # An APPROVED escalation (excluded — not rejected)
+    e3 = AssignmentProposal.escalation(worker_name="db", action="continue", assessment="x")
+    e3.status = ProposalStatus.APPROVED
+    # A rejected COMPLETION (excluded — not an escalation)
+    c1 = AssignmentProposal.completion(
+        worker_name="api", task_id="t1", task_title="done?", assessment="y"
+    )
+    c1.status = ProposalStatus.REJECTED
+    for p in (e1, e2, e3, c1):
+        store.add(p)
+
+    result = store.recent_rejected_escalations(limit=10)
+    ids = [p.id for p in result]
+    assert ids == [e2.id, e1.id]  # newest first, only rejected escalations
+    # Limit honored
+    assert store.recent_rejected_escalations(limit=1) == [e2]
+
+
+def test_recent_rejected_escalations_includes_history():
+    """Finds rejected escalations even after clear_resolved moved them to history."""
+    store = ProposalStore()
+    e = AssignmentProposal.escalation(
+        worker_name="api", action="send_message", assessment="select 1"
+    )
+    store.add(e)
+    e.status = ProposalStatus.REJECTED
+    store.clear_resolved()  # moves it out of _proposals into _history
+
+    result = store.recent_rejected_escalations()
+    assert [p.id for p in result] == [e.id]
+
+
+def test_recent_rejected_escalations_empty():
+    """No rejections → empty list (the Queen gets no dead section)."""
+    store = ProposalStore()
+    assert store.recent_rejected_escalations() == []
+
+
 def test_history_cap():
     """History is capped at ProposalStore._HISTORY_CAP entries."""
     store = ProposalStore()

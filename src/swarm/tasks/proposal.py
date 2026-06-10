@@ -337,6 +337,24 @@ class ProposalStore:
                 self._history = self._history[-self._HISTORY_CAP :]
             self._save()
 
+    def recent_rejected_escalations(self, limit: int = 10) -> list[AssignmentProposal]:
+        """Recently rejected escalation proposals, newest first.
+
+        Feeds the Queen's rejection-memory context (queen/context.py) so she
+        doesn't re-propose actions the operator already refused. Scans both
+        live and history-archived proposals — a rejection survives
+        ``clear_resolved`` moving it from ``_proposals`` to ``_history``.
+        """
+        with self._lock:
+            candidates = [
+                p
+                for p in (*self._proposals.values(), *self._history)
+                if p.status == ProposalStatus.REJECTED
+                and p.proposal_type == ProposalType.ESCALATION
+            ]
+        candidates.sort(key=lambda p: p.created_at, reverse=True)
+        return candidates[:limit]
+
     # --- Persistence ---
 
     def _serialize_proposal(self, p: AssignmentProposal) -> dict[str, Any]:

@@ -439,6 +439,35 @@ class TestSqliteProposalStore:
         assert store.has_pending_escalation("w1")
         assert not store.has_pending_escalation("w2")
 
+    def test_recent_rejected_escalations(self, db: SwarmDB) -> None:
+        from swarm.db.proposal_store import SqliteProposalStore
+        from swarm.tasks.proposal import (
+            AssignmentProposal,
+            ProposalStatus,
+            ProposalType,
+        )
+
+        store = SqliteProposalStore(db)
+        # Rejected escalation → should appear
+        e1 = AssignmentProposal.escalation(
+            worker_name="api", action="send_message", assessment="select 1"
+        )
+        store.add(e1)
+        store.update_status(e1.id, ProposalStatus.REJECTED, "not now")
+        # Pending escalation → excluded (not rejected)
+        e2 = AssignmentProposal(worker_name="web", proposal_type=ProposalType.ESCALATION)
+        store.add(e2)
+        # Rejected completion → excluded (not an escalation)
+        c1 = AssignmentProposal(
+            worker_name="db", task_id="t1", proposal_type=ProposalType.COMPLETION
+        )
+        store.add(c1)
+        store.update_status(c1.id, ProposalStatus.REJECTED, "no")
+
+        result = store.recent_rejected_escalations()
+        assert [p.id for p in result] == [e1.id]
+        assert store.recent_rejected_escalations(limit=0) == []
+
     def test_expire_old(self, db: SwarmDB) -> None:
         from swarm.db.proposal_store import SqliteProposalStore
         from swarm.tasks.proposal import AssignmentProposal

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from swarm.tasks.task import SwarmTask
+from swarm.tasks.task import SwarmTask, TaskType
 
 _IMAGE_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"})
 # Plain-text-ish formats Read handles natively.
@@ -73,6 +73,17 @@ invocation — don't run the skill yet. Worker-to-worker handoffs skip this \
 gate; this preamble appears because the task came from a user channel.
 
 --- TASK ---
+"""
+
+
+# Environmental-causes nudge for bug-fix tasks. Debugging cycles get burned on
+# stale/dev data, file locks, and missing env vars that masquerade as code bugs.
+# Scoped to ``TaskType.BUG`` only — feature/chore/verify work doesn't hit the
+# "is it the environment or a real bug?" question, so this would just be noise.
+_ENV_CAUSES_PREAMBLE = """\
+Before assuming a code bug, first rule out environmental causes — stale/dev \
+data, file locks, missing env vars — and state which you ruled out.
+
 """
 
 
@@ -231,6 +242,9 @@ def build_task_message(
         parts.append(completion)
         body = "\n".join(parts)
 
+    # Bug-fix nudge sits inside the plan-mode preamble (which stays outermost).
+    if task.task_type == TaskType.BUG:
+        body = _ENV_CAUSES_PREAMBLE + body
     if requires_plan_approval(task, enabled=plan_mode_for_user_requests):
         body = _PLAN_MODE_PREAMBLE + body
     return body

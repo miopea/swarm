@@ -10,6 +10,40 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.10] - 2026-06-10
+
+Triage of the 2026-06-09 Claude Code Insights report → three Queen/dispatch improvements.
+
+### Features
+
+- **Environmental-causes nudge for bug-fix tasks.** `build_task_message` now
+  prepends a "rule out stale/dev data, file locks, missing env vars before
+  assuming a code bug" preamble to `TaskType.BUG` dispatches (ordered inside the
+  plan-mode preamble, which stays outermost). Scoped to bug tasks only so
+  feature/chore/verify work isn't nagged.
+- **Queen rejection memory (inform-first).** The headless Queen's escalation
+  context now includes recent operator rejections for the worker, so she
+  declines to re-propose actions already refused — addressing cross-session
+  repeats. Surfaced via a new `recent_rejected_escalations` store query, fed
+  into `gather_context` with state-change staleness (a rejection from a state
+  the worker has since left is dropped). Logged as `QUEEN_REJECTION_CONTEXT`.
+
+### Changes
+
+- **Pre-call proposal dedup.** `QueenAnalyzer.analyze_escalation` now short-
+  circuits the headless Queen call when the resulting proposal would only be
+  dropped downstream (operator focused on the worker, or a matching escalation
+  already pending) — avoiding a wasted `claude -p` invocation. `is_focused` is
+  shared with `ProposalManager` (its `_is_focused` is now public).
+
+### Fixes
+
+- **Revived dead rejection-feedback wiring.** `_rejection_feedback_section` in
+  `queen/context.py` was never fed (`proposal_history` had no caller), so the
+  headless Queen received no rejection memory at all. Now wired, and the section
+  renders escalations correctly (worker + rule_pattern + reason, not the empty
+  `task_title` it previously emitted).
+
 ## [2026.6.8.3] - 2026-06-08
 
 ### Features

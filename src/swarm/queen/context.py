@@ -114,15 +114,28 @@ def build_hive_context(
 
 
 def _rejection_feedback_section(proposal_history: list[object] | None) -> str:
-    """Build a section listing recent operator rejection reasons."""
+    """Build a section listing recent operator rejections for the Queen.
+
+    The caller passes already-filtered rejected proposals. Escalations carry no
+    ``task_title`` — fall back to ``rule_pattern`` / ``assessment`` and name the
+    worker so the Queen can tell what she was overruled on and not re-propose it.
+    """
     if not proposal_history:
         return ""
-    rejected = [p for p in proposal_history if getattr(p, "rejection_reason", "")][-5:]
-    if not rejected:
-        return ""
+    rejected = proposal_history[-5:]
     lines = ["## Recent Proposal Rejections (Operator Feedback)"]
     for p in rejected:
-        lines.append(f"- {p.task_title}: {p.rejection_reason}")
+        worker = getattr(p, "worker_name", "")
+        label = (
+            getattr(p, "task_title", "")
+            or getattr(p, "rule_pattern", "")
+            or getattr(p, "assessment", "")
+            or "proposal"
+        )
+        reason = getattr(p, "rejection_reason", "")
+        prefix = f"{worker}: " if worker else ""
+        suffix = f" — {reason}" if reason else ""
+        lines.append(f'- {prefix}rejected "{label}"{suffix}')
     return "\n".join(lines)
 
 

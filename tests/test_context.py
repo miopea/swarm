@@ -3,6 +3,7 @@
 from swarm.drones.log import DroneAction, DroneLog
 from swarm.queen.context import build_hive_context
 from swarm.tasks.board import TaskBoard
+from swarm.tasks.proposal import AssignmentProposal, ProposalStatus
 from swarm.tasks.task import TaskPriority
 from swarm.worker.worker import Worker, WorkerState
 from tests.fakes.process import FakeWorkerProcess
@@ -101,6 +102,33 @@ class TestBuildHiveContext:
         workers = _make_workers()
         ctx = build_hive_context(workers)
         assert "Task Board" not in ctx
+
+    def test_rejection_feedback_section_renders_escalation(self):
+        """A rejected escalation in proposal_history surfaces as operator feedback.
+
+        Escalations have no task_title — the section must fall back to
+        rule_pattern / assessment and name the worker so the Queen can tell
+        what she was overruled on.
+        """
+        workers = _make_workers()
+        rejected = AssignmentProposal.escalation(
+            worker_name="api",
+            action="send_message",
+            assessment="approve grep",
+            rule_pattern="grep -rn foo",
+        )
+        rejected.status = ProposalStatus.REJECTED
+        rejected.rejection_reason = "operator will handle manually"
+        ctx = build_hive_context(workers, proposal_history=[rejected])
+        assert "Recent Proposal Rejections" in ctx
+        assert "api" in ctx
+        assert "grep -rn foo" in ctx
+        assert "operator will handle manually" in ctx
+
+    def test_no_rejection_section_when_history_empty(self):
+        workers = _make_workers()
+        ctx = build_hive_context(workers, proposal_history=[])
+        assert "Recent Proposal Rejections" not in ctx
 
     def test_completed_tasks_capped_at_5(self):
         """Completed tasks should be capped at 5 to reduce Queen token usage."""
