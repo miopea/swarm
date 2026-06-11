@@ -27,11 +27,43 @@ passes it in.
 from __future__ import annotations
 
 from collections.abc import Hashable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from swarm.worker.worker import Worker
 
 # Decision outcomes returned by :meth:`RepeatNudgeGuard.decide`.
 NUDGE = "nudge"
 ESCALATE = "escalate"
 SILENT = "silent"
+
+
+def operator_engaged(worker: Worker, window_seconds: float) -> bool:
+    """True when the operator typed in ``worker``'s PTY within ``window_seconds``.
+
+    Shared nudge-suppression signal for the idle-watcher (AUTO_NUDGE) and
+    task-lifecycle (PROPOSED_COMPLETION) drones: neither should poke a
+    worker the operator is actively driving. Mirrors the affinity-router's
+    ``assign_operator_engagement_minutes`` window — the same evidence that
+    routes new work away from an engaged worker should also silence nudges
+    into it.
+
+    Added after a 2026-06-11 incident where the idle-watcher fired an
+    AUTO_NUDGE into d365-solutions while the operator was mid-keystroke in
+    its PTY (the engagement signal already existed; the watcher just wasn't
+    consulting it). Defensive by construction: a missing process, a
+    disabled window (``<= 0``), or a raising provider all resolve to
+    "not engaged" so the guard can never crash a sweep.
+    """
+    if window_seconds <= 0:
+        return False
+    proc = getattr(worker, "process", None)
+    if proc is None:
+        return False
+    try:
+        return bool(proc.operator_engaged_within(window_seconds))
+    except Exception:
+        return False
 
 
 class RepeatNudgeGuard:

@@ -476,6 +476,27 @@ class WorkerStateTracker:
     # misleading for an hour+.
     _STUCK_BUZZING_THRESHOLD: float = 600.0
 
+    def worker_has_active_turn(self, worker: Worker) -> bool:
+        """True when the worker's LIVE PTY shows a mid-turn signal.
+
+        Re-reads the PTY rather than trusting the cached ``display_state``,
+        so a worker whose state momentarily classified as RESTING during a
+        long *quiet* foreground command (e.g. ``gh run watch`` waiting on a
+        deploy with no output for minutes) is still recognised as busy.
+        Used by the idle-watcher / task-lifecycle nudge guards to avoid
+        poking a worker that's actually working (2026-06-11 false-AUTO_NUDGE
+        bug, trigger #2). Defensive — a dead/absent process or any
+        read/classify error resolves to ``False`` so a guard never crashes.
+        """
+        proc = getattr(worker, "process", None)
+        if proc is None or not getattr(proc, "is_alive", False):
+            return False
+        try:
+            content = proc.get_content(_STATE_DETECT_LINES)
+        except Exception:
+            return False
+        return self._has_active_turn_signal(content)
+
     def _has_active_turn_signal(self, content: str) -> bool:
         """Narrow check: does the PTY tail prove the worker is mid-turn?
 

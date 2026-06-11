@@ -310,6 +310,46 @@ class TestHasActiveTurnSignal:
         assert tracker._has_active_turn_signal("Done.\n> \n? for shortcuts\n") is False
 
 
+class TestWorkerHasActiveTurn:
+    """``worker_has_active_turn`` re-reads the LIVE PTY so a worker mid a
+    long quiet foreground command isn't seen as idle (2026-06-11 bug)."""
+
+    @staticmethod
+    def _worker(content: str, *, alive: bool = True) -> MagicMock:
+        w = MagicMock()
+        w.process.is_alive = alive
+        w.process.get_content.return_value = content
+        return w
+
+    def test_live_esc_to_interrupt_is_busy(self) -> None:
+        tracker, _ = _make_tracker()
+        worker = self._worker("running gh run watch\nesc to interrupt\n")
+        assert tracker.worker_has_active_turn(worker) is True
+
+    def test_live_idle_prompt_is_not_busy(self) -> None:
+        tracker, _ = _make_tracker()
+        worker = self._worker("Done.\n> \n? for shortcuts\n")
+        assert tracker.worker_has_active_turn(worker) is False
+
+    def test_dead_process_is_not_busy(self) -> None:
+        tracker, _ = _make_tracker()
+        worker = self._worker("esc to interrupt\n", alive=False)
+        assert tracker.worker_has_active_turn(worker) is False
+
+    def test_no_process_is_not_busy(self) -> None:
+        tracker, _ = _make_tracker()
+        worker = MagicMock()
+        worker.process = None
+        assert tracker.worker_has_active_turn(worker) is False
+
+    def test_read_error_is_not_busy(self) -> None:
+        tracker, _ = _make_tracker()
+        worker = MagicMock()
+        worker.process.is_alive = True
+        worker.process.get_content.side_effect = OSError("pty gone")
+        assert tracker.worker_has_active_turn(worker) is False
+
+
 class TestBuzzingPromotesOneTask:
     """#405 INV-1: when a worker goes BUZZING, the state tracker must promote
     AT MOST ONE assigned task to IN_PROGRESS. Promoting *every* assigned task

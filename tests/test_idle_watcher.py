@@ -13,13 +13,33 @@ from swarm.drones.log import DroneAction
 from swarm.worker.worker import WorkerState
 
 
-def _worker(name: str, state: WorkerState) -> MagicMock:
-    """Minimal Worker fake: display_state is what the watcher reads."""
+def _worker(
+    name: str,
+    state: WorkerState,
+    *,
+    operator_engaged: bool = False,
+) -> MagicMock:
+    """Minimal Worker fake: display_state is what the watcher reads.
+
+    ``process.operator_engaged_within`` defaults to ``False`` so the
+    2026-06-11 operator-engagement guard doesn't suppress nudges in tests
+    that don't exercise it (an unconfigured MagicMock would return a
+    truthy mock).
+    """
     w = MagicMock()
     w.name = name
     w.display_state = state
     w.state = state
+    w.process.operator_engaged_within.return_value = operator_engaged
     return w
+
+
+def _skip_call(drone_log: MagicMock, action: Any) -> Any:
+    """Return the first ``drone_log.add`` call whose action matches, or None."""
+    for c in drone_log.add.call_args_list:
+        if c.args and c.args[0] is action:
+            return c
+    return None
 
 
 def _task(number: int, task_id: str) -> MagicMock:
@@ -73,6 +93,7 @@ def _watcher(
     debounce: float = 900.0,
     rate_limit_check=None,
     sender: _Sender | None = None,
+    worker_busy_check=None,
 ) -> tuple[IdleWatcher, _Sender, MagicMock]:
     sender = sender if sender is not None else _Sender()
     drone_log = MagicMock()
@@ -86,6 +107,7 @@ def _watcher(
         drone_log=drone_log,
         send_to_worker=sender,
         rate_limit_check=rate_limit_check,
+        worker_busy_check=worker_busy_check,
     )
     return w, sender, drone_log
 
@@ -159,6 +181,93 @@ async def test_idle_worker_without_tasks_is_skipped() -> None:
     sent = await watcher.sweep([_worker("echo", WorkerState.RESTING)], now=1000.0)
 
     assert sent == 0
+
+
+# ---------------------------------------------------------------------------
+# 2026-06-11 false-idle guards (operator-engaged / worker-busy)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_operator_engaged_worker_is_not_nudged() -> None:
+    """Trigger #1: operator typed in the PTY within the window → no AUTO_NUDGE.
+
+    The d365-solutions incident: a nudge fired while the operator was
+    actively typing. The engagement signal already existed on the process;
+    the watcher must consult it before nudging and log the skip.
+    """
+    from swarm.drones.log import SystemAction
+
+    board = _board({"d365": [_task(700, "t-700")]})
+    watcher, sender, drone_log = _watcher(board=board)
+
+    worker = _worker("d365", WorkerState.RESTING, operator_engaged=True)
+    sent = await watcher.sweep([worker], now=1000.0)
+
+    assert sent == 0
+    assert sender.calls == []
+    # The skip is audited as AUTO_NUDGE_SKIPPED, not silently dropped.
+    skip_call = _skip_call(drone_log, SystemAction.AUTO_NUDGE_SKIPPED)
+    assert skip_call is not None
+    assert skip_call.args[1] == "d365"
+    assert "operator engaged" in skip_call.args[2]
+
+
+@pytest.mark.asyncio
+async def test_busy_worker_is_not_nudged() -> None:
+    """Trigger #2: live PTY shows a mid-turn signal → no AUTO_NUDGE.
+
+    The root #679 incident: BUZZING mid a long quiet ``gh run watch`` whose
+    display_state momentarily read RESTING. The injected busy check (live
+    PTY re-read) must suppress the nudge regardless of the cached state.
+    """
+    from swarm.drones.log import SystemAction
+
+    board = _board({"root": [_task(679, "t-679")]})
+    # display_state reads RESTING (the false-idle), but the live-PTY busy
+    # check returns True — the worker is actually mid-turn.
+    watcher, sender, drone_log = _watcher(board=board, worker_busy_check=lambda w: True)
+
+    worker = _worker("root", WorkerState.RESTING)
+    sent = await watcher.sweep([worker], now=1000.0)
+
+    assert sent == 0
+    assert sender.calls == []
+    skip_call = _skip_call(drone_log, SystemAction.AUTO_NUDGE_SKIPPED)
+    assert skip_call is not None
+    assert skip_call.args[1] == "root"
+    assert "busy" in skip_call.args[2]
+
+
+@pytest.mark.asyncio
+async def test_genuinely_idle_worker_still_nudged_with_guards_wired() -> None:
+    """Acceptance: a RESTING worker that is NOT engaged and NOT busy still gets nudged.
+
+    Guards must not over-suppress — the whole point of the watcher survives.
+    """
+    board = _board({"alpha": [_task(42, "t-42")]})
+    watcher, sender, _ = _watcher(board=board, worker_busy_check=lambda w: False)
+
+    worker = _worker("alpha", WorkerState.RESTING, operator_engaged=False)
+    sent = await watcher.sweep([worker], now=1000.0)
+
+    assert sent == 1
+    assert sender.calls[0][0] == "alpha"
+
+
+@pytest.mark.asyncio
+async def test_busy_check_exception_does_not_suppress_or_crash() -> None:
+    """A raising busy check is treated as 'not busy' — nudge still fires, no crash."""
+
+    def _boom(_w: object) -> bool:
+        raise RuntimeError("provider lookup failed")
+
+    board = _board({"alpha": [_task(42, "t-42")]})
+    watcher, sender, _ = _watcher(board=board, worker_busy_check=_boom)
+
+    sent = await watcher.sweep([_worker("alpha", WorkerState.RESTING)], now=1000.0)
+
+    assert sent == 1
 
 
 # ---------------------------------------------------------------------------

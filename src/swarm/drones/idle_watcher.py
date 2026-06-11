@@ -22,7 +22,7 @@ import time
 from typing import TYPE_CHECKING
 
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
-from swarm.drones.nudge_guard import ESCALATE, SILENT, RepeatNudgeGuard
+from swarm.drones.nudge_guard import ESCALATE, SILENT, RepeatNudgeGuard, operator_engaged
 from swarm.logging import get_logger
 from swarm.worker.worker import WorkerState
 
@@ -108,6 +108,7 @@ class IdleWatcher:
         daemon_start_time: float | None = None,
         mcp_followup_delay_seconds: float = _MCP_FOLLOWUP_DELAY_SECONDS,
         escalate_to_operator: Callable[[str, str], None] | None = None,
+        worker_busy_check: Callable[[Worker], bool] | None = None,
     ) -> None:
         self._config = drone_config
         self._task_board = task_board
@@ -169,6 +170,12 @@ class IdleWatcher:
         # guard then still caps the loop by going SILENT, just without an
         # operator ping — e.g. in tests).
         self._escalate_to_operator = escalate_to_operator
+        # 2026-06-11 false-AUTO_NUDGE bug, trigger #2: ``display_state`` can
+        # read RESTING for a worker that's actually mid a long *quiet*
+        # foreground command (``gh run watch`` on a deploy). This predicate
+        # re-reads the live PTY for a mid-turn signal so such a worker is not
+        # nudged. None disables the check (tests / non-Claude providers).
+        self._worker_busy_check = worker_busy_check
         self._nudge_guard = RepeatNudgeGuard()
 
     @property
@@ -217,6 +224,20 @@ class IdleWatcher:
                 continue
             active = tasks_by_worker.get(worker.name, [])
             if not active:
+                continue
+            # 2026-06-11 false-idle guards: don't nudge a worker the
+            # operator is actively driving (trigger #1) or one that's
+            # genuinely busy despite a stale RESTING display_state
+            # (trigger #2). Logged so the audit trail shows WHY no nudge
+            # fired, mirroring the reported-blocker skip below.
+            suppression = self._suppression_reason(worker)
+            if suppression is not None:
+                self._drone_log.add(
+                    SystemAction.AUTO_NUDGE_SKIPPED,
+                    worker.name,
+                    suppression,
+                    category=LogCategory.DRONE,
+                )
                 continue
             # Task #250: worker-reported blocker takes precedence over
             # the nudge. If the blocker store says this worker is still
@@ -361,6 +382,34 @@ class IdleWatcher:
                 )
                 return False
         return True
+
+    def _suppression_reason(self, worker: Worker) -> str | None:
+        """Why this worker should NOT be nudged right now, or None.
+
+        Two false-idle guards added after the 2026-06-11 AUTO_NUDGE
+        incident (display_state already filtered RESTING/SLEEPING upstream,
+        but both signals below fire on workers that READ idle yet aren't):
+
+        (a) operator-engaged — the operator typed in this worker's PTY
+            within ``assign_operator_engagement_minutes`` (trigger #1).
+        (b) worker-busy — the live PTY shows a mid-turn signal even though
+            display_state went stale (trigger #2; long quiet foreground
+            command). Gated on actual PTY state, not output-quiet time.
+
+        Returns a short audit reason (logged as AUTO_NUDGE_SKIPPED) or None.
+        """
+        window = float(getattr(self._config, "assign_operator_engagement_minutes", 0.0) or 0.0)
+        if window > 0 and operator_engaged(worker, window * 60.0):
+            return f"operator engaged within {window:.0f}m"
+        if self._worker_busy_check is not None:
+            try:
+                if self._worker_busy_check(worker):
+                    return "worker busy (active turn / long-running tool)"
+            except Exception:
+                _log.debug(
+                    "idle_watcher: worker_busy_check raised for %s", worker.name, exc_info=True
+                )
+        return None
 
     def _active_blocker(self, worker_name: str) -> Blocker | None:
         """Return the first still-active blocker for ``worker_name``, or None.

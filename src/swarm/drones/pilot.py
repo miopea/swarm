@@ -301,6 +301,7 @@ class DronePilot(EventEmitter):
             build_context=self._build_context,
             pending_proposals_check=self._pending_proposals_check,
             pending_proposals_for_worker=self._pending_proposals_for_worker,
+            worker_busy_check=self._worker_busy,
         )
         # Idle-watcher (task #225 Phase 2): created eagerly with a null
         # sender so ``self.idle_watcher`` is never None in tests or code
@@ -428,6 +429,21 @@ class DronePilot(EventEmitter):
     def invalidate_provider_cache(self) -> None:
         """Clear cached providers so tuning changes take effect."""
         self._provider_cache.clear()
+
+    def _worker_busy(self, worker: Worker) -> bool:
+        """Live-PTY busy check shared by the idle / completion nudge guards.
+
+        Delegates to the state tracker, which re-reads the PTY for a
+        mid-turn signal (esc-to-interrupt, background shell, subagent,
+        dynamic workflow) so a worker mid a long *quiet* foreground command
+        isn't nudged just because its display_state went stale (2026-06-11
+        false-AUTO_NUDGE bug, trigger #2). Defensive — no tracker yet ⇒
+        not busy.
+        """
+        tracker = getattr(self, "_state_tracker", None)
+        if tracker is None:
+            return False
+        return tracker.worker_has_active_turn(worker)
 
     def _build_context(self, **kwargs: object) -> str:
         """Build hive context string via the injected context_builder."""
@@ -570,6 +586,7 @@ class DronePilot(EventEmitter):
             mcp_activity_lookup=mcp_activity_lookup,
             daemon_start_time=daemon_start_time,
             escalate_to_operator=escalate_to_operator,
+            worker_busy_check=self._worker_busy,
         )
         self.inter_worker_watcher = InterWorkerMessageWatcher(
             drone_config=self._drone_config,

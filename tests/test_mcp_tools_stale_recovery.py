@@ -42,6 +42,9 @@ def _worker(name: str, state: WorkerState = WorkerState.RESTING) -> MagicMock:
     w.name = name
     w.display_state = state
     w.state = state
+    # Default: operator not engaged (an unconfigured MagicMock would return
+    # a truthy mock and trip the idle-watcher's operator-engagement guard).
+    w.process.operator_engaged_within.return_value = False
     return w
 
 

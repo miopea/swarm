@@ -10,6 +10,28 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.11] - 2026-06-11
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **IdleWatcher fired AUTO_NUDGE at workers that weren't actually idle.** The
+  `RESTING`/`SLEEPING` `display_state` gate was the *only* idleness check, so
+  two false-idle cases slipped through: (1) a worker the operator was actively
+  typing in, and (2) a worker mid a long *quiet* foreground command (e.g.
+  `gh run watch` on a deploy) whose state momentarily classified `RESTING`
+  because detection keys off output-quiet time. Both now suppress the nudge
+  (logged as `AUTO_NUDGE_SKIPPED`): a new shared `operator_engaged()` helper
+  reuses the affinity-router's `assign_operator_engagement_minutes` window, and
+  a new `WorkerStateTracker.worker_has_active_turn()` re-reads the **live** PTY
+  for a mid-turn signal instead of trusting the cached `display_state`. The same
+  guard is applied before the task-lifecycle `PROPOSED_COMPLETION` path
+  (parity). Genuinely idle workers with an unstarted active task are still
+  nudged.
+
 ## [2026.6.10.4] - 2026-06-10
 
 ### Features

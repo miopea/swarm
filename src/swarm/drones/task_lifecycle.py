@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
+from swarm.drones.nudge_guard import operator_engaged
 from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
 from swarm.worker.worker import Worker, WorkerState
@@ -101,6 +102,7 @@ class TaskLifecycle:
         build_context: Callable[..., str],
         pending_proposals_check: Callable[[], bool] | None,
         pending_proposals_for_worker: Callable[[str], bool] | None,
+        worker_busy_check: Callable[[Worker], bool] | None = None,
     ) -> None:
         self.workers = workers
         self.log = log
@@ -113,6 +115,10 @@ class TaskLifecycle:
         self._build_context = build_context
         self._pending_proposals_check = pending_proposals_check
         self._pending_proposals_for_worker = pending_proposals_for_worker
+        # 2026-06-11 false-idle bug: same guards as the idle-watcher so a
+        # PROPOSED_COMPLETION isn't raised against an operator-engaged or
+        # genuinely-busy worker that merely READS RESTING. None disables.
+        self._worker_busy_check = worker_busy_check
         self._auto_complete_min_idle = drone_config.auto_complete_min_idle
         self._needs_assign_check: bool = False
         self._saw_completion: bool = False
@@ -296,6 +302,32 @@ class TaskLifecycle:
             for k in stale_verdicts:
                 del self._completion_verdicts[k]
 
+    def _completion_candidate(self, worker: Worker) -> bool:
+        """Whether ``worker`` is eligible for a completion proposal this sweep.
+
+        Gates, in order: must be RESTING, must have been idle at least
+        ``auto_complete_min_idle``, and must not trip a false-idle guard —
+        operator actively typing in its PTY, or a live PTY still showing a
+        mid-turn signal despite the RESTING display_state (2026-06-11
+        false-idle bug, parity with the idle-watcher).
+        """
+        if worker.state != WorkerState.RESTING:
+            return False
+        if worker.state_duration < self._auto_complete_min_idle:
+            return False
+        window = float(getattr(self.drone_config, "assign_operator_engagement_minutes", 0.0) or 0.0)
+        if operator_engaged(worker, window * 60.0):
+            return False
+        if self._worker_busy_check is not None:
+            try:
+                if self._worker_busy_check(worker):
+                    return False
+            except Exception:
+                _log.debug(
+                    "task_lifecycle: worker_busy_check raised for %s", worker.name, exc_info=True
+                )
+        return True
+
     def _check_task_completions(self) -> bool:
         """Propose completion for tasks whose assigned worker has been idle long enough.
 
@@ -319,9 +351,7 @@ class TaskLifecycle:
             if t.assigned_worker:
                 tasks_by_worker.setdefault(t.assigned_worker, []).append(t)
         for worker in self.workers:
-            if worker.state != WorkerState.RESTING:
-                continue
-            if worker.state_duration < self._auto_complete_min_idle:
+            if not self._completion_candidate(worker):
                 continue
             active_tasks = tasks_by_worker.get(worker.name, [])
             for task in active_tasks:
