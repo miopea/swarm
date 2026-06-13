@@ -10,6 +10,26 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.13.4] - 2026-06-13
+
+### Features
+
+- **Task + pipeline lifecycle notifications.** New event types `task_failed`
+  (WARNING), `task_reopened` (INFO), `pipeline_started` (INFO), and
+  `pipeline_finished` (URGENT when a step failed, INFO otherwise), emitted
+  from the TaskManager fail/reopen chokepoints and transition-edged pipeline
+  status changes in the engine. Previously only assignment and completion
+  notified — failures, the events operators most need, were silent.
+- **Daily digest.** New `daily_digest` event type + daemon loop that pushes a
+  24h summary (completed/failed/new counts, avg completion time, top
+  workers, open-board size) through the notification backends once a day.
+  Off unless enabled in the notification matrix. Rendering lives in
+  `swarm/notify/digest.py` over the throughput analytics from 2026.6.13.
+
+### Changes
+
+### Fixes
+
 ## [2026.6.13.3] - 2026-06-13
 
 ### Features

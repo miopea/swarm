@@ -19,6 +19,7 @@ from swarm.tasks.task import (
 if TYPE_CHECKING:
     from swarm.drones.log import DroneLog
     from swarm.drones.pilot import DronePilot
+    from swarm.notify.bus import NotificationBus
     from swarm.tasks.board import TaskBoard
     from swarm.tasks.history import TaskHistory
 
@@ -38,11 +39,13 @@ class TaskManager:
         task_history: TaskHistory,
         drone_log: DroneLog,
         pilot: DronePilot | None = None,
+        notification_bus: NotificationBus | None = None,
     ) -> None:
         self.task_board = task_board
         self.task_history = task_history
         self.drone_log = drone_log
         self._pilot = pilot
+        self._notification_bus = notification_bus
 
     def require_task(
         self, task_id: str, allowed_statuses: set[TaskStatus] | None = None
@@ -158,11 +161,15 @@ class TaskManager:
 
     def reopen_task(self, task_id: str, actor: str = "user") -> bool:
         """Reopen a completed or failed task, returning it to PENDING."""
-        self.require_task(task_id, {TaskStatus.DONE, TaskStatus.FAILED})
+        task = self.require_task(task_id, {TaskStatus.DONE, TaskStatus.FAILED})
+        # board.reopen() clears the assignment — read the worker first.
+        worker = task.assigned_worker or actor
         result = self.task_board.reopen(task_id)
         if result and self._pilot:
             self._pilot.clear_proposed_completion(task_id)
             self.task_history.append(task_id, TaskAction.REOPENED, actor=actor)
+        if result and self._notification_bus:
+            self._notification_bus.emit_task_reopened(worker, task.title)
         return result
 
     def fail_task(self, task_id: str, actor: str = "user") -> bool:
@@ -178,6 +185,8 @@ class TaskManager:
                 category=LogCategory.TASK,
                 is_notification=True,
             )
+            if self._notification_bus:
+                self._notification_bus.emit_task_failed(task.assigned_worker or actor, task.title)
         return result
 
     def remove_task(self, task_id: str, actor: str = "user") -> bool:

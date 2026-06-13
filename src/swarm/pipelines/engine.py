@@ -191,6 +191,7 @@ class PipelineEngine(EventEmitter):
         tasks_created = self._create_tasks_for_steps(pipeline, newly_ready)
         self._persist()
         self.emit("change")
+        self.emit("pipeline_started", pipeline)
         _log.info(
             "pipeline %s started, %d steps ready, %d tasks created",
             pipeline_id,
@@ -228,11 +229,13 @@ class PipelineEngine(EventEmitter):
         pipeline = self._get_pipeline_or_raise(pipeline_id)
         step = self._get_step_or_raise(pipeline, step_id)
 
+        prev_status = pipeline.status
         step.complete(result)
         newly_ready = pipeline.advance()
         self._create_tasks_for_steps(pipeline, newly_ready)
         self._persist()
         self.emit("change")
+        self._emit_if_finished(pipeline, prev_status)
         _log.info(
             "pipeline %s step %s completed, %d new steps ready",
             pipeline_id,
@@ -247,10 +250,12 @@ class PipelineEngine(EventEmitter):
         pipeline = self._get_pipeline_or_raise(pipeline_id)
         step = self._get_step_or_raise(pipeline, step_id)
 
+        prev_status = pipeline.status
         step.fail(error)
         newly_ready = pipeline.advance()  # updates pipeline status
         self._persist()
         self.emit("change")
+        self._emit_if_finished(pipeline, prev_status)
         return newly_ready
 
     def skip_step(self, pipeline_id: str, step_id: str) -> list[PipelineStep]:
@@ -259,10 +264,12 @@ class PipelineEngine(EventEmitter):
         step = self._get_step_or_raise(pipeline, step_id)
 
         step.skip()
+        prev_status = pipeline.status
         newly_ready = pipeline.advance()
         self._create_tasks_for_steps(pipeline, newly_ready)
         self._persist()
         self.emit("change")
+        self._emit_if_finished(pipeline, prev_status)
         return newly_ready
 
     @staticmethod
@@ -389,6 +396,20 @@ class PipelineEngine(EventEmitter):
             return
         pipeline_id, step_id = mapping
         self.fail_step(pipeline_id, step_id, error="linked task failed")
+
+    def _emit_if_finished(self, pipeline: Pipeline, prev_status: PipelineStatus) -> None:
+        """Emit ``pipeline_finished`` on a transition into a terminal status.
+
+        Transition-edged (prev vs now) so retries that re-fail and repeated
+        advance() calls on an already-terminal pipeline don't re-notify.
+        """
+        terminal = (PipelineStatus.COMPLETED, PipelineStatus.FAILED)
+        if pipeline.status in terminal and prev_status not in terminal:
+            self.emit(
+                "pipeline_finished",
+                pipeline,
+                pipeline.status == PipelineStatus.FAILED,
+            )
 
     # -- Internal --------------------------------------------------------------
 

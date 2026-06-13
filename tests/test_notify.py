@@ -377,3 +377,45 @@ class TestRunDetached:
         )
         # Must not raise into the emit path.
         _util.run_detached(lambda: None, name="x")
+
+
+class TestNewEventHelpers:
+    """Emit helpers added for the task/pipeline lifecycle + digest events."""
+
+    def _bus(self):
+        bus = NotificationBus(debounce_seconds=0)
+        received = []
+        bus.add_backend(lambda e: received.append(e))
+        return bus, received
+
+    def test_emit_task_failed(self):
+        bus, received = self._bus()
+        bus.emit_task_failed("alice", "fix the build")
+        assert received[0].event_type == EventType.TASK_FAILED
+        assert received[0].severity == Severity.WARNING
+        assert "fix the build" in received[0].title
+
+    def test_emit_task_reopened(self):
+        bus, received = self._bus()
+        bus.emit_task_reopened("alice", "fix the build")
+        assert received[0].event_type == EventType.TASK_REOPENED
+
+    def test_emit_pipeline_started(self):
+        bus, received = self._bus()
+        bus.emit_pipeline_started("nightly deploy")
+        assert received[0].event_type == EventType.PIPELINE_STARTED
+        assert "nightly deploy" in received[0].title
+
+    def test_emit_pipeline_finished_success_vs_failed(self):
+        bus, received = self._bus()
+        bus.emit_pipeline_finished("nightly deploy", failed=False)
+        bus.emit_pipeline_finished("other run", failed=True)
+        assert received[0].severity == Severity.INFO
+        assert received[1].severity == Severity.URGENT
+        assert "FAILED" in received[1].title
+
+    def test_emit_daily_digest(self):
+        bus, received = self._bus()
+        bus.emit_daily_digest("digest title", "digest body")
+        assert received[0].event_type == EventType.DAILY_DIGEST
+        assert received[0].message == "digest body"

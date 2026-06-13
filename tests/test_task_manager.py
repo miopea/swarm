@@ -322,3 +322,29 @@ def test_reopen_task_no_pilot_no_crash(mgr):
 
     result = mgr.reopen_task(task.id)
     assert result is True
+
+
+def test_fail_task_emits_notification(mgr):
+    bus = MagicMock()
+    mgr._notification_bus = bus
+    task = mgr.create_task("Doomed Task")
+    mgr.task_board.assign(task.id, "alice")
+    mgr.task_board.activate(task.id)
+    assert mgr.fail_task(task.id) is True
+    bus.emit_task_failed.assert_called_once_with("alice", "Doomed Task")
+
+
+def test_reopen_task_emits_notification(mgr):
+    bus = MagicMock()
+    mgr._notification_bus = bus
+    task = mgr.create_task("Round Two")
+    mgr.task_board.assign(task.id, "bob")
+    mgr.task_board.activate(task.id)
+    mgr.task_board.complete(task.id, resolution="done")
+    assert mgr.reopen_task(task.id) is True
+    bus.emit_task_reopened.assert_called_once_with("bob", "Round Two")
+
+
+def test_fail_task_without_bus_no_crash(mgr):
+    task = mgr.create_task("No Bus")
+    assert mgr.fail_task(task.id) is True

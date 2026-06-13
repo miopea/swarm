@@ -25,6 +25,11 @@ class EventType(Enum):
     CONTEXT_PRESSURE = "context_pressure"
     DAEMON_HEALTH = "daemon_health"
     TUNNEL_DOWN = "tunnel_down"
+    TASK_FAILED = "task_failed"
+    TASK_REOPENED = "task_reopened"
+    PIPELINE_STARTED = "pipeline_started"
+    PIPELINE_FINISHED = "pipeline_finished"
+    DAILY_DIGEST = "daily_digest"
 
 
 class Severity(Enum):
@@ -191,6 +196,67 @@ class NotificationBus:
                 message=f"{worker_name} completed '{task_title}'",
                 severity=Severity.INFO,
                 worker_name=worker_name,
+            )
+        )
+
+    def emit_task_failed(self, worker_name: str, task_title: str) -> None:
+        self.emit(
+            NotifyEvent(
+                event_type=EventType.TASK_FAILED,
+                title=f"Task FAILED: {task_title}",
+                message=f"'{task_title}' was marked failed (worker: {worker_name})",
+                severity=Severity.WARNING,
+                worker_name=worker_name,
+            )
+        )
+
+    def emit_task_reopened(self, worker_name: str, task_title: str) -> None:
+        self.emit(
+            NotifyEvent(
+                event_type=EventType.TASK_REOPENED,
+                title=f"Task reopened: {task_title}",
+                message=f"'{task_title}' was reopened (worker: {worker_name})",
+                severity=Severity.INFO,
+                worker_name=worker_name,
+            )
+        )
+
+    def emit_pipeline_started(self, pipeline_name: str) -> None:
+        self.emit(
+            NotifyEvent(
+                event_type=EventType.PIPELINE_STARTED,
+                title=f"Pipeline started: {pipeline_name}",
+                message=f"Pipeline '{pipeline_name}' is running",
+                severity=Severity.INFO,
+                worker_name=pipeline_name,
+            )
+        )
+
+    def emit_pipeline_finished(self, pipeline_name: str, *, failed: bool) -> None:
+        self.emit(
+            NotifyEvent(
+                event_type=EventType.PIPELINE_FINISHED,
+                title=(
+                    f"Pipeline FAILED: {pipeline_name}"
+                    if failed
+                    else f"Pipeline completed: {pipeline_name}"
+                ),
+                message=(
+                    f"Pipeline '{pipeline_name}' "
+                    + ("has a failed step." if failed else "finished successfully.")
+                ),
+                severity=Severity.URGENT if failed else Severity.INFO,
+                worker_name=pipeline_name,
+            )
+        )
+
+    def emit_daily_digest(self, title: str, message: str) -> None:
+        self.emit(
+            NotifyEvent(
+                event_type=EventType.DAILY_DIGEST,
+                title=title,
+                message=message,
+                severity=Severity.INFO,
             )
         )
 

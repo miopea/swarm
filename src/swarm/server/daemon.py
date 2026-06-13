@@ -360,6 +360,7 @@ class SwarmDaemon(EventEmitter):
             task_board=self.task_board,
             task_history=self.task_history,
             drone_log=self.drone_log,
+            notification_bus=self.notification_bus,
         )
         self.config_mgr = ConfigManager(
             config=self.config,
@@ -523,11 +524,23 @@ class SwarmDaemon(EventEmitter):
         self.publisher.on_task_board_changed()
 
     def _wire_pipeline_engine(self) -> None:
-        """Wire pipeline engine change events to WS broadcasts."""
+        """Wire pipeline engine change events to WS broadcasts + notifications."""
         self.pipeline_engine.on("change", self._on_pipeline_change)
+        self.pipeline_engine.on("pipeline_started", self._on_pipeline_started)
+        self.pipeline_engine.on("pipeline_finished", self._on_pipeline_finished)
 
     def _on_pipeline_change(self) -> None:
         self.publisher.on_pipeline_change()
+
+    def _on_pipeline_started(self, pipeline: object) -> None:
+        if self.notification_bus:
+            self.notification_bus.emit_pipeline_started(getattr(pipeline, "name", "?"))
+
+    def _on_pipeline_finished(self, pipeline: object, failed: bool) -> None:
+        if self.notification_bus:
+            self.notification_bus.emit_pipeline_finished(
+                getattr(pipeline, "name", "?"), failed=failed
+            )
 
     def _build_notification_bus(self, config: HiveConfig) -> NotificationBus:
         from swarm.notify.bus import filtered_backend
@@ -852,6 +865,7 @@ class SwarmDaemon(EventEmitter):
         self.loop_runner.register("pipeline_schedule", self._pipeline_schedule_loop)
         self.loop_runner.register("db_maintenance", self._db_maintenance_loop)
         self.loop_runner.register("health_sweep", self._health_sweep_loop)
+        self.loop_runner.register("daily_digest", self._daily_digest_loop)
         self.loop_runner.register("playbook_consolidation", self._playbook_consolidation_loop)
         self.loop_runner.register("invariant_reconcile", self._invariant_reconcile_loop)
         self.loop_runner.start_all()
@@ -862,6 +876,30 @@ class SwarmDaemon(EventEmitter):
 
         sweep = HealthSweep(db=self.swarm_db, notify=lambda: self.notification_bus)
         await sweep.sweep_loop()
+
+    async def _daily_digest_loop(self) -> None:
+        """Once a day, push a 24h activity summary through the notify bus.
+
+        Opt-in by event selection: the ``daily_digest`` event type is OFF
+        unless the operator enables it in the notification matrix, so this
+        loop costs nothing for operators who don't want it.
+        """
+        _DIGEST_INTERVAL = 86_400.0
+        try:
+            while True:
+                await asyncio.sleep(_DIGEST_INTERVAL)
+                try:
+                    from swarm.analysis.throughput import compute_throughput
+                    from swarm.notify.digest import build_digest
+
+                    summary = compute_throughput(self.task_board.all_tasks, window_days=1)
+                    title, message = build_digest(summary)
+                    if self.notification_bus:
+                        self.notification_bus.emit_daily_digest(title, message)
+                except Exception:
+                    _log.warning("daily digest failed", exc_info=True)
+        except asyncio.CancelledError:
+            return
 
     async def _db_maintenance_loop(self) -> None:
         """Periodic WAL checkpoint (5 min) and daily backup with rotation."""

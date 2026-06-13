@@ -175,7 +175,7 @@
                 <button class="btn btn-sm btn-secondary" type="button" onclick="applyNotifPreset('all')">All Events</button>
                 <button class="btn btn-sm btn-secondary" type="button" onclick="applyNotifPreset('quiet')">Quiet Mode</button>
             </div>
-            {% set event_types = ['worker_idle', 'worker_stung', 'worker_escalated', 'drone_action', 'queen_response', 'task_assigned', 'task_completed', 'resource_pressure', 'dstate_detected', 'context_pressure', 'daemon_health', 'tunnel_down'] %}
+            {% set event_types = ['worker_idle', 'worker_stung', 'worker_escalated', 'drone_action', 'queen_response', 'task_assigned', 'task_completed', 'resource_pressure', 'dstate_detected', 'context_pressure', 'daemon_health', 'tunnel_down', 'task_failed', 'task_reopened', 'pipeline_started', 'pipeline_finished', 'daily_digest'] %}
             <div style="display:grid;grid-template-columns:auto repeat(4,1fr);gap:0.3rem;font-size:0.8rem;align-items:center">
                 <span></span>
                 <span class="text-center fw-bold">Desktop</span>
@@ -1408,8 +1408,8 @@
     };
 
     window.applyNotifPreset = function(preset) {
-        var crashEvents = ['worker_stung', 'resource_pressure', 'daemon_health', 'tunnel_down'];
-        var allEvents = ['worker_idle','worker_stung','worker_escalated','drone_action','queen_response','task_assigned','task_completed','resource_pressure','dstate_detected','context_pressure','daemon_health','tunnel_down'];
+        var crashEvents = ['worker_stung', 'resource_pressure', 'daemon_health', 'tunnel_down', 'task_failed'];
+        var allEvents = ['worker_idle','worker_stung','worker_escalated','drone_action','queen_response','task_assigned','task_completed','resource_pressure','dstate_detected','context_pressure','daemon_health','tunnel_down','task_failed','task_reopened','pipeline_started','pipeline_finished','daily_digest'];
         var targetEvents = preset === 'all' ? allEvents : preset === 'crashes' ? crashEvents : [];
         document.querySelectorAll('.cfg-event-filter').forEach(function(cb) {
             cb.checked = targetEvents.indexOf(cb.dataset.event) !== -1;

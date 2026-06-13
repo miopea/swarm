@@ -972,3 +972,54 @@ class TestPipelineRoundTrip:
         assert s2.schedule == "30 14 * * *"
         assert s2.task_id == "task-123"
         assert s2.started_at == step.started_at
+
+
+class TestPipelineLifecycleEvents:
+    """Engine emits pipeline_started / pipeline_finished on transitions."""
+
+    def _make_engine(self, tmp_path: Path) -> Any:
+        from swarm.pipelines.engine import PipelineEngine
+
+        store = PipelineStore(path=tmp_path / "pipelines.json")
+        engine = PipelineEngine(store=store, task_board=TaskBoard())
+        return engine
+
+    def _two_step(self, engine) -> Any:
+        return engine.create(
+            "P",
+            steps=[
+                PipelineStep(id="a", name="A", task_type="content"),
+                PipelineStep(id="b", name="B", depends_on=["a"], task_type="review"),
+            ],
+        )
+
+    def test_start_emits_pipeline_started(self, tmp_path: Path) -> None:
+        engine = self._make_engine(tmp_path)
+        p = self._two_step(engine)
+        started = []
+        engine.on("pipeline_started", lambda pl: started.append(pl.id))
+        engine.start_pipeline(p.id)
+        assert started == [p.id]
+
+    def test_completion_emits_finished_once(self, tmp_path: Path) -> None:
+        engine = self._make_engine(tmp_path)
+        p = self._two_step(engine)
+        finished = []
+        engine.on("pipeline_finished", lambda pl, failed: finished.append((pl.id, failed)))
+        engine.start_pipeline(p.id)
+        engine.complete_step(p.id, "a")
+        assert finished == []
+        engine.complete_step(p.id, "b")
+        assert finished == [(p.id, False)]
+
+    def test_step_failure_emits_finished_failed(self, tmp_path: Path) -> None:
+        engine = self._make_engine(tmp_path)
+        p = self._two_step(engine)
+        finished = []
+        engine.on("pipeline_finished", lambda pl, failed: finished.append((pl.id, failed)))
+        engine.start_pipeline(p.id)
+        engine.fail_step(p.id, "a", error="boom")
+        assert finished == [(p.id, True)]
+        # A second fail on the already-FAILED pipeline must not re-emit
+        engine.fail_step(p.id, "b", error="boom2")
+        assert len(finished) == 1
