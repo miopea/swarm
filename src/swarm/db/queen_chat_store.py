@@ -347,6 +347,12 @@ class QueenChatStore(BaseStore):
             rows = self._db.fetchall(sql, tuple(params))
             return [_row_to_learning(r) for r in rows]
 
+    def delete_learning(self, learning_id: int) -> bool:
+        """Delete a learning by id — operator cleanup of stale corrections."""
+        with self._lock:
+            removed = self._db.delete("queen_learnings", "id = ?", (learning_id,))
+        return removed > 0
+
     # ------------------------------------------------------------------
     # Housekeeping
     # ------------------------------------------------------------------

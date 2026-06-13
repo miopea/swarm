@@ -33,8 +33,14 @@
         {% if w.state == 'STUNG' %}
         <div class="stung-recovery">
             <button class="btn btn-xs btn-secondary" data-worker-revive="{{ w.name }}" title="Restart this worker">Revive</button>
-            <span class="text-muted text-sm">Crashed or exited</span>
+            <span class="text-muted text-sm">{% if w.exit_code is not none %}Exited with code {{ w.exit_code }}{% else %}Crashed or exited{% endif %}</span>
         </div>
+        {% if w.crash_tail %}
+        <details class="crash-tail">
+            <summary class="text-muted text-sm">Last output</summary>
+            <pre class="crash-tail-pre">{{ w.crash_tail }}</pre>
+        </details>
+        {% endif %}
         {% endif %}
     </div>
 </div>

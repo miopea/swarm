@@ -28,6 +28,9 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/queen/threads/{thread_id}", handle_get_thread)
     app.router.add_post("/api/queen/threads/{thread_id}/messages", handle_post_message)
     app.router.add_post("/api/queen/threads/{thread_id}/resolve", handle_resolve_thread)
+    # Learnings — operator-visible list + cleanup of stale corrections
+    app.router.add_get("/api/queen/learnings", handle_list_learnings)
+    app.router.add_delete("/api/queen/learnings/{learning_id}", handle_delete_learning)
 
 
 @handle_errors
@@ -305,3 +308,30 @@ async def _forward_to_queen(daemon: object, thread_id: str, body: str) -> bool:
     except Exception:
         _log.warning("queen PTY forward failed", exc_info=True)
         return False
+
+
+@handle_errors
+async def handle_list_learnings(request: web.Request) -> web.Response:
+    """GET /api/queen/learnings?applied_to=&q=&limit= — saved corrections."""
+    d = get_daemon(request)
+    applied_to = request.query.get("applied_to") or None
+    search = request.query.get("q") or None
+    try:
+        limit = min(int(request.query.get("limit", "50")), 500)
+    except ValueError:
+        limit = 50
+    learnings = d.queen_chat.query_learnings(applied_to=applied_to, search=search, limit=limit)
+    return web.json_response({"learnings": [item.to_dict() for item in learnings]})
+
+
+@handle_errors
+async def handle_delete_learning(request: web.Request) -> web.Response:
+    """DELETE /api/queen/learnings/{id} — remove a stale/wrong correction."""
+    d = get_daemon(request)
+    try:
+        learning_id = int(request.match_info["learning_id"])
+    except ValueError:
+        return json_error("learning_id must be an integer", status=400)
+    if not d.queen_chat.delete_learning(learning_id):
+        return json_error("learning not found", status=404)
+    return web.json_response({"deleted": learning_id})

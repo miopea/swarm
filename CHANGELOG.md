@@ -10,6 +10,42 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.13] - 2026-06-13
+
+### Features
+
+- **STUNG crash diagnostics on the worker card.** A dead worker now shows its
+  exit code ("Exited with code 137") and a collapsible "Last output" tail of
+  the final PTY lines, so revive-crash loops are diagnosable from the
+  dashboard without terminal access. New `crash_tail` / `exit_code` fields on
+  `Worker.to_api_dict()`, populated only in STUNG.
+- **Task throughput analytics.** New `GET /api/analytics/summary?days=N`
+  aggregates created/completed/failed counts, completions per day, avg +
+  median completion time, per-worker stats, and a current backlog snapshot
+  (`swarm.analysis.throughput.compute_throughput`).
+- **Bulk "All" selector.** Bulk-select mode gained an All button that selects
+  every task visible under the current status/priority/search filters.
+- **Message + learning cleanup endpoints.** `POST /api/messages/delete`
+  (delete by ids) and `GET /api/queen/learnings` +
+  `DELETE /api/queen/learnings/{id}` for pruning stale Queen corrections.
+
+### Changes
+
+- **Active bottom-panel tab persists across reloads** (sessionStorage),
+  joining the existing selected-worker / focus-mode / filter persistence.
+- **Destructive-action confirmations unified on the themed dialog.** Bulk
+  reassign and pipeline delete now confirm before firing; the install-update
+  and kill-Queen flows swapped native `confirm()` for `showConfirm()`.
+- **OpenAPI spec refreshed** to the current route surface: removed the dead
+  `/api/queen/coordinate`, added queen threads/learnings, playbooks,
+  analytics summary, task force-complete, and message delete.
+
+### Fixes
+
+- `tests/test_testing_report.py` infra-section test shelled out to a real
+  `claude -p` (missing the `_mock_analysis()` guard every sibling test uses)
+  and hung in sandboxed environments.
+
 ## [2026.6.11] - 2026-06-11
 
 ### Features

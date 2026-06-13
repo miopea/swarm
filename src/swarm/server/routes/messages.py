@@ -15,6 +15,7 @@ _log = get_logger("server.messages")
 
 def register(app: web.Application) -> None:
     app.router.add_post("/api/messages/send", handle_send_message)
+    app.router.add_post("/api/messages/delete", handle_delete_messages)
     app.router.add_get("/api/messages/{worker}", handle_get_messages)
     app.router.add_post("/api/messages/{worker}/read", handle_mark_read)
     app.router.add_get("/api/messages", handle_recent_messages)
@@ -131,3 +132,20 @@ async def handle_recent_messages(request: web.Request) -> web.Response:
             "messages": [m.to_dict() for m in messages],
         }
     )
+
+
+@handle_errors
+async def handle_delete_messages(request: web.Request) -> web.Response:
+    """Delete messages by id — operator cleanup from the dashboard."""
+    d = get_daemon(request)
+    try:
+        body = await request.json()
+        ids = [int(i) for i in body.get("ids", [])]
+    except (TypeError, ValueError):
+        return json_error("ids must be a list of integers", status=400)
+    except Exception:
+        return json_error("invalid JSON body", status=400)
+    if not ids:
+        return json_error("missing ids", status=400)
+    deleted = d.message_store.delete(ids)
+    return web.json_response({"deleted": deleted})

@@ -2,7 +2,7 @@ openapi: "3.0.3"
 info:
   title: Swarm API
   description: REST API for the Swarm multi-agent orchestrator. The version tracks the installed `swarm-ai` package (calendar-versioned).
-  version: "2026.4.14.2"
+  version: "2026.6.11"
   license:
     name: MIT
 
@@ -810,6 +810,26 @@ paths:
         "200":
           description: Task reopened
 
+  /api/tasks/{task_id}/force-complete:
+    post:
+      tags: [Tasks]
+      summary: Force-complete a wedged task (bypasses BLOCKED guard)
+      parameters:
+        - name: task_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                resolution: { type: string }
+      responses:
+        "200":
+          description: Task force-completed
+
   /api/tasks/{task_id}:
     delete:
       tags: [Tasks]
@@ -1156,14 +1176,6 @@ paths:
           description: Recent notifications
 
   # ---- Queen ----
-  /api/queen/coordinate:
-    post:
-      tags: [Queen]
-      summary: Trigger hive-wide Queen coordination
-      responses:
-        "200":
-          description: Coordination started
-
   /api/queen/queue:
     get:
       tags: [Queen]
@@ -1171,6 +1183,127 @@ paths:
       responses:
         "200":
           description: Queue running/pending counts
+
+  /api/queen/threads:
+    get:
+      tags: [Queen]
+      summary: List Queen chat threads
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string }
+        - name: kind
+          in: query
+          schema: { type: string }
+        - name: worker
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 100, maximum: 500 }
+      responses:
+        "200":
+          description: Threads
+    post:
+      tags: [Queen]
+      summary: Start a new Queen chat thread with an opening message
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, body]
+              properties:
+                title: { type: string, maxLength: 200 }
+                body: { type: string, maxLength: 8000 }
+                kind: { type: string }
+                worker: { type: string }
+                task_id: { type: string }
+      responses:
+        "200":
+          description: Thread created and forwarded to the Queen PTY
+
+  /api/queen/threads/{thread_id}:
+    get:
+      tags: [Queen]
+      summary: Fetch a thread with its messages
+      parameters:
+        - name: thread_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Thread detail
+        "404":
+          description: Thread not found
+
+  /api/queen/threads/{thread_id}/messages:
+    post:
+      tags: [Queen]
+      summary: Post an operator message to a thread
+      parameters:
+        - name: thread_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, maxLength: 8000 }
+      responses:
+        "200":
+          description: Message stored and forwarded
+
+  /api/queen/threads/{thread_id}/resolve:
+    post:
+      tags: [Queen]
+      summary: Resolve (close) a thread
+      parameters:
+        - name: thread_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Thread resolved
+
+  /api/queen/learnings:
+    get:
+      tags: [Queen]
+      summary: List saved Queen learnings (corrections)
+      parameters:
+        - name: applied_to
+          in: query
+          schema: { type: string }
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 500 }
+      responses:
+        "200":
+          description: Learnings
+
+  /api/queen/learnings/{learning_id}:
+    delete:
+      tags: [Queen]
+      summary: Delete a stale or wrong learning
+      parameters:
+        - name: learning_id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Deleted
+        "404":
+          description: Learning not found
 
   # ---- Config ----
   /api/config:
@@ -1962,6 +2095,103 @@ paths:
       responses:
         "200":
           description: Messages marked as read
+
+  /api/messages/delete:
+    post:
+      tags: [Messages]
+      summary: Delete messages by id (operator cleanup)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ids]
+              properties:
+                ids:
+                  type: array
+                  items:
+                    type: integer
+      responses:
+        "200":
+          description: Count of deleted messages
+        "400":
+          description: Missing or invalid ids
+
+  # ---- Analytics ----
+  /api/analytics/summary:
+    get:
+      tags: [Analytics]
+      summary: Task throughput summary (counts, durations, per-worker stats)
+      parameters:
+        - name: days
+          in: query
+          schema: { type: integer, default: 7, minimum: 1, maximum: 365 }
+      responses:
+        "200":
+          description: Throughput summary
+
+  # ---- Playbooks ----
+  /api/playbooks:
+    get:
+      tags: [Playbooks]
+      summary: List synthesized playbooks
+      responses:
+        "200":
+          description: Playbooks
+
+  /api/playbooks/analytics:
+    get:
+      tags: [Playbooks]
+      summary: Playbook analytics (status totals, movers, recent events)
+      responses:
+        "200":
+          description: Analytics
+
+  /api/playbooks/{name}/events:
+    get:
+      tags: [Playbooks]
+      summary: Event history for a playbook
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Events
+
+  /api/playbooks/{name}/promote:
+    post:
+      tags: [Playbooks]
+      summary: Promote a candidate playbook to fleet-active
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Promoted
+
+  /api/playbooks/{name}/retire:
+    post:
+      tags: [Playbooks]
+      summary: Retire a playbook (soft delete)
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses:
+        "200":
+          description: Retired
 
   # ---- Hooks (Claude Code integration) ----
   /api/hooks/approval:

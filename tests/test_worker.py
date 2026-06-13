@@ -312,6 +312,63 @@ class TestTokenUsage:
         assert d["usage"]["total_tokens"] == 600
 
 
+class TestStungCrashDiagnostics:
+    """to_api_dict() exposes crash context (PTY tail + exit code) for STUNG workers."""
+
+    def _stung_worker(self, content: str = "", exit_code: int | None = None):
+        from tests.fakes.process import FakeWorkerProcess
+
+        proc = FakeWorkerProcess(name="t")
+        if content:
+            proc.set_content(content)
+        proc.exit_code = exit_code
+        return Worker(name="t", path="/tmp", process=proc, state=WorkerState.STUNG)
+
+    def test_stung_includes_crash_tail(self):
+        w = self._stung_worker(content="line1\nline2\nError: boom\nclaude exited\n")
+        d = w.to_api_dict()
+        assert "Error: boom" in d["crash_tail"]
+        assert "claude exited" in d["crash_tail"]
+
+    def test_stung_includes_exit_code(self):
+        w = self._stung_worker(content="bye\n", exit_code=137)
+        d = w.to_api_dict()
+        assert d["exit_code"] == 137
+
+    def test_stung_without_exit_code_is_none(self):
+        w = self._stung_worker(content="bye\n")
+        assert w.to_api_dict()["exit_code"] is None
+
+    def test_crash_tail_limited_to_last_lines(self):
+        content = "\n".join(f"line{i}" for i in range(40)) + "\n"
+        w = self._stung_worker(content=content)
+        tail = w.to_api_dict()["crash_tail"]
+        assert "line39" in tail
+        assert "line0" not in tail
+        assert len(tail.splitlines()) <= 5
+
+    def test_crash_tail_skips_blank_lines(self):
+        w = self._stung_worker(content="real output\n\n\n\n\n\n\n")
+        tail = w.to_api_dict()["crash_tail"]
+        assert tail == "real output"
+
+    def test_non_stung_has_empty_diagnostics(self):
+        from tests.fakes.process import FakeWorkerProcess
+
+        proc = FakeWorkerProcess(name="t")
+        proc.set_content("hello\n")
+        w = Worker(name="t", path="/tmp", process=proc, state=WorkerState.BUZZING)
+        d = w.to_api_dict()
+        assert d["crash_tail"] == ""
+        assert d["exit_code"] is None
+
+    def test_stung_without_process_has_empty_diagnostics(self):
+        w = Worker(name="t", path="/tmp", state=WorkerState.STUNG)
+        d = w.to_api_dict()
+        assert d["crash_tail"] == ""
+        assert d["exit_code"] is None
+
+
 class TestWorkerStateCounts:
     def test_includes_sleeping(self):
         workers = [

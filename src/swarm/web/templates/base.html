@@ -1091,6 +1091,11 @@
         .worker-provider-tag { font-weight: normal; font-size: 0.7rem; color: var(--muted); }
         .worker-meta { font-size: 0.75rem; color: var(--muted); }
         .worker-task { font-size: 0.7rem; color: var(--lavender); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+        /* STUNG crash diagnostics — last PTY lines so revive-crash loops are
+           diagnosable from the dashboard without terminal access. */
+        .crash-tail { margin-top: 2px; max-width: 220px; }
+        .crash-tail summary { cursor: pointer; }
+        .crash-tail-pre { font-size: 0.65rem; color: var(--muted); background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 4px 6px; margin: 2px 0 0; max-height: 6em; overflow: auto; white-space: pre-wrap; word-break: break-word; }
         .context-bar { position: relative; height: 3px; background: var(--border); border-radius: 2px; margin-top: 2px; max-width: 120px; }
         .context-bar-fill { height: 100%; background: var(--leaf); border-radius: 2px; transition: width 0.3s; }
         .context-bar-fill.context-warning { background: var(--honey); }

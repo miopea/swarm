@@ -169,6 +169,7 @@
         hideOnboarding: function() { var m = document.getElementById('onboarding-modal'); if (m) m.style.display = 'none'; },
         toggleTileMode: function() { toggleTileMode(); },
         toggleBulkSelect: function() { toggleBulkSelect(); },
+        bulkSelectAll: function() { bulkSelectAllVisible(); },
         bulkComplete: function() { bulkAction('complete'); },
         bulkFail: function() { bulkAction('fail'); },
         bulkReopen: function() { bulkAction('reopen'); },
@@ -383,6 +384,19 @@
         updateBulkCount();
     }
 
+    // Select every task row currently rendered — i.e. whatever the active
+    // status/priority/search filters left visible. Checkbox-per-row was the
+    // only path before, which made "complete everything in this filter"
+    // an N-click chore.
+    function bulkSelectAllVisible() {
+        document.querySelectorAll('.task-select-cb').forEach(function(cb) {
+            if (cb.offsetParent === null) return; // hidden row (filtered out)
+            cb.checked = true;
+            if (cb.dataset.taskId) bulkSelectedIds.add(cb.dataset.taskId);
+        });
+        updateBulkCount();
+    }
+
     function updateBulkCount() {
         var el = document.getElementById('bulk-count');
         if (el) el.textContent = bulkSelectedIds.size + ' selected';
@@ -395,18 +409,20 @@
             var worker = this.value;
             if (!worker || !bulkSelectedIds.size) { this.value = ''; return; }
             var ids = Array.from(bulkSelectedIds);
-            actionFetch('/api/tasks/bulk', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
-                body: JSON.stringify({ action: 'assign', task_ids: ids, worker: worker }),
-            })
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                if (data.error) { showToast('Error: ' + data.error, true); return; }
-                showToast(data.succeeded + ' task(s) reassigned to ' + worker);
-                bulkSelectedIds.clear();
-                updateBulkCount();
-                refreshTasks();
+            showConfirm('Reassign ' + ids.length + ' task(s) to "' + worker + '"?', function() {
+                actionFetch('/api/tasks/bulk', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
+                    body: JSON.stringify({ action: 'assign', task_ids: ids, worker: worker }),
+                })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.error) { showToast('Error: ' + data.error, true); return; }
+                    showToast(data.succeeded + ' task(s) reassigned to ' + worker);
+                    bulkSelectedIds.clear();
+                    updateBulkCount();
+                    refreshTasks();
+                });
             });
             this.value = '';
         });
@@ -1509,10 +1525,12 @@
 
     window.pipelineAction = function(action, pipelineId) {
         if (action === 'delete') {
-            fetch('/api/pipelines/' + pipelineId, { method: 'DELETE', headers: { 'X-Requested-With': 'Dashboard' }})
-                .then(function(r) { return r.json(); })
-                .then(function() { showToast('Pipeline deleted'); refreshPipelines(); })
-                .catch(function() {});
+            showConfirm('Delete this pipeline?', function() {
+                fetch('/api/pipelines/' + pipelineId, { method: 'DELETE', headers: { 'X-Requested-With': 'Dashboard' }})
+                    .then(function(r) { return r.json(); })
+                    .then(function() { showToast('Pipeline deleted'); refreshPipelines(); })
+                    .catch(function() {});
+            });
         } else {
             fetch('/api/pipelines/' + pipelineId + '/' + action, { method: 'POST', headers: { 'X-Requested-With': 'Dashboard', 'Content-Type': 'application/json' }, body: '{}' })
                 .then(function(r) { return r.json(); })
@@ -5228,12 +5246,18 @@
     };
 
     // --- Tab switcher ---
-    window.switchTab = function(tab) {
-        exitFocusMode();
-        expandBottomPanel();
+    // `restoring` skips the focus-mode/panel side effects so the on-load
+    // tab restore doesn't fight the collapse/focus restores that ran above.
+    window.switchTab = function(tab, restoring) {
+        if (!restoring) {
+            exitFocusMode();
+            expandBottomPanel();
+        }
+        try { sessionStorage.setItem('swarm_bottom_tab', tab); } catch(e) {}
         document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
         document.querySelectorAll('.tab-content').forEach(function(c) { c.classList.remove('active'); });
         var btn = document.getElementById('tab-' + tab + '-btn');
+        if (!btn) return;
         btn.classList.add('active');
         btn.setAttribute('aria-selected', 'true');
         document.getElementById('tab-' + tab).classList.add('active');
@@ -5350,6 +5374,17 @@
             if (area) area.classList.add('focus-mode');
             var fbtn = document.getElementById('btn-focus-mode');
             if (fbtn) fbtn.textContent = 'Exit Focus';
+        }
+    })();
+
+    // Init: restore the active bottom-panel tab across reloads. Runs after
+    // the collapse/focus restores so switchTab's restore path (which skips
+    // expandBottomPanel/exitFocusMode) can't undo them.
+    (function initBottomTab() {
+        var storedTab = null;
+        try { storedTab = sessionStorage.getItem('swarm_bottom_tab'); } catch(e) {}
+        if (storedTab && storedTab !== 'tasks' && document.getElementById('tab-' + storedTab + '-btn')) {
+            switchTab(storedTab, true);
         }
     })();
 
@@ -7148,7 +7183,7 @@
         document.getElementById('update-banner').style.display = 'none';
     };
     window.installUpdate = function() {
-        if (!confirm('Install update and restart swarm? Workers will keep running.')) return;
+        showConfirm('Install update and restart swarm? Workers will keep running.', function() {
         showUpdateProgress('Installing update...');
         actionFetch('/action/update-and-restart', { method: 'POST' })
             .then(function(r) { return r.json(); })
@@ -7166,6 +7201,7 @@
                 // Server may have already shut down — start polling
                 waitForRestart();
             });
+        });
     };
     function showUpdateProgress(line) {
         var el = document.getElementById('update-banner');
@@ -11097,11 +11133,18 @@
     function ccQueenVerb(target) {
         var verb = target && target.dataset && target.dataset.qverb;
         if (!verb) return;
-        if (verb === 'kill' && !window.confirm('Kill the Queen process? She can be revived.')) return;
-        ccPost('/api/workers/queen/' + encodeURIComponent(verb), {}).then(function (r) {
-            if (!r.ok && window.showToast) window.showToast('Queen ' + verb + ' failed (' + r.status + ')', true);
-            else if (window.showToast) window.showToast('Queen: ' + verb);
-        }).catch(function () {});
+        var run = function () {
+            ccPost('/api/workers/queen/' + encodeURIComponent(verb), {}).then(function (r) {
+                if (!r.ok && window.showToast) window.showToast('Queen ' + verb + ' failed (' + r.status + ')', true);
+                else if (window.showToast) window.showToast('Queen: ' + verb);
+            }).catch(function () {});
+        };
+        // Same themed confirm as every other destructive op (no native confirm()).
+        if (verb === 'kill' && window.showConfirm) {
+            window.showConfirm('Kill the Queen process? She can be revived.', run);
+            return;
+        }
+        run();
     }
 
     // Refresh = re-mount + reconnect her embedded socket. NOT

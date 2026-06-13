@@ -53,7 +53,10 @@ class TestReportRendersInfraSection:
         log.record_drone_decision("api", "content", "CONTINUE", "ok", "Read", 0)
 
         gen = ReportGenerator(log, tmp_path)
-        report_path = await gen.generate_if_pending()
+        # _mock_analysis: without it generate_if_pending shells out to a
+        # real `claude -p`, which hangs in sandboxed/nested-session envs.
+        with _mock_analysis():
+            report_path = await gen.generate_if_pending()
         assert report_path is not None
         text = report_path.read_text()
         assert "## Infrastructure Snapshot" in text

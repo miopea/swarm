@@ -269,3 +269,22 @@ class TestPrune:
     def test_no_old_messages_is_noop(self, store: MessageStore) -> None:
         store.send("hub", "api", "finding", "recent")
         assert store.prune(max_age_days=7) == 0
+
+
+class TestDelete:
+    def test_delete_by_ids(self, store: MessageStore) -> None:
+        # Distinct msg_type per send — same-type sends within 60s dedup-merge.
+        id1 = store.send("a", "b", "finding", "one")
+        id2 = store.send("a", "b", "warning", "two")
+        deleted = store.delete([id1])
+        assert deleted == 1
+        remaining = store.get_recent()
+        assert [m.id for m in remaining] == [id2]
+
+    def test_delete_missing_ids_is_zero(self, store: MessageStore) -> None:
+        assert store.delete([99999]) == 0
+
+    def test_delete_empty_list_is_zero(self, store: MessageStore) -> None:
+        store.send("a", "b", "finding", "keep me")
+        assert store.delete([]) == 0
+        assert len(store.get_recent()) == 1

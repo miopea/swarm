@@ -308,6 +308,23 @@ class MessageStore:
                 _log.warning("failed to get recent messages", exc_info=True)
                 return []
 
+    def delete(self, message_ids: list[int]) -> int:
+        """Delete specific messages by id. Returns count deleted."""
+        if not self._conn or not message_ids:
+            return 0
+        placeholders = ",".join("?" for _ in message_ids)
+        with self._lock:
+            try:
+                cur = self._conn.execute(
+                    f"DELETE FROM messages WHERE id IN ({placeholders})",
+                    tuple(message_ids),
+                )
+                self._conn.commit()
+                return cur.rowcount
+            except sqlite3.Error:
+                _log.warning("failed to delete messages", exc_info=True)
+                return 0
+
     def prune(self, max_age_days: int = 7) -> int:
         """Delete messages older than max_age_days. Returns count deleted."""
         if not self._conn:

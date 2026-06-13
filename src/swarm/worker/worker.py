@@ -33,6 +33,8 @@ class WorkerDict(TypedDict):
     recent_tools: list[dict[str, str]]
     cache_ratio: float
     needs_operator_input: bool
+    crash_tail: str
+    exit_code: int | None
 
 
 # WAITING within this grace window is likely a transient prompt the
@@ -356,6 +358,26 @@ class Worker:
             return False
         return self.state_duration >= _NEEDS_INPUT_GRACE_SECONDS
 
+    _CRASH_TAIL_LINES = 5
+
+    def _crash_diagnostics(self) -> tuple[str, int | None]:
+        """Return (PTY tail, exit code) for a STUNG worker.
+
+        The ring buffer outlives the dead process, so the tail shows the
+        operator *why* the worker died instead of a bare "Crashed or
+        exited" — repeated revive-crash loops were undiagnosable from
+        the dashboard without it.
+        """
+        if self.state != WorkerState.STUNG or self.process is None:
+            return "", None
+        try:
+            content = self.process.get_content(self._CRASH_TAIL_LINES * 4)
+        except Exception:
+            return "", self.process.exit_code
+        lines = [ln.rstrip() for ln in content.splitlines() if ln.strip()]
+        tail = "\n".join(lines[-self._CRASH_TAIL_LINES :])
+        return tail, self.process.exit_code
+
     def to_api_dict(self) -> WorkerDict:
         """Serialize worker state for API/WebSocket responses.
 
@@ -366,6 +388,7 @@ class Worker:
         cached = self._api_dict_cache
         if cached is not None and (now - self._api_dict_cache_time) < self._API_DICT_TTL:
             return cached
+        crash_tail, exit_code = self._crash_diagnostics()
         result = WorkerDict(
             name=self.name,
             path=self.path,
@@ -383,6 +406,8 @@ class Worker:
             recent_tools=self.recent_tools[-5:],
             cache_ratio=round(self.cache_ratio, 3),
             needs_operator_input=self.needs_operator_input,
+            crash_tail=crash_tail,
+            exit_code=exit_code,
         )
         self._api_dict_cache = result
         self._api_dict_cache_time = now

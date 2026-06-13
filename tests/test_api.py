@@ -3135,3 +3135,66 @@ async def test_force_complete_endpoint_closes_blocked(client, daemon):
     data = await resp.json()
     assert data["forced"] is True
     assert daemon.task_board.get(t.id).status == TaskStatus.DONE
+
+
+@pytest.mark.asyncio
+async def test_analytics_summary_endpoint(client, daemon):
+    """GET /api/analytics/summary aggregates board throughput."""
+    t = daemon.task_board.create("shipped thing")
+    daemon.task_board.assign(t.id, "alice")
+    daemon.task_board.activate(t.id)
+    daemon.task_board.complete(t.id, resolution="done")
+
+    resp = await client.get("/api/analytics/summary?days=7")
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["window_days"] == 7
+    assert data["completed"] == 1
+    assert data["workers"][0]["worker"] == "alice"
+    assert "backlog" in data
+
+
+@pytest.mark.asyncio
+async def test_analytics_summary_clamps_bad_days(client):
+    """Non-numeric / out-of-range days fall back safely."""
+    resp = await client.get("/api/analytics/summary?days=banana")
+    assert resp.status == 200
+    assert (await resp.json())["window_days"] == 7
+    resp = await client.get("/api/analytics/summary?days=99999")
+    assert resp.status == 200
+    assert (await resp.json())["window_days"] == 365
+
+
+@pytest.mark.asyncio
+async def test_queen_learnings_list_and_delete(client, daemon):
+    """GET /api/queen/learnings lists; DELETE removes by id."""
+    learning = daemon.queen_chat.add_learning(context="ctx", correction="fix", applied_to="hub")
+
+    resp = await client.get("/api/queen/learnings?applied_to=hub")
+    assert resp.status == 200
+    data = await resp.json()
+    assert [item["id"] for item in data["learnings"]] == [learning.id]
+
+    resp = await client.delete(f"/api/queen/learnings/{learning.id}", headers=_API_HEADERS)
+    assert resp.status == 200
+    assert (await resp.json())["deleted"] == learning.id
+
+    resp = await client.delete(f"/api/queen/learnings/{learning.id}", headers=_API_HEADERS)
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_messages_delete_endpoint(client, daemon, tmp_path):
+    """POST /api/messages/delete removes specific messages."""
+    from swarm.messages.store import MessageStore
+
+    daemon.message_store = MessageStore(db_path=tmp_path / "msgs.db")
+    msg_id = daemon.message_store.send("alice", "bob", "finding", "obsolete")
+
+    resp = await client.post("/api/messages/delete", json={"ids": [msg_id]}, headers=_API_HEADERS)
+    assert resp.status == 200
+    assert (await resp.json())["deleted"] == 1
+    assert daemon.message_store.get_recent() == []
+
+    resp = await client.post("/api/messages/delete", json={"ids": []}, headers=_API_HEADERS)
+    assert resp.status == 400
