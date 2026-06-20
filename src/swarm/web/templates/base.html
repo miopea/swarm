@@ -302,6 +302,18 @@
         .qh-msg-content { white-space: pre-wrap; word-break: break-word; }
         .qh-reopen { margin-top: 0.75rem; padding-top: 0.6rem; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 0.4rem; align-items: flex-start; }
         .qh-reopen .modal-input { width: 100%; }
+        /* Messages tab (B10) */
+        .msg-row { display: flex; align-items: center; gap: 0.55rem; padding: 0.35rem 0.3rem; border-bottom: 1px solid var(--border); min-width: 0; }
+        .msg-group { cursor: pointer; }
+        .msg-group:hover { background: var(--surface); }
+        .msg-type { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.04em; flex: 0 0 auto; }
+        .msg-route { flex: 0 0 auto; white-space: nowrap; }
+        .msg-content { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+        .msg-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; display: inline-block; }
+        .msg-dot.msg-unread { background: var(--honey); }
+        .msg-dot.msg-read { background: var(--border); }
+        .msg-group-detail { padding: 0.2rem 0 0.4rem 1.5rem; border-bottom: 1px solid var(--border); }
+        .msg-sub { display: flex; align-items: center; gap: 0.4rem; padding: 0.1rem 0; }
         /* Stack to two rows when the row gets too narrow for everything inline. */
         @media (max-width: 900px) {
             .pb-row-inner { flex-wrap: wrap; }

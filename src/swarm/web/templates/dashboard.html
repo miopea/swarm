@@ -239,6 +239,9 @@
                     <button class="tab-btn" id="tab-queen-btn" role="tab" aria-selected="false" aria-controls="tab-queen" data-action="switchTab" data-tab="queen">
                         Queen
                     </button>
+                    <button class="tab-btn" id="tab-messages-btn" role="tab" aria-selected="false" aria-controls="tab-messages" data-action="switchTab" data-tab="messages">
+                        Messages
+                    </button>
                     <button class="tab-btn" id="tab-buzz-btn" role="tab" aria-selected="false" aria-controls="tab-buzz" data-action="switchTab" data-tab="buzz">
                         Activity <span id="notif-badge" class="notification-badge" style="display:none">0</span>
                     </button>
@@ -437,6 +440,23 @@
                     <div class="modal-padding modal-body-scroll" id="qh-detail-body">
                         <div class="empty-state">Loading…</div>
                     </div>
+                </div>
+            </div>
+            <!-- Messages — operator view of inter-worker traffic (B10) -->
+            <div class="tab-content" id="tab-messages" role="tabpanel" aria-labelledby="tab-messages-btn">
+                <div class="filter-bar" id="msg-filter-bar">
+                    <label class="text-sm" style="display:flex;align-items:center;gap:0.3rem">
+                        <input type="checkbox" id="msg-filter-unread" data-input-action="msgFilterChanged"> unread only
+                    </label>
+                    <input type="date" id="msg-filter-since" class="modal-select" style="max-width:150px" data-input-action="msgFilterChanged" title="From date (sent on/after)">
+                    <input type="date" id="msg-filter-until" class="modal-select" style="max-width:150px" data-input-action="msgFilterChanged" title="To date (sent on/before)">
+                    <input type="text" id="msg-search" placeholder="Search messages…" class="task-search" data-input-action="msgSearchChanged" title="Search message content">
+                </div>
+                <div class="panel-body" id="messages-list">
+                    <div class="empty-state"><div class="mt-sm">Loading…</div></div>
+                </div>
+                <div id="msg-load-more-wrap" style="display:none;text-align:center;padding:0.5rem">
+                    <button class="btn btn-sm btn-secondary" data-action="msgLoadMore">Load more</button>
                 </div>
             </div>
             <!-- Activity — unified swarm event log (renamed from Buzz Log in Ship A.5) -->

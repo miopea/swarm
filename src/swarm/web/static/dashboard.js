@@ -165,6 +165,8 @@
         qhHideDetail: function() { qhHideDetail(); },
         qhReopenSend: function() { qhReopenSend(); },
         qhViewInCC: function() { qhViewInCC(); },
+        msgLoadMore: function() { msgLoadMore(); },
+        msgToggleGroup: function(el) { msgToggleGroup(el.dataset.msgGroup); },
         ccMobileFocus: function(el) { ccMobileFocus(el.dataset.ccFocus); },
         toggleResourcePopover: function(el, e) { e.stopPropagation(); toggleResourcePopover(); },
         toggleBottomPanel: function() { toggleBottomPanel(); },
@@ -241,14 +243,16 @@
         else if (action === 'debouncedBuzzSearch') debouncedBuzzSearch(el.value);
         else if (action === 'workerSearch') filterWorkers(el.value);
         else if (action === 'qhSearchChanged') qhSearchChanged(el.value);
+        else if (action === 'msgSearchChanged') msgSearchChanged(el.value);
     });
 
-    // Change delegation for [data-input-action] on <select>/<input type=date>
+    // Change delegation for [data-input-action] on <select>/<input type=date/checkbox>
     // (these fire `change`, not `input`).
     document.addEventListener('change', function(e) {
         var el = e.target.closest('[data-input-action]');
         if (!el) return;
         if (el.dataset.inputAction === 'qhFilterChanged') qhFilterChanged();
+        else if (el.dataset.inputAction === 'msgFilterChanged') msgFilterChanged();
     });
 
     // Mobile email file upload (visible button for touch devices)
@@ -830,6 +834,11 @@
             case 'dstate_alert':
                 showToast('D-state processes detected: ' + Object.values(data.pids || {}).join(', '), true, BEE.surprised);
                 notifyBrowser('D-State Alert', 'Uninterruptible processes: ' + Object.values(data.pids || {}).join(', '), true);
+                break;
+            case 'message':
+                // Inter-worker message sent/broadcast — live-refresh the
+                // Messages tab when it's the active view (debounced).
+                msgMaybeLiveRefresh();
                 break;
             default:
                 console.debug('[swarm-ws] unknown event type:', data.type);
@@ -5300,6 +5309,8 @@
             refreshPlaybooks();
         } else if (tab === 'queen') {
             refreshQueenHistory();
+        } else if (tab === 'messages') {
+            refreshMessages();
         } else if (tab === 'buzz') {
             unreadNotifications = 0;
             var badge = document.getElementById('notif-badge');
@@ -5542,6 +5553,170 @@
         var modal = document.getElementById('qh-detail-modal');
         if (modal) modal.style.display = 'none';
         _qhDetailThread = null;
+    }
+
+    // --- Messages tab (B10): operator view of inter-worker traffic ---
+    // READ-ONLY: this view must never call mark_read — worker read-state
+    // drives the coordination nudges and the operator browsing must not
+    // touch it.
+    var _msgFilters = { q: '', unread_only: false, since: '', until: '' };
+    var _msgLimit = 50;
+    var _msgOffset = 0;
+    var _msgSearchTimer = null;
+    var _msgLiveTimer = null;
+    var _msgGroups = [];
+    var _MSG_TYPE_CLASS = {
+        'warning': 'text-poppy', 'dependency': 'text-honey',
+        'finding': 'text-leaf', 'status': 'text-lavender',
+        'operator': 'text-muted', 'note': 'text-muted'
+    };
+
+    function _msgQueryString() {
+        var p = [];
+        if (_msgFilters.q) p.push('q=' + encodeURIComponent(_msgFilters.q));
+        if (_msgFilters.unread_only) p.push('unread_only=true');
+        var since = _qhDateToEpoch(_msgFilters.since, false);
+        var until = _qhDateToEpoch(_msgFilters.until, true);
+        if (since) p.push('since=' + since);
+        if (until) p.push('until=' + until);
+        p.push('limit=' + _msgLimit);
+        p.push('offset=' + _msgOffset);
+        return p.join('&');
+    }
+
+    function refreshMessages() {
+        _msgOffset = 0;
+        _msgFetch(false);
+    }
+
+    function msgLoadMore() {
+        _msgOffset += _msgLimit;
+        _msgFetch(true);
+    }
+
+    function _msgFetch(append) {
+        var list = document.getElementById('messages-list');
+        if (!list) return;
+        if (!append) {
+            list.innerHTML = '<div class="empty-state"><div class="mt-sm">Loading…</div></div>';
+            _msgGroups = [];
+        }
+        fetch('/api/messages?' + _msgQueryString(), { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var msgs = (data && data.messages) || [];
+                _msgRender(_msgCollapse(msgs), append, msgs.length);
+            })
+            .catch(function() {
+                if (!append) list.innerHTML = '<div class="empty-state">Failed to load messages.</div>';
+            });
+    }
+
+    // Collapse a `*` broadcast (one DB row per recipient) back into one
+    // logical row. Group by sender+type+content within a tight created_at
+    // window; the flat list is created_at DESC so broadcast rows are adjacent.
+    function _msgCollapse(messages) {
+        var groups = [];
+        var byKey = {};
+        messages.forEach(function(m) {
+            var key = m.from + '|' + m.type + '|' + m.content;
+            var g = byKey[key];
+            if (g && Math.abs(g.created_at - m.created_at) <= 3) {
+                g.members.push(m);
+            } else {
+                g = { from: m.from, type: m.type, content: m.content,
+                      created_at: m.created_at, members: [m] };
+                byKey[key] = g;
+                groups.push(g);
+            }
+        });
+        return groups;
+    }
+
+    function _msgRender(groups, append, rawCount) {
+        var list = document.getElementById('messages-list');
+        var moreWrap = document.getElementById('msg-load-more-wrap');
+        if (!list) return;
+        if (!append && groups.length === 0) {
+            var anyFilter = _msgFilters.q || _msgFilters.unread_only
+                || _msgFilters.since || _msgFilters.until;
+            list.innerHTML = anyFilter
+                ? '<div class="empty-state"><div class="mt-sm">No messages match — clear filters.</div></div>'
+                : '<div class="empty-state"><div class="mt-sm">Workers haven\'t sent any messages yet.</div></div>';
+            if (moreWrap) moreWrap.style.display = 'none';
+            return;
+        }
+        var base = _msgGroups.length;
+        _msgGroups = append ? _msgGroups.concat(groups) : groups;
+        var html = groups.map(function(g, i) { return _msgRow(g, base + i); }).join('');
+        if (append) list.insertAdjacentHTML('beforeend', html);
+        else list.innerHTML = html;
+        // Load-more keys off raw row count vs page size (pre-collapse), so a
+        // page that's all broadcasts still pages correctly.
+        if (moreWrap) moreWrap.style.display = (rawCount >= _msgLimit) ? 'block' : 'none';
+        formatLocalTimes(list);
+    }
+
+    function _msgRow(g, idx) {
+        var cls = _MSG_TYPE_CLASS[g.type] || 'text-muted';
+        var content = '<span class="msg-content">' + escapeHtml(g.content) + '</span>';
+        var time = '<span class="local-time text-muted text-xs" data-ts="' + g.created_at + '"></span>';
+        var typeBadge = '<span class="msg-type ' + cls + '">' + escapeHtml(g.type) + '</span>';
+        if (g.members.length > 1) {
+            var readN = g.members.filter(function(m) { return m.read_at; }).length;
+            var sub = g.members.map(function(m) {
+                return '<div class="msg-sub"><span class="text-xs text-muted">'
+                    + escapeHtml(m.to) + '</span> <span class="msg-dot '
+                    + (m.read_at ? 'msg-read' : 'msg-unread') + '"></span></div>';
+            }).join('');
+            return '<div class="msg-row msg-group" data-action="msgToggleGroup" data-msg-group="'
+                + idx + '" role="button" tabindex="0">'
+                + typeBadge
+                + '<span class="msg-route text-xs text-muted">' + escapeHtml(g.from) + ' → * ('
+                + g.members.length + ')</span>'
+                + content + time
+                + '<span class="text-xs text-muted">' + readN + '/' + g.members.length + ' read</span>'
+                + '</div>'
+                + '<div class="msg-group-detail" id="msg-group-' + idx + '" style="display:none">'
+                + sub + '</div>';
+        }
+        var m = g.members[0];
+        return '<div class="msg-row">'
+            + typeBadge
+            + '<span class="msg-route text-xs text-muted">' + escapeHtml(m.from) + ' → '
+            + escapeHtml(m.to) + '</span>'
+            + content + time
+            + '<span class="msg-dot ' + (m.read_at ? 'msg-read' : 'msg-unread') + '" title="'
+            + (m.read_at ? 'read' : 'unread') + '"></span>'
+            + '</div>';
+    }
+
+    function msgToggleGroup(idx) {
+        var el = document.getElementById('msg-group-' + idx);
+        if (el) el.style.display = (el.style.display === 'none') ? 'block' : 'none';
+    }
+
+    function msgSearchChanged(val) {
+        _msgFilters.q = (val || '').trim();
+        if (_msgSearchTimer) clearTimeout(_msgSearchTimer);
+        _msgSearchTimer = setTimeout(refreshMessages, 250);
+    }
+
+    function msgFilterChanged() {
+        var unread = document.getElementById('msg-filter-unread');
+        var since = document.getElementById('msg-filter-since');
+        var until = document.getElementById('msg-filter-until');
+        _msgFilters.unread_only = unread ? unread.checked : false;
+        _msgFilters.since = since ? since.value : '';
+        _msgFilters.until = until ? until.value : '';
+        refreshMessages();
+    }
+
+    function msgMaybeLiveRefresh() {
+        var panel = document.getElementById('tab-messages');
+        if (!panel || !panel.classList.contains('active')) return;
+        if (_msgLiveTimer) clearTimeout(_msgLiveTimer);
+        _msgLiveTimer = setTimeout(refreshMessages, 400);
     }
 
     // --- Mobile overflow menu ---

@@ -1011,5 +1011,13 @@ def test_dashboard_template_renders_queen_history_tab():
         'id="qh-search"',
         'id="qh-load-more-wrap"',
         'id="qh-detail-modal"',
+        # B10 Messages tab
+        'id="tab-messages-btn"',
+        'id="tab-messages"',
+        'data-tab="messages"',
+        'id="messages-list"',
+        'id="msg-filter-unread"',
+        'id="msg-search"',
+        'id="msg-load-more-wrap"',
     ):
-        assert marker in html, f"missing Queen-tab marker: {marker}"
+        assert marker in html, f"missing dashboard tab marker: {marker}"

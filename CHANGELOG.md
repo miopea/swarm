@@ -10,6 +10,22 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.20.6] - 2026-06-20
+
+### Features
+
+- **Messages tab** (feature B10, phase 2 of 3). New "Messages" tab in the
+  dashboard bottom panel: a searchable, read-only view of inter-worker
+  traffic (findings, warnings, dependencies, status, notes). Content
+  search, an unread-only toggle, and a date range; rows show a type badge,
+  sender → recipient, content, time, and a read/unread dot. A `*` broadcast
+  (one DB row per recipient) is **collapsed client-side** into a single
+  `→ * (N)` row, expandable to per-recipient read state. "Load more" pages
+  through history, and the list **live-refreshes** off the existing
+  `message` WebSocket event when the tab is open. The view never marks
+  anything read — worker read-state is left untouched. (Phase 3 — bulk
+  delete + a compose box — follows.)
+
 ## [2026.6.20.5] - 2026-06-20
 
 ### Features
