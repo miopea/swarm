@@ -133,18 +133,47 @@ async def _parse_json(request: web.Request) -> dict[str, object] | web.Response:
     return data
 
 
+def _query_float(request: web.Request, key: str) -> float | None:
+    raw = request.query.get(key)
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 @handle_errors
 async def handle_list_threads(request: web.Request) -> web.Response:
     d = get_daemon(request)
     status = (request.query.get("status") or "").strip() or None
     kind = (request.query.get("kind") or "").strip() or None
     worker = (request.query.get("worker") or "").strip() or None
+    search = (request.query.get("q") or "").strip() or None
+    since = _query_float(request, "since")
+    until = _query_float(request, "until")
     try:
         limit = min(int(request.query.get("limit", "100")), 500)
     except ValueError:
         limit = 100
-    threads = d.queen_chat.list_threads(status=status, kind=kind, worker_name=worker, limit=limit)
-    return web.json_response({"threads": [t.to_dict() for t in threads]})
+    try:
+        offset = max(0, int(request.query.get("offset", "0")))
+    except ValueError:
+        offset = 0
+    threads = d.queen_chat.list_threads(
+        status=status,
+        kind=kind,
+        worker_name=worker,
+        search=search,
+        since=since,
+        until=until,
+        limit=limit,
+        offset=offset,
+    )
+    counts = d.queen_chat.message_counts([t.id for t in threads])
+    return web.json_response(
+        {"threads": [t.to_dict() | {"message_count": counts.get(t.id, 0)} for t in threads]}
+    )
 
 
 @handle_errors

@@ -173,7 +173,11 @@ class QueenChatStore(BaseStore):
         status: str | None = None,
         kind: str | None = None,
         worker_name: str | None = None,
+        search: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> list[QueenThread]:
         clauses: list[str] = []
         params: list[Any] = []
@@ -186,12 +190,45 @@ class QueenChatStore(BaseStore):
         if worker_name:
             clauses.append("worker_name = ?")
             params.append(worker_name)
+        if search:
+            # EXISTS (not JOIN+DISTINCT) so a thread matching multiple messages
+            # still returns exactly once and the row shape stays clean.
+            clauses.append(
+                "(title LIKE ? OR EXISTS (SELECT 1 FROM queen_messages m "
+                "WHERE m.thread_id = queen_threads.id AND m.content LIKE ?))"
+            )
+            needle = f"%{search}%"
+            params.extend([needle, needle])
+        if since is not None:
+            clauses.append("updated_at >= ?")
+            params.append(since)
+        if until is not None:
+            clauses.append("updated_at <= ?")
+            params.append(until)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-        sql = f"SELECT * FROM queen_threads {where} ORDER BY updated_at DESC LIMIT ?"
-        params.append(limit)
+        sql = f"SELECT * FROM queen_threads {where} ORDER BY updated_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
         with self._lock:
             rows = self._db.fetchall(sql, tuple(params))
             return [_row_to_thread(r) for r in rows]
+
+    def message_counts(self, thread_ids: list[str]) -> dict[str, int]:
+        """Batch message count per thread — one query for a whole page.
+
+        Threads with no messages are absent from the result (callers
+        default to 0). Keeps ``list_threads`` returning plain QueenThread
+        objects while the route assembles ``to_dict() | {message_count}``.
+        """
+        if not thread_ids:
+            return {}
+        placeholders = ",".join("?" for _ in thread_ids)
+        sql = (
+            f"SELECT thread_id, COUNT(*) AS n FROM queen_messages "
+            f"WHERE thread_id IN ({placeholders}) GROUP BY thread_id"
+        )
+        with self._lock:
+            rows = self._db.fetchall(sql, tuple(thread_ids))
+        return {r["thread_id"]: r["n"] for r in rows}
 
     def resolve_thread(
         self,

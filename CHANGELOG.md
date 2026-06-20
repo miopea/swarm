@@ -10,6 +10,29 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.20.2] - 2026-06-20
+
+### Features
+
+- **Queen history backend** (feature B4, phase 1 of 3). `GET /api/queen/threads`
+  is now filterable + searchable for the upcoming history tab: new `q`
+  (LIKE over thread title **and** message bodies, via an `EXISTS` sub-query
+  so each thread returns once), `since`/`until` (on `updated_at`), and
+  `offset` params, and each row now carries a `message_count` (batched in
+  one query via `QueenChatStore.message_counts`). All new params are
+  optional — the command center's existing poll is unaffected.
+
+### Changes
+
+- **Resolved Queen chat threads now have a retention policy.** The
+  previously-dormant `QueenChatStore.purge_old()` is wired into the daily
+  DB-maintenance loop, governed by a new `queen.queen_thread_retention_days`
+  config knob (default **90**; `0` = keep forever). Active threads are
+  never purged. Without this the `queen_threads`/`queen_messages` tables
+  grew unbounded.
+
+### Fixes
+
 ## [2026.6.20] - 2026-06-20
 
 ### Features

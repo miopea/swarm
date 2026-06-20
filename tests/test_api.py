@@ -3198,3 +3198,60 @@ async def test_messages_delete_endpoint(client, daemon, tmp_path):
 
     resp = await client.post("/api/messages/delete", json={"ids": []}, headers=_API_HEADERS)
     assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_queen_threads_list_includes_message_count(client, daemon):
+    t = daemon.queen_chat.create_thread(title="counted", kind="operator")
+    daemon.queen_chat.add_message(t.id, role="operator", content="one")
+    daemon.queen_chat.add_message(t.id, role="queen", content="two")
+    resp = await client.get("/api/queen/threads")
+    assert resp.status == 200
+    threads = (await resp.json())["threads"]
+    row = next(r for r in threads if r["id"] == t.id)
+    assert row["message_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_queen_threads_search_param(client, daemon):
+    a = daemon.queen_chat.create_thread(title="auth deploy", kind="operator")
+    daemon.queen_chat.add_message(a.id, role="operator", content="x")
+    b = daemon.queen_chat.create_thread(title="unrelated", kind="operator")
+    daemon.queen_chat.add_message(b.id, role="operator", content="redis migration notes")
+
+    resp = await client.get("/api/queen/threads?q=auth")
+    titles = [r["title"] for r in (await resp.json())["threads"]]
+    assert titles == ["auth deploy"]
+
+    # body match
+    resp2 = await client.get("/api/queen/threads?q=redis")
+    titles2 = [r["title"] for r in (await resp2.json())["threads"]]
+    assert titles2 == ["unrelated"]
+
+
+@pytest.mark.asyncio
+async def test_queen_threads_offset_paginates(client, daemon):
+    for i in range(4):
+        daemon.queen_chat.create_thread(title=f"p{i}", kind="operator")
+    r1 = await client.get("/api/queen/threads?limit=2&offset=0")
+    r2 = await client.get("/api/queen/threads?limit=2&offset=2")
+    ids1 = {t["id"] for t in (await r1.json())["threads"]}
+    ids2 = {t["id"] for t in (await r2.json())["threads"]}
+    assert len(ids1) == 2 and len(ids2) == 2
+    assert ids1.isdisjoint(ids2)
+
+
+@pytest.mark.asyncio
+async def test_purge_queen_threads_uses_configured_window(daemon):
+    """_purge_queen_threads passes the configured retention window and skips on 0."""
+    daemon.config.queen.queen_thread_retention_days = 45
+    daemon.queen_chat = MagicMock()
+    daemon.queen_chat.purge_old.return_value = 3
+    assert daemon._purge_queen_threads() == 3
+    daemon.queen_chat.purge_old.assert_called_once_with(retention_days=45)
+
+    # 0 = keep forever → no purge call
+    daemon.queen_chat.purge_old.reset_mock()
+    daemon.config.queen.queen_thread_retention_days = 0
+    assert daemon._purge_queen_threads() == 0
+    daemon.queen_chat.purge_old.assert_not_called()

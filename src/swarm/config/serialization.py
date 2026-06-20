@@ -32,6 +32,7 @@ def _serialize_queen(q: QueenConfig) -> dict[str, Any]:
         "max_session_calls": q.max_session_calls,
         "max_session_age": q.max_session_age,
         "auto_assign_tasks": q.auto_assign_tasks,
+        "queen_thread_retention_days": q.queen_thread_retention_days,
     }
     if q.system_prompt:
         d["system_prompt"] = q.system_prompt

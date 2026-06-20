@@ -374,6 +374,7 @@ def _parse_config(path: Path) -> HiveConfig:
         max_session_calls=queen_data.get("max_session_calls", 20),
         max_session_age=queen_data.get("max_session_age", 1800.0),
         auto_assign_tasks=queen_data.get("auto_assign_tasks", True),
+        queen_thread_retention_days=queen_data.get("queen_thread_retention_days", 90),
         oversight=oversight,
     )
 

@@ -1187,23 +1187,38 @@ paths:
   /api/queen/threads:
     get:
       tags: [Queen]
-      summary: List Queen chat threads
+      summary: List Queen chat threads (filterable + searchable for the history tab)
       parameters:
         - name: status
           in: query
-          schema: { type: string }
+          schema: { type: string, enum: [active, resolved] }
         - name: kind
           in: query
           schema: { type: string }
         - name: worker
           in: query
           schema: { type: string }
+        - name: q
+          in: query
+          description: Search over thread title and message bodies (LIKE)
+          schema: { type: string }
+        - name: since
+          in: query
+          description: Only threads with updated_at >= this epoch seconds
+          schema: { type: number }
+        - name: until
+          in: query
+          description: Only threads with updated_at <= this epoch seconds
+          schema: { type: number }
         - name: limit
           in: query
           schema: { type: integer, default: 100, maximum: 500 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0, minimum: 0 }
       responses:
         "200":
-          description: Threads
+          description: Threads (each row includes message_count)
     post:
       tags: [Queen]
       summary: Start a new Queen chat thread with an opening message

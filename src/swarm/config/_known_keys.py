@@ -89,6 +89,7 @@ _KNOWN_QUEEN_KEYS = {
     "max_session_calls",
     "max_session_age",
     "auto_assign_tasks",
+    "queen_thread_retention_days",
     "oversight",
 }
 

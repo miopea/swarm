@@ -261,6 +261,10 @@ class QueenConfig:
     max_session_calls: int = 20
     max_session_age: float = 1800.0  # 30 minutes
     auto_assign_tasks: bool = True
+    # Resolved chat threads older than this are purged by the daily DB
+    # maintenance loop (the Queen history tab keeps them browsable until
+    # then). 0 = keep forever. Active threads are never purged.
+    queen_thread_retention_days: int = 90
     oversight: OversightConfig = field(default_factory=OversightConfig)
 
 

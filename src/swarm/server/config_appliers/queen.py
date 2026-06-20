@@ -27,6 +27,13 @@ _QUEEN_FIELDS: tuple[tuple[str, tuple[type, ...], Any, str, Any], ...] = (
     ("max_session_calls", (int,), None, "must be >= 1", lambda v: v >= 1),
     ("max_session_age", (int, float), float, "must be > 0", lambda v: v > 0),
     ("auto_assign_tasks", (bool,), None, "must be boolean", None),
+    (
+        "queen_thread_retention_days",
+        (int,),
+        None,
+        "must be >= 0 (0 = keep forever)",
+        lambda v: v >= 0,
+    ),
 )
 
 
@@ -42,6 +49,7 @@ _CUSTOM_KEYS: frozenset[str] = frozenset(
         "max_session_calls",
         "max_session_age",
         "auto_assign_tasks",
+        "queen_thread_retention_days",
         "oversight",
     }
 )
@@ -92,7 +100,7 @@ def apply_queen(
 ) -> FieldOutcome:
     """Validate and apply the ``queen`` section of a config update.
 
-    ``_QUEEN_FIELDS`` covers the seven primitive scalars with
+    ``_QUEEN_FIELDS`` covers the primitive scalars with
     range-check semantics; ``oversight`` is a nested dataclass
     validated by ``_apply_queen_oversight``.  Generic dispatch runs as
     a final pass to surface any unknown sub-key as a WARNING (Phase 3

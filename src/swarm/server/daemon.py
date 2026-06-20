@@ -935,8 +935,26 @@ class SwarmDaemon(EventEmitter):
                         # Data-safety op — operators run WARNING-level logs
                         # and need to know backups are silently failing.
                         _log.warning("DB backup failed", exc_info=True)
+                    self._purge_queen_threads()
         except asyncio.CancelledError:
             return
+
+    def _purge_queen_threads(self) -> int:
+        """Purge resolved Queen chat threads past the retention window.
+
+        Keeps the queen_threads/queen_messages tables from growing
+        unbounded once the history tab makes old threads worth keeping
+        for a while. Active threads are never purged; ``0`` retention
+        means keep forever. Returns the number removed (0 on skip/error).
+        """
+        try:
+            chat = getattr(self, "queen_chat", None)
+            days = getattr(self.config.queen, "queen_thread_retention_days", 90)
+            if chat is not None and days and days > 0:
+                return chat.purge_old(retention_days=days)
+        except Exception:
+            _log.warning("queen thread purge failed", exc_info=True)
+        return 0
 
     async def _invariant_reconcile_loop(self) -> None:
         """Periodic INV-1/2 reconcile, independent of worker state changes.
