@@ -44,6 +44,8 @@ from swarm.mcp.handlers._park import TOOLS as _PARK_T
 # ``_handle_create_task``, ``_handle_complete_task``, ``_handle_task_status``
 # directly; the split keeps those imports working unchanged.)
 from swarm.mcp.handlers._park import _handle_park_task  # noqa: F401
+from swarm.mcp.handlers._peers import HANDLERS as _PEERS_H
+from swarm.mcp.handlers._peers import TOOLS as _PEERS_T
 from swarm.mcp.handlers._playbooks import HANDLERS as _PB_H
 from swarm.mcp.handlers._playbooks import TOOLS as _PB_T
 from swarm.mcp.handlers._playbooks import _handle_get_playbooks  # noqa: F401
@@ -129,6 +131,7 @@ TOOLS: list[dict[str, Any]] = [
     *_LEARN_T,
     *_PB_T,
     *_PROG_T,
+    *_PEERS_T,
     *_BATCH_T,
 ]
 
@@ -143,6 +146,7 @@ _HANDLERS = {
     **_LEARN_H,
     **_PB_H,
     **_PROG_H,
+    **_PEERS_H,
     **_BATCH_H,
 }
 

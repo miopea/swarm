@@ -89,6 +89,12 @@ class TaskStatusArgs(TypedDict, total=False):
     number: int
 
 
+class QueryPeersArgs(TypedDict, total=False):
+    """``swarm_query_peers`` — read-only snapshot of peer worker state."""
+
+    state: str  # optional filter, e.g. "RESTING"
+
+
 class ClaimFileArgs(TypedDict, total=False):
     """``swarm_claim_file`` — advisory lock on a path."""
 

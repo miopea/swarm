@@ -33,10 +33,12 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "swarm_task_status",
         "description": (
-            "Query the Swarm task board. Call this when you need to see what work is queued, "
-            "who owns what, or to check whether a task you created has been picked up yet. "
-            "Use filter='mine' to list only your own tasks, 'unassigned' to find queen-eligible "
-            "work, 'assigned' for anything with an owner, or omit filter for everything. "
+            "Query the Swarm task board — including YOUR OWN assigned work. "
+            "Call swarm_task_status with filter='mine' to see just your tasks (your "
+            "current work + your queue) — this is your 'what am I supposed to be doing?' "
+            "lookup; pass include_completed=true to also see your recent closeouts. "
+            "Other filters: 'unassigned' to find queen-eligible work, 'assigned' for "
+            "anything with an owner, or omit filter for the whole board. "
             "Open tasks (backlog/unassigned/assigned/active) come first, newest-by-number first; "
             "done/failed tasks sort after, most-recently-completed first. Results are "
             "capped at ``limit`` (default 50, max 500); when output is truncated a summary "

@@ -10,6 +10,32 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.20] - 2026-06-20
+
+### Features
+
+- **`swarm_query_peers` MCP tool** (feature B11). A worker can now get a
+  read-only snapshot of its peers' live state to make an informed handoff
+  decision: per running peer (excluding the Queen and the caller) it
+  returns state, current task, context %, idle duration, and **queued-task
+  count** — so a peer that reads RESTING but has work queued isn't
+  mistaken for free. Idle peers sort first. The tool exposes **no** action
+  surface: workers still cannot interrupt each other, so to act they use
+  `swarm_create_task` or `swarm_send_message`. (`mcp/handlers/_peers.py`.)
+  The `swarm_list_my_tasks` half of B11 was intentionally dropped —
+  `swarm_task_status(filter='mine')` already covers it.
+
+### Changes
+
+- **`/swarm-status` now reads real peer state** via `swarm_query_peers`
+  instead of inferring peer activity from the task board, making good on
+  the command's long-standing "peer worker status" promise.
+- **`swarm_task_status` description foregrounds `filter='mine'`** so a
+  worker looking for "what am I supposed to be doing?" finds its own-tasks
+  lookup immediately (discoverability fix; no behavior change).
+
+### Fixes
+
 ## [2026.6.13.5] - 2026-06-13
 
 ### Features
