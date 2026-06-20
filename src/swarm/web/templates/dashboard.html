@@ -451,6 +451,28 @@
                     <input type="date" id="msg-filter-since" class="modal-select" style="max-width:150px" data-input-action="msgFilterChanged" title="From date (sent on/after)">
                     <input type="date" id="msg-filter-until" class="modal-select" style="max-width:150px" data-input-action="msgFilterChanged" title="To date (sent on/before)">
                     <input type="text" id="msg-search" placeholder="Search messages…" class="task-search" data-input-action="msgSearchChanged" title="Search message content">
+                    <button class="btn btn-sm btn-secondary" data-action="msgToggleCompose" title="Send a message to a worker">Compose</button>
+                    <button class="btn btn-sm btn-secondary" id="msg-select-toggle" data-action="msgToggleSelect" title="Select messages to delete">Select</button>
+                    <span id="msg-bulk-actions" style="display:none" class="flex-center gap-sm">
+                        <span id="msg-bulk-count" class="text-sm text-muted">0 selected</span>
+                        <button class="btn btn-sm btn-secondary btn-remove" data-action="msgBulkDelete">Delete</button>
+                        <button class="btn btn-sm btn-secondary" data-action="msgClearSelect">Clear</button>
+                    </span>
+                </div>
+                <div id="msg-compose" class="msg-compose" style="display:none">
+                    <select id="msg-compose-to" class="modal-select" style="max-width:160px" title="Recipient">
+                        <option value="*">* (broadcast)</option>
+                    </select>
+                    <select id="msg-compose-type" class="modal-select" style="max-width:130px" title="Message type">
+                        <option value="finding">finding</option>
+                        <option value="warning">warning</option>
+                        <option value="dependency">dependency</option>
+                        <option value="status">status</option>
+                        <option value="operator">operator</option>
+                        <option value="note">note</option>
+                    </select>
+                    <input type="text" id="msg-compose-content" class="modal-input" style="flex:1 1 auto" placeholder="Message…">
+                    <button class="btn btn-sm" data-action="msgSendCompose">Send</button>
                 </div>
                 <div class="panel-body" id="messages-list">
                     <div class="empty-state"><div class="mt-sm">Loading…</div></div>

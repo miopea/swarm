@@ -167,6 +167,11 @@
         qhViewInCC: function() { qhViewInCC(); },
         msgLoadMore: function() { msgLoadMore(); },
         msgToggleGroup: function(el) { msgToggleGroup(el.dataset.msgGroup); },
+        msgToggleCompose: function() { msgToggleCompose(); },
+        msgSendCompose: function() { msgSendCompose(); },
+        msgToggleSelect: function() { msgToggleSelect(); },
+        msgBulkDelete: function() { msgBulkDelete(); },
+        msgClearSelect: function() { msgClearSelect(); },
         ccMobileFocus: function(el) { ccMobileFocus(el.dataset.ccFocus); },
         toggleResourcePopover: function(el, e) { e.stopPropagation(); toggleResourcePopover(); },
         toggleBottomPanel: function() { toggleBottomPanel(); },
@@ -193,6 +198,10 @@
 
     // Click delegation for [data-action]
     document.body.addEventListener('click', function(e) {
+        // A checkbox nested inside a [data-action] row (e.g. a message
+        // select box inside a clickable broadcast group) must toggle the
+        // box, not fire the row action.
+        if (e.target.closest('input[type="checkbox"]')) return;
         var el = e.target.closest('[data-action]');
         if (!el) return;
         var fn = _actions[el.dataset.action];
@@ -286,6 +295,20 @@
         if (cb.checked) bulkSelectedIds.add(id);
         else bulkSelectedIds.delete(id);
         updateBulkCount();
+    });
+
+    // Checkbox delegation for bulk message selection (B10). A row's box
+    // carries one or more underlying message ids (a collapsed broadcast
+    // selects/deletes all its members at once).
+    document.addEventListener('change', function(e) {
+        var cb = e.target.closest('.msg-select-cb');
+        if (!cb) return;
+        (cb.dataset.msgIds || '').split(',').forEach(function(id) {
+            if (!id) return;
+            if (cb.checked) _msgSelectedIds[id] = true;
+            else delete _msgSelectedIds[id];
+        });
+        _msgUpdateBulkCount();
     });
 
     // Restore checkbox state after HTMX refreshes task list
@@ -5565,6 +5588,8 @@
     var _msgSearchTimer = null;
     var _msgLiveTimer = null;
     var _msgGroups = [];
+    var _msgSelectMode = false;
+    var _msgSelectedIds = {};   // id -> true
     var _MSG_TYPE_CLASS = {
         'warning': 'text-poppy', 'dependency': 'text-honey',
         'finding': 'text-leaf', 'status': 'text-lavender',
@@ -5662,6 +5687,10 @@
         var content = '<span class="msg-content">' + escapeHtml(g.content) + '</span>';
         var time = '<span class="local-time text-muted text-xs" data-ts="' + g.created_at + '"></span>';
         var typeBadge = '<span class="msg-type ' + cls + '">' + escapeHtml(g.type) + '</span>';
+        var ids = g.members.map(function(m) { return m.id; }).join(',');
+        var checked = g.members.every(function(m) { return _msgSelectedIds[m.id]; }) ? ' checked' : '';
+        var cb = '<input type="checkbox" class="msg-select-cb" data-msg-ids="' + ids + '"'
+            + checked + ' style="display:' + (_msgSelectMode ? 'inline' : 'none') + '">';
         if (g.members.length > 1) {
             var readN = g.members.filter(function(m) { return m.read_at; }).length;
             var sub = g.members.map(function(m) {
@@ -5671,7 +5700,7 @@
             }).join('');
             return '<div class="msg-row msg-group" data-action="msgToggleGroup" data-msg-group="'
                 + idx + '" role="button" tabindex="0">'
-                + typeBadge
+                + cb + typeBadge
                 + '<span class="msg-route text-xs text-muted">' + escapeHtml(g.from) + ' → * ('
                 + g.members.length + ')</span>'
                 + content + time
@@ -5682,7 +5711,7 @@
         }
         var m = g.members[0];
         return '<div class="msg-row">'
-            + typeBadge
+            + cb + typeBadge
             + '<span class="msg-route text-xs text-muted">' + escapeHtml(m.from) + ' → '
             + escapeHtml(m.to) + '</span>'
             + content + time
@@ -5717,6 +5746,102 @@
         if (!panel || !panel.classList.contains('active')) return;
         if (_msgLiveTimer) clearTimeout(_msgLiveTimer);
         _msgLiveTimer = setTimeout(refreshMessages, 400);
+    }
+
+    // Compose — operator sends a message to a worker or broadcasts.
+    function msgToggleCompose() {
+        var box = document.getElementById('msg-compose');
+        if (!box) return;
+        var showing = box.style.display !== 'none';
+        box.style.display = showing ? 'none' : 'flex';
+        if (!showing) _msgPopulateComposeTargets();
+    }
+
+    function _msgPopulateComposeTargets() {
+        var sel = document.getElementById('msg-compose-to');
+        if (!sel) return;
+        var current = sel.value;
+        var names = [];
+        document.querySelectorAll('.worker-item[data-worker]').forEach(function(el) {
+            if (el.dataset.worker) names.push(el.dataset.worker);
+        });
+        names.sort();
+        var opts = ['<option value="*">* (broadcast)</option>'];
+        names.forEach(function(n) {
+            opts.push('<option value="' + escapeHtml(n) + '"'
+                + (n === current ? ' selected' : '') + '>' + escapeHtml(n) + '</option>');
+        });
+        sel.innerHTML = opts.join('');
+        if (current) sel.value = current;
+    }
+
+    function msgSendCompose() {
+        var to = document.getElementById('msg-compose-to');
+        var type = document.getElementById('msg-compose-type');
+        var content = document.getElementById('msg-compose-content');
+        if (!to || !type || !content) return;
+        var body = (content.value || '').trim();
+        if (!body) { showToast('Enter a message', true); return; }
+        fetch('/api/messages/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
+            body: JSON.stringify({ from: 'operator', to: to.value, type: type.value, content: body }),
+        })
+            .then(function(r) { if (!r.ok) throw new Error('send failed'); return r.json(); })
+            .then(function(data) {
+                showToast(data.fanout
+                    ? ('Broadcast sent to ' + data.fanout + ' worker(s)')
+                    : ('Message sent to ' + to.value));
+                content.value = '';
+                refreshMessages();
+            })
+            .catch(function() { showToast('Failed to send message', true); });
+    }
+
+    // Bulk delete — multi-select + delete via /api/messages/delete.
+    function msgToggleSelect() {
+        _msgSelectMode = !_msgSelectMode;
+        var toggle = document.getElementById('msg-select-toggle');
+        var actions = document.getElementById('msg-bulk-actions');
+        if (toggle) toggle.classList.toggle('btn-active', _msgSelectMode);
+        if (actions) actions.style.display = _msgSelectMode ? 'inline-flex' : 'none';
+        if (!_msgSelectMode) _msgSelectedIds = {};
+        document.querySelectorAll('.msg-select-cb').forEach(function(cb) {
+            cb.style.display = _msgSelectMode ? 'inline' : 'none';
+            if (!_msgSelectMode) cb.checked = false;
+        });
+        _msgUpdateBulkCount();
+    }
+
+    function msgClearSelect() {
+        _msgSelectedIds = {};
+        document.querySelectorAll('.msg-select-cb').forEach(function(cb) { cb.checked = false; });
+        _msgUpdateBulkCount();
+    }
+
+    function _msgUpdateBulkCount() {
+        var el = document.getElementById('msg-bulk-count');
+        if (el) el.textContent = Object.keys(_msgSelectedIds).length + ' selected';
+    }
+
+    function msgBulkDelete() {
+        var ids = Object.keys(_msgSelectedIds).map(Number);
+        if (!ids.length) { showToast('No messages selected', true); return; }
+        showConfirm('Delete ' + ids.length + ' message(s)?', function() {
+            fetch('/api/messages/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
+                body: JSON.stringify({ ids: ids }),
+            })
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    showToast((data.deleted || 0) + ' message(s) deleted');
+                    _msgSelectedIds = {};
+                    _msgUpdateBulkCount();
+                    refreshMessages();
+                })
+                .catch(function() { showToast('Failed to delete messages', true); });
+        });
     }
 
     // --- Mobile overflow menu ---

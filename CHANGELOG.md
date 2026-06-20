@@ -10,6 +10,22 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.20.7] - 2026-06-20
+
+### Features
+
+- **Messages tab: bulk delete + compose** (feature B10, phase 3 of 3 —
+  completes B10). The Messages tab gained a compose box (pick a worker or
+  `*` broadcast, a type, and content → `POST /api/messages/send`) and
+  multi-select bulk delete (reusing `POST /api/messages/delete` behind the
+  themed confirm dialog). Deleting a collapsed broadcast row removes all
+  its underlying recipient rows at once. Both reuse existing endpoints; the
+  list live-refreshes after either action.
+
+### Changes
+
+### Fixes
+
 ## [2026.6.20.6] - 2026-06-20
 
 ### Features

@@ -1019,5 +1019,11 @@ def test_dashboard_template_renders_queen_history_tab():
         'id="msg-filter-unread"',
         'id="msg-search"',
         'id="msg-load-more-wrap"',
+        # B10 phase 3 — compose + bulk delete
+        'id="msg-compose"',
+        'data-action="msgSendCompose"',
+        'id="msg-bulk-actions"',
+        'data-action="msgBulkDelete"',
+        'data-action="msgToggleSelect"',
     ):
         assert marker in html, f"missing dashboard tab marker: {marker}"
