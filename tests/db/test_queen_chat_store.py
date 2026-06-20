@@ -119,3 +119,30 @@ class TestPurgeOldConfigurable:
         store._db.update("queen_threads", {"updated_at": 1.0}, "id = ?", (active.id,))
         assert store.purge_old(retention_days=1) == 0
         assert len(store.list_threads()) == 1
+
+
+class TestReopenThread:
+    def test_reopen_flips_resolved_to_active(self, store):
+        t = store.create_thread(title="t", kind="operator")
+        store.resolve_thread(t.id, resolved_by="operator", reason="done")
+        assert store.reopen_thread(t.id) is True
+        reopened = store.get_thread(t.id)
+        assert reopened.status == "active"
+        assert reopened.resolved_at is None
+        assert reopened.resolved_by is None
+        assert reopened.resolution_reason in (None, "")
+
+    def test_reopen_active_thread_is_noop_false(self, store):
+        t = store.create_thread(title="t", kind="operator")
+        assert store.reopen_thread(t.id) is False
+        assert store.get_thread(t.id).status == "active"
+
+    def test_reopen_missing_returns_false(self, store):
+        assert store.reopen_thread("nope") is False
+
+    def test_reopen_bumps_updated_at(self, store):
+        t = store.create_thread(title="t", kind="operator")
+        store.resolve_thread(t.id, resolved_by="operator")
+        store._db.update("queen_threads", {"updated_at": 1.0}, "id = ?", (t.id,))
+        store.reopen_thread(t.id)
+        assert store.get_thread(t.id).updated_at > 1.0

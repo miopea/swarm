@@ -3255,3 +3255,41 @@ async def test_purge_queen_threads_uses_configured_window(daemon):
     daemon.config.queen.queen_thread_retention_days = 0
     assert daemon._purge_queen_threads() == 0
     daemon.queen_chat.purge_old.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_queen_thread_reopen_and_reply(client, daemon):
+    # Create + resolve a thread
+    t = daemon.queen_chat.create_thread(title="revisit", kind="operator")
+    daemon.queen_chat.add_message(t.id, role="operator", content="original")
+    daemon.queen_chat.resolve_thread(t.id, resolved_by="operator", reason="done")
+    assert daemon.queen_chat.get_thread(t.id).status == "resolved"
+
+    resp = await client.post(
+        f"/api/queen/threads/{t.id}/reopen",
+        json={"body": "actually, one more thing"},
+        headers=_API_HEADERS,
+    )
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["thread"]["status"] == "active"
+    assert data["message"]["content"] == "actually, one more thing"
+    # The transcript now has both messages
+    msgs = daemon.queen_chat.list_messages(t.id)
+    assert [m.content for m in msgs] == ["original", "actually, one more thing"]
+
+
+@pytest.mark.asyncio
+async def test_queen_thread_reopen_requires_body(client, daemon):
+    t = daemon.queen_chat.create_thread(title="x", kind="operator")
+    daemon.queen_chat.resolve_thread(t.id, resolved_by="operator")
+    resp = await client.post(f"/api/queen/threads/{t.id}/reopen", json={}, headers=_API_HEADERS)
+    assert resp.status == 400
+
+
+@pytest.mark.asyncio
+async def test_queen_thread_reopen_missing_404(client):
+    resp = await client.post(
+        "/api/queen/threads/bogus/reopen", json={"body": "hi"}, headers=_API_HEADERS
+    )
+    assert resp.status == 404

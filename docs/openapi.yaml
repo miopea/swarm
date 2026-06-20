@@ -1287,6 +1287,31 @@ paths:
         "200":
           description: Thread resolved
 
+  /api/queen/threads/{thread_id}/reopen:
+    post:
+      tags: [Queen]
+      summary: Reopen a resolved thread and post a follow-up message
+      parameters:
+        - name: thread_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, maxLength: 8000 }
+      responses:
+        "200":
+          description: Thread reopened (active) + message forwarded to the Queen
+        "400":
+          description: Missing body
+        "404":
+          description: Thread not found
+
   /api/queen/learnings:
     get:
       tags: [Queen]

@@ -28,6 +28,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/queen/threads/{thread_id}", handle_get_thread)
     app.router.add_post("/api/queen/threads/{thread_id}/messages", handle_post_message)
     app.router.add_post("/api/queen/threads/{thread_id}/resolve", handle_resolve_thread)
+    app.router.add_post("/api/queen/threads/{thread_id}/reopen", handle_reopen_thread)
     # Learnings — operator-visible list + cleanup of stale corrections
     app.router.add_get("/api/queen/learnings", handle_list_learnings)
     app.router.add_delete("/api/queen/learnings/{learning_id}", handle_delete_learning)
@@ -269,6 +270,45 @@ async def handle_resolve_thread(request: web.Request) -> web.Response:
         return json_error("thread not found or already resolved", 404)
     _broadcast_thread(d, thread_id, "resolved")
     return web.json_response({"resolved": True})
+
+
+@handle_errors
+async def handle_reopen_thread(request: web.Request) -> web.Response:
+    """Reopen a resolved thread and post the operator's follow-up message.
+
+    The history tab's "Reopen & reply" affordance — flips the thread back
+    to active, appends the message, and forwards it to the Queen's PTY in
+    one call (mirrors create_thread's create-plus-first-message shape).
+    """
+    d = get_daemon(request)
+    thread_id = request.match_info["thread_id"]
+    thread = d.queen_chat.get_thread(thread_id)
+    if thread is None:
+        return json_error("thread not found", 404)
+    data = await _parse_json(request)
+    if isinstance(data, web.Response):
+        return data
+    body = str(data.get("body") or "").strip()
+    if not body:
+        return json_error("'body' is required", 400)
+    if len(body) > _MAX_BODY_LEN:
+        return json_error("body exceeds max length", 413)
+    # Reopen only when actually resolved; an already-active thread just
+    # takes the message (the UI shouldn't offer reopen there, but be safe).
+    if thread.status == "resolved":
+        d.queen_chat.reopen_thread(thread_id)
+    msg = d.queen_chat.add_message(thread_id, role="operator", content=body, widgets=[])
+    _broadcast_message(d, thread_id, msg.to_dict())
+    _broadcast_thread(d, thread_id, "reopened")
+    delivered = await _forward_to_queen(d, thread_id, body)
+    thread = d.queen_chat.get_thread(thread_id)
+    return web.json_response(
+        {
+            "thread": thread.to_dict() if thread else None,
+            "message": msg.to_dict(),
+            "queen_delivered": delivered,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------

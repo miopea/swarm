@@ -163,6 +163,8 @@
         qhLoadMore: function() { qhLoadMore(); },
         qhOpenDetail: function(el) { qhOpenDetail(el.dataset.threadId); },
         qhHideDetail: function() { qhHideDetail(); },
+        qhReopenSend: function() { qhReopenSend(); },
+        qhViewInCC: function() { qhViewInCC(); },
         ccMobileFocus: function(el) { ccMobileFocus(el.dataset.ccFocus); },
         toggleResourcePopover: function(el, e) { e.stopPropagation(); toggleResourcePopover(); },
         toggleBottomPanel: function() { toggleBottomPanel(); },
@@ -697,6 +699,13 @@
                 if (typeof window.updateQueenHealthIndicator === 'function') {
                     window.updateQueenHealthIndicator(data && data.state);
                 }
+                break;
+            case 'queen.thread':
+            case 'queen.message':
+                // Live-refresh the Queen history tab when it's the active
+                // view so a newly-resolved/created/posted thread moves
+                // without a manual reload. Debounced + tab-gated.
+                qhMaybeLiveRefresh();
                 break;
             case 'operator_terminal_approval':
                 showApproveAlwaysBanner(data);
@@ -5304,6 +5313,8 @@
     var _qhLimit = 50;
     var _qhOffset = 0;
     var _qhSearchTimer = null;
+    var _qhLiveTimer = null;
+    var _qhDetailThread = null;
     var _QH_KIND_CLASS = {
         'escalation': 'text-poppy', 'queen-escalation': 'text-poppy',
         'oversight': 'text-honey', 'anomaly': 'text-honey',
@@ -5451,11 +5462,13 @@
             .then(function(data) {
                 var thread = data.thread || {};
                 var msgs = data.messages || [];
+                _qhDetailThread = thread;
                 if (title) title.textContent = thread.title || 'Thread';
                 body.innerHTML = _qhRenderTranscript(thread, msgs);
                 formatLocalTimes(body);
             })
             .catch(function() {
+                _qhDetailThread = null;
                 body.innerHTML = '<div class="empty-state">This thread is no longer available.</div>';
             });
     }
@@ -5478,12 +5491,57 @@
                 + '<div class="qh-msg-content">' + escapeHtml(m.content) + '</div>'
                 + '</div>');
         });
+        // Footer: resolved → reopen-and-reply composer; active → deep-link to CC.
+        if (thread.status === 'resolved') {
+            parts.push('<div class="qh-reopen">'
+                + '<textarea id="qh-reopen-text" class="modal-input" rows="2" placeholder="Reply to reopen this thread…"></textarea>'
+                + '<button class="btn btn-sm" data-action="qhReopenSend">Reopen &amp; reply</button>'
+                + '</div>');
+        } else {
+            parts.push('<div class="qh-reopen">'
+                + '<span class="text-muted text-sm">This thread is still active.</span> '
+                + '<button class="btn btn-sm btn-secondary" data-action="qhViewInCC">View in command center</button>'
+                + '</div>');
+        }
         return parts.join('');
+    }
+
+    function qhReopenSend() {
+        var t = _qhDetailThread;
+        var ta = document.getElementById('qh-reopen-text');
+        if (!t || !ta) return;
+        var body = (ta.value || '').trim();
+        if (!body) { showToast('Enter a reply to reopen', true); return; }
+        fetch('/api/queen/threads/' + encodeURIComponent(t.id) + '/reopen', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Dashboard' },
+            body: JSON.stringify({ body: body }),
+        })
+            .then(function(r) { if (!r.ok) throw new Error('reopen failed'); return r.json(); })
+            .then(function() {
+                showToast('Thread reopened — forwarded to the Queen');
+                qhOpenDetail(t.id);   // re-render as active w/ the new message
+                refreshQueenHistory();
+            })
+            .catch(function() { showToast('Failed to reopen thread', true); });
+    }
+
+    function qhViewInCC() {
+        qhHideDetail();
+        if (typeof window.ccShowDashboard === 'function') window.ccShowDashboard();
+    }
+
+    function qhMaybeLiveRefresh() {
+        var panel = document.getElementById('tab-queen');
+        if (!panel || !panel.classList.contains('active')) return;
+        if (_qhLiveTimer) clearTimeout(_qhLiveTimer);
+        _qhLiveTimer = setTimeout(refreshQueenHistory, 400);
     }
 
     function qhHideDetail() {
         var modal = document.getElementById('qh-detail-modal');
         if (modal) modal.style.display = 'none';
+        _qhDetailThread = null;
     }
 
     // --- Mobile overflow menu ---

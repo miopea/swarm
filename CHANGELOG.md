@@ -10,6 +10,25 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.20.4] - 2026-06-20
+
+### Features
+
+- **Queen history: reopen + live-refresh** (feature B4, phase 3 of 3 —
+  completes B4). The thread-detail modal now lets you act on what you find:
+  a **resolved** thread shows a "Reopen & reply" composer that flips it back
+  to active and forwards your message to the Queen's PTY in one call (new
+  `POST /api/queen/threads/{id}/reopen` + `QueenChatStore.reopen_thread`);
+  an **active** thread shows a "View in command center" deep-link instead.
+  The tab also **live-refreshes** off the existing `queen.thread` /
+  `queen.message` WebSocket events (debounced, only when the Queen tab is
+  open), so a thread resolved or posted-to elsewhere moves without a manual
+  reload.
+
+### Changes
+
+### Fixes
+
 ## [2026.6.20.3] - 2026-06-20
 
 ### Features

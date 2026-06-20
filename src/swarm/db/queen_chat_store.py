@@ -255,6 +255,29 @@ class QueenChatStore(BaseStore):
             )
         return affected > 0
 
+    def reopen_thread(self, thread_id: str) -> bool:
+        """Flip a resolved thread back to active (operator follow-up).
+
+        Clears the resolution fields and bumps updated_at. Returns True
+        only if a resolved thread was actually reopened — a no-op (already
+        active / missing) returns False.
+        """
+        now = time.time()
+        with self._lock:
+            affected = self._db.update(
+                "queen_threads",
+                {
+                    "status": "active",
+                    "resolved_at": None,
+                    "resolved_by": None,
+                    "resolution_reason": "",
+                    "updated_at": now,
+                },
+                "id = ? AND status = 'resolved'",
+                (thread_id,),
+            )
+        return affected > 0
+
     def touch_thread(self, thread_id: str) -> None:
         with self._lock:
             self._db.update(
