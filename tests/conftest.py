@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import tempfile
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
@@ -26,6 +28,35 @@ import swarm.db.core as _swarm_db_core
 _TEST_DB_DIR = Path(tempfile.mkdtemp(prefix="swarm-tests-"))
 _LIVE_DB_PATH = Path.home() / ".swarm" / "swarm.db"
 _LIVE_DB_MTIME_AT_START = _LIVE_DB_PATH.stat().st_mtime if _LIVE_DB_PATH.exists() else None
+_DAEMON_LOCK_PATH = Path.home() / ".swarm" / "daemon.lock"
+
+
+def _external_daemon_running(lock_path: Path = _DAEMON_LOCK_PATH) -> bool:
+    """True when a *running* ``swarm serve`` daemon (not this test process)
+    holds the lock file.
+
+    A live daemon legitimately WAL-checkpoints ``~/.swarm/swarm.db`` every
+    300s, so the mtime-based live-DB safeguard cannot attribute a change to
+    a test and must stand down. In CI no daemon runs, so the strict check
+    still fires and keeps its data-loss protection (see the 2026-05-06
+    incident documented above).
+    """
+    try:
+        pid = int(lock_path.read_text().strip())
+    except (OSError, ValueError):
+        return False
+    if pid == os.getpid():
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+# Captured at import (session start) too — a daemon that was up at the start
+# but stopped before teardown still wrote the live DB during the run.
+_EXTERNAL_DAEMON_AT_START = _external_daemon_running()
 _swarm_db_core._DEFAULT_DB_PATH = _TEST_DB_DIR / "session-default.db"
 
 from swarm.worker.worker import Worker, WorkerState  # noqa: E402
@@ -51,6 +82,18 @@ def _assert_live_db_untouched():
     via the system default)."""
     yield
     if not _LIVE_DB_PATH.exists():
+        return
+    # If a real daemon is/was running, it legitimately writes the live DB —
+    # the mtime signal can't be attributed to a test, so don't false-alarm.
+    # (The setup-time _DEFAULT_DB_PATH override is the actual protection;
+    # this assertion is belt-and-suspenders for the no-daemon CI case.)
+    if _EXTERNAL_DAEMON_AT_START or _external_daemon_running():
+        warnings.warn(
+            "live-DB mtime safeguard skipped: a swarm daemon is running and "
+            "legitimately writes ~/.swarm/swarm.db. The setup-time sandbox "
+            "still protects tests; this check only runs when no daemon is up.",
+            stacklevel=2,
+        )
         return
     end_mtime = _LIVE_DB_PATH.stat().st_mtime
     if _LIVE_DB_MTIME_AT_START is not None and end_mtime != _LIVE_DB_MTIME_AT_START:

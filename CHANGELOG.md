@@ -10,6 +10,27 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.20.8] - 2026-06-20
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Test suite no longer intermittently ERRORs when a local `swarm serve`
+  daemon is running.** The session-scoped `_assert_live_db_untouched`
+  safeguard asserts `~/.swarm/swarm.db`'s mtime is unchanged across the run
+  to catch a test bypassing the DB sandbox. But a *running* daemon
+  legitimately WAL-checkpoints that file every 300s, so a ~130s test run
+  had a ~44% chance of overlapping a checkpoint and tripping the assertion
+  (reported, misleadingly, against the alphabetically-last test). The
+  safeguard now stands down (with a warning) when `~/.swarm/daemon.lock`
+  holds a live PID — an external writer makes the mtime signal
+  unattributable — while still running strict in CI where no daemon
+  exists. The real protection (the setup-time `_DEFAULT_DB_PATH` sandbox)
+  is unchanged.
+
 ## [2026.6.20.7] - 2026-06-20
 
 ### Features
