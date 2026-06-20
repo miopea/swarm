@@ -10,6 +10,26 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.20.3] - 2026-06-20
+
+### Features
+
+- **Queen history tab** (feature B4, phase 2 of 3). New "Queen" tab in the
+  dashboard bottom panel: a searchable, filterable archive of every Queen
+  chat thread (operator chats, oversight findings, escalations, proposals).
+  Filter by status (active/resolved), kind, and worker; narrow by date
+  range; and search titles + message bodies (debounced). Each row shows a
+  kind badge, status, last-activity time, message count, and the associated
+  worker/task. "Load more" pages through history. Clicking a thread opens a
+  **read-only transcript** of the full conversation. Backs the tab on the
+  filterable `/api/queen/threads` from 2026.6.20.2. (Phase 3 — reopen a
+  resolved thread, deep-link active threads to the command center, and
+  live-refresh on WS events — follows.)
+
+### Changes
+
+### Fixes
+
 ## [2026.6.20.2] - 2026-06-20
 
 ### Features

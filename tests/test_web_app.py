@@ -957,3 +957,59 @@ async def test_action_add_approval_rule_empty_pattern():
     with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_add_approval_rule(req)
     assert resp.status == 400
+
+
+def test_dashboard_template_renders_queen_history_tab():
+    """B4: the dashboard renders with the Queen history tab wired in.
+
+    Renders dashboard.html through Jinja (ChainableUndefined for the
+    many context vars helper-tested elsewhere) and asserts the Queen
+    tab button, panel, filters, list, and detail modal are present —
+    a regression guard so the tab can't silently disappear.
+    """
+    import jinja2
+
+    class _Tunnel:
+        url = ""
+
+    env = jinja2.Environment(
+        loader=jinja2.FileSystemLoader("src/swarm/web/templates"),
+        undefined=jinja2.ChainableUndefined,
+        autoescape=jinja2.select_autoescape(["html"]),
+    )
+    ctx = dict(
+        groups=[],
+        ws_token="t",
+        is_dev=False,
+        build_sha="abc",
+        tunnel=_Tunnel(),
+        worker_count=0,
+        providers=[],
+        csp_nonce="n",
+        workers=[],
+        queen=None,
+        selected_worker=None,
+        worker_output="",
+        tasks=[],
+        task_summary="",
+        proposals=[],
+        proposal_count=0,
+        worker_tasks={},
+        task_buttons=[],
+        action_buttons=[],
+        tool_buttons=[],
+        pipelines=[],
+        version="x",
+    )
+    html = env.get_template("dashboard.html").render(**ctx)
+    for marker in (
+        'id="tab-queen-btn"',
+        'id="tab-queen"',
+        'data-tab="queen"',
+        'id="queen-history-list"',
+        'id="qh-filter-kind"',
+        'id="qh-search"',
+        'id="qh-load-more-wrap"',
+        'id="qh-detail-modal"',
+    ):
+        assert marker in html, f"missing Queen-tab marker: {marker}"

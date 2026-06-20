@@ -159,6 +159,10 @@
         togglePlaybookBulk: function() { togglePlaybookBulk(); },
         bulkPlaybookPromote: function() { bulkPlaybookAction('promote'); },
         bulkPlaybookRetire: function() { bulkPlaybookAction('retire'); },
+        qhSwitchStatus: function(el) { qhSwitchStatus(el.dataset.qhStatus); },
+        qhLoadMore: function() { qhLoadMore(); },
+        qhOpenDetail: function(el) { qhOpenDetail(el.dataset.threadId); },
+        qhHideDetail: function() { qhHideDetail(); },
         ccMobileFocus: function(el) { ccMobileFocus(el.dataset.ccFocus); },
         toggleResourcePopover: function(el, e) { e.stopPropagation(); toggleResourcePopover(); },
         toggleBottomPanel: function() { toggleBottomPanel(); },
@@ -234,6 +238,15 @@
         if (action === 'debouncedTaskSearch') debouncedTaskSearch(el.value);
         else if (action === 'debouncedBuzzSearch') debouncedBuzzSearch(el.value);
         else if (action === 'workerSearch') filterWorkers(el.value);
+        else if (action === 'qhSearchChanged') qhSearchChanged(el.value);
+    });
+
+    // Change delegation for [data-input-action] on <select>/<input type=date>
+    // (these fire `change`, not `input`).
+    document.addEventListener('change', function(e) {
+        var el = e.target.closest('[data-input-action]');
+        if (!el) return;
+        if (el.dataset.inputAction === 'qhFilterChanged') qhFilterChanged();
     });
 
     // Mobile email file upload (visible button for touch devices)
@@ -5276,12 +5289,201 @@
             refreshPipelines();
         } else if (tab === 'playbooks') {
             refreshPlaybooks();
+        } else if (tab === 'queen') {
+            refreshQueenHistory();
         } else if (tab === 'buzz') {
             unreadNotifications = 0;
             var badge = document.getElementById('notif-badge');
             if (badge) badge.style.display = 'none';
             refreshBuzzLog();
         }
+    }
+
+    // --- Queen history tab (B4): searchable archive of Queen chat threads ---
+    var _qhFilters = { status: '', kind: '', worker: '', since: '', until: '', q: '' };
+    var _qhLimit = 50;
+    var _qhOffset = 0;
+    var _qhSearchTimer = null;
+    var _QH_KIND_CLASS = {
+        'escalation': 'text-poppy', 'queen-escalation': 'text-poppy',
+        'oversight': 'text-honey', 'anomaly': 'text-honey',
+        'proposal': 'text-leaf', 'operator': 'text-lavender',
+        'worker-message': 'text-muted'
+    };
+
+    function _qhDateToEpoch(dateStr, endOfDay) {
+        if (!dateStr) return '';
+        var d = new Date(dateStr + (endOfDay ? 'T23:59:59' : 'T00:00:00'));
+        return isNaN(d.getTime()) ? '' : Math.floor(d.getTime() / 1000);
+    }
+
+    function _qhQueryString() {
+        var p = [];
+        if (_qhFilters.status) p.push('status=' + encodeURIComponent(_qhFilters.status));
+        if (_qhFilters.kind) p.push('kind=' + encodeURIComponent(_qhFilters.kind));
+        if (_qhFilters.worker) p.push('worker=' + encodeURIComponent(_qhFilters.worker));
+        if (_qhFilters.q) p.push('q=' + encodeURIComponent(_qhFilters.q));
+        var since = _qhDateToEpoch(_qhFilters.since, false);
+        var until = _qhDateToEpoch(_qhFilters.until, true);
+        if (since) p.push('since=' + since);
+        if (until) p.push('until=' + until);
+        p.push('limit=' + _qhLimit);
+        p.push('offset=' + _qhOffset);
+        return p.join('&');
+    }
+
+    function refreshQueenHistory() {
+        _qhOffset = 0;
+        _qhFetch(false);
+    }
+
+    function qhLoadMore() {
+        _qhOffset += _qhLimit;
+        _qhFetch(true);
+    }
+
+    function _qhFetch(append) {
+        var list = document.getElementById('queen-history-list');
+        if (!list) return;
+        if (!append) list.innerHTML = '<div class="empty-state"><div class="mt-sm">Loading…</div></div>';
+        fetch('/api/queen/threads?' + _qhQueryString(), { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var threads = (data && data.threads) || [];
+                if (!append) _qhPopulateWorkers(threads);
+                _qhRender(threads, append);
+            })
+            .catch(function() {
+                if (!append) list.innerHTML = '<div class="empty-state">Failed to load threads.</div>';
+            });
+    }
+
+    function _qhRender(threads, append) {
+        var list = document.getElementById('queen-history-list');
+        var moreWrap = document.getElementById('qh-load-more-wrap');
+        if (!list) return;
+        if (!append && threads.length === 0) {
+            var anyFilter = _qhFilters.status || _qhFilters.kind || _qhFilters.worker
+                || _qhFilters.q || _qhFilters.since || _qhFilters.until;
+            list.innerHTML = anyFilter
+                ? '<div class="empty-state"><div class="mt-sm">No threads match — clear filters.</div></div>'
+                : '<div class="empty-state"><div class="mt-sm">The Queen hasn\'t opened any threads yet.</div></div>';
+            if (moreWrap) moreWrap.style.display = 'none';
+            return;
+        }
+        var html = threads.map(_qhRow).join('');
+        if (append) list.insertAdjacentHTML('beforeend', html);
+        else list.innerHTML = html;
+        if (moreWrap) moreWrap.style.display = (threads.length >= _qhLimit) ? 'block' : 'none';
+        formatLocalTimes(list);
+    }
+
+    function _qhRow(t) {
+        var kindCls = _QH_KIND_CLASS[t.kind] || 'text-muted';
+        var statusCls = t.status === 'resolved' ? 'text-muted' : 'text-leaf';
+        var worker = t.worker_name
+            ? '<span class="text-muted text-xs">· ' + escapeHtml(t.worker_name) + '</span>' : '';
+        var taskLink = t.task_id ? '<span class="text-muted text-xs">· task</span>' : '';
+        var count = t.message_count || 0;
+        return '<div class="qh-row" data-action="qhOpenDetail" data-thread-id="'
+            + escapeHtml(t.id) + '" role="button" tabindex="0">'
+            + '<span class="qh-kind ' + kindCls + '">' + escapeHtml(t.kind) + '</span>'
+            + '<span class="qh-title">' + escapeHtml(t.title) + '</span>'
+            + '<span class="' + statusCls + ' text-xs">' + escapeHtml(t.status) + '</span>'
+            + '<span class="local-time text-muted text-xs" data-ts="' + t.updated_at + '"></span>'
+            + '<span class="text-muted text-xs">' + count + ' msg</span>'
+            + worker + taskLink
+            + '</div>';
+    }
+
+    function _qhPopulateWorkers(threads) {
+        var sel = document.getElementById('qh-filter-worker');
+        if (!sel) return;
+        var names = {};
+        document.querySelectorAll('.worker-item[data-worker]').forEach(function(el) {
+            if (el.dataset.worker) names[el.dataset.worker] = true;
+        });
+        (threads || []).forEach(function(t) { if (t.worker_name) names[t.worker_name] = true; });
+        var current = sel.value;
+        var opts = ['<option value="">all workers</option>'];
+        Object.keys(names).sort().forEach(function(n) {
+            opts.push('<option value="' + escapeHtml(n) + '"'
+                + (n === current ? ' selected' : '') + '>' + escapeHtml(n) + '</option>');
+        });
+        sel.innerHTML = opts.join('');
+    }
+
+    function qhSwitchStatus(status) {
+        _qhFilters.status = status || '';
+        document.querySelectorAll('#qh-filter-bar [data-qh-status]').forEach(function(b) {
+            b.classList.toggle('active', (b.dataset.qhStatus || '') === _qhFilters.status);
+        });
+        refreshQueenHistory();
+    }
+
+    function qhFilterChanged() {
+        var kind = document.getElementById('qh-filter-kind');
+        var worker = document.getElementById('qh-filter-worker');
+        var since = document.getElementById('qh-filter-since');
+        var until = document.getElementById('qh-filter-until');
+        _qhFilters.kind = kind ? kind.value : '';
+        _qhFilters.worker = worker ? worker.value : '';
+        _qhFilters.since = since ? since.value : '';
+        _qhFilters.until = until ? until.value : '';
+        refreshQueenHistory();
+    }
+
+    function qhSearchChanged(val) {
+        _qhFilters.q = (val || '').trim();
+        if (_qhSearchTimer) clearTimeout(_qhSearchTimer);
+        _qhSearchTimer = setTimeout(refreshQueenHistory, 250);
+    }
+
+    function qhOpenDetail(threadId) {
+        var modal = document.getElementById('qh-detail-modal');
+        var body = document.getElementById('qh-detail-body');
+        var title = document.getElementById('qh-detail-title');
+        if (!modal || !body) return;
+        body.innerHTML = '<div class="empty-state">Loading…</div>';
+        modal.style.display = 'flex';
+        fetch('/api/queen/threads/' + encodeURIComponent(threadId), { headers: { 'X-Requested-With': 'Dashboard' }})
+            .then(function(r) { if (!r.ok) throw new Error('unavailable'); return r.json(); })
+            .then(function(data) {
+                var thread = data.thread || {};
+                var msgs = data.messages || [];
+                if (title) title.textContent = thread.title || 'Thread';
+                body.innerHTML = _qhRenderTranscript(thread, msgs);
+                formatLocalTimes(body);
+            })
+            .catch(function() {
+                body.innerHTML = '<div class="empty-state">This thread is no longer available.</div>';
+            });
+    }
+
+    function _qhRenderTranscript(thread, msgs) {
+        var parts = [];
+        if (thread.status === 'resolved') {
+            parts.push('<div class="text-muted text-sm mb-sm">Resolved'
+                + (thread.resolved_by ? ' by ' + escapeHtml(thread.resolved_by) : '')
+                + (thread.resolution_reason ? ': ' + escapeHtml(thread.resolution_reason) : '')
+                + '</div>');
+        }
+        if (!msgs.length) {
+            parts.push('<div class="empty-state">No messages.</div>');
+        }
+        msgs.forEach(function(m) {
+            parts.push('<div class="qh-msg qh-msg-' + escapeHtml(m.role) + '">'
+                + '<div class="qh-msg-head"><span class="text-xs text-muted">' + escapeHtml(m.role) + '</span> '
+                + '<span class="local-time text-xs text-muted" data-ts="' + m.ts + '"></span></div>'
+                + '<div class="qh-msg-content">' + escapeHtml(m.content) + '</div>'
+                + '</div>');
+        });
+        return parts.join('');
+    }
+
+    function qhHideDetail() {
+        var modal = document.getElementById('qh-detail-modal');
+        if (modal) modal.style.display = 'none';
     }
 
     // --- Mobile overflow menu ---
