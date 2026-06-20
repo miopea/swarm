@@ -428,6 +428,7 @@ def _parse_config(path: Path) -> HiveConfig:
         mode=coord_data.get("mode", "single-branch"),
         auto_pull=coord_data.get("auto_pull", True),
         file_ownership=coord_data.get("file_ownership", "warning"),
+        message_retention_days=coord_data.get("message_retention_days", 30),
     )
 
     jira = _parse_jira_section(data.get("jira") or {})

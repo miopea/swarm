@@ -3293,3 +3293,56 @@ async def test_queen_thread_reopen_missing_404(client):
         "/api/queen/threads/bogus/reopen", json={"body": "hi"}, headers=_API_HEADERS
     )
     assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_messages_recent_filters(client, daemon, tmp_path):
+    from swarm.messages.store import MessageStore
+
+    store = MessageStore(db_path=tmp_path / "m.db")
+    daemon.message_store = store
+    m1 = store.send("hub", "platform", "finding", "redis migration plan")
+    store.send("hub", "platform", "warning", "unrelated thing")
+    store.mark_read("platform", [m1])
+
+    # content search
+    resp = await client.get("/api/messages?q=redis")
+    contents = [m["content"] for m in (await resp.json())["messages"]]
+    assert contents == ["redis migration plan"]
+
+    # unread-only excludes the read one
+    resp2 = await client.get("/api/messages?unread_only=true")
+    contents2 = [m["content"] for m in (await resp2.json())["messages"]]
+    assert contents2 == ["unrelated thing"]
+
+
+@pytest.mark.asyncio
+async def test_messages_recent_view_never_marks_read(client, daemon, tmp_path):
+    """B10 invariant: the operator Messages view must NOT mutate read_at —
+    it drives worker coordination nudges."""
+    from swarm.messages.store import MessageStore
+
+    store = MessageStore(db_path=tmp_path / "m.db")
+    daemon.message_store = store
+    store.send("hub", "platform", "finding", "still unread")
+
+    # Several reads through the dashboard endpoint, with and without filters.
+    for url in ("/api/messages", "/api/messages?q=unread", "/api/messages?unread_only=true"):
+        await client.get(url)
+
+    # The recipient's inbox must still show it as unread.
+    assert len(store.get_unread("platform")) == 1
+
+
+@pytest.mark.asyncio
+async def test_prune_messages_uses_configured_window(daemon):
+    daemon.config.coordination.message_retention_days = 14
+    daemon.message_store = MagicMock()
+    daemon.message_store.prune.return_value = 5
+    assert daemon._prune_messages() == 5
+    daemon.message_store.prune.assert_called_once_with(14)
+
+    daemon.message_store.prune.reset_mock()
+    daemon.config.coordination.message_retention_days = 0
+    assert daemon._prune_messages() == 0
+    daemon.message_store.prune.assert_not_called()

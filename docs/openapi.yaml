@@ -2066,13 +2066,30 @@ paths:
   /api/messages:
     get:
       tags: [Messages]
-      summary: List recent inter-worker messages across the hive
+      summary: List recent inter-worker messages (filterable; read-only, never marks read)
       parameters:
+        - name: q
+          in: query
+          description: Search over message content (LIKE)
+          schema: { type: string }
+        - name: unread_only
+          in: query
+          description: Only messages no recipient has consumed (read_at IS NULL)
+          schema: { type: boolean, default: false }
+        - name: since
+          in: query
+          description: Only messages with created_at >= this epoch seconds
+          schema: { type: number }
+        - name: until
+          in: query
+          description: Only messages with created_at <= this epoch seconds
+          schema: { type: number }
         - name: limit
           in: query
-          schema:
-            type: integer
-            default: 50
+          schema: { type: integer, default: 50, maximum: 200 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0, minimum: 0 }
       responses:
         "200":
           description: Recent messages

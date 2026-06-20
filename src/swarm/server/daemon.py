@@ -767,10 +767,10 @@ class SwarmDaemon(EventEmitter):
         """Discover workers and start the pilot loop."""
         # Prune old log entries from the SQLite store on startup
         self.drone_log.prune_store()
-        # Prune old inter-worker messages too — the messages table has no other
-        # retention path, so without this it grows unbounded across the daemon's
-        # lifetime (the buzz log above is pruned the same way).
-        self.message_store.prune()
+        # Prune old (read) inter-worker messages too. The periodic
+        # _db_maintenance_loop repeats this daily; the startup pass keeps a
+        # long-down daemon from coming back to a bloated table.
+        self._prune_messages()
 
         self._reconcile_active_per_worker()
 
@@ -936,8 +936,24 @@ class SwarmDaemon(EventEmitter):
                         # and need to know backups are silently failing.
                         _log.warning("DB backup failed", exc_info=True)
                     self._purge_queen_threads()
+                    self._prune_messages()
         except asyncio.CancelledError:
             return
+
+    def _prune_messages(self) -> int:
+        """Prune read inter-worker messages past the retention window.
+
+        Read-only by default (unread = unconsumed coordination, never auto-
+        deleted); ``0`` retention means keep forever. Returns count removed
+        (0 on skip/error).
+        """
+        try:
+            days = getattr(self.config.coordination, "message_retention_days", 30)
+            if days and days > 0:
+                return self.message_store.prune(days)
+        except Exception:
+            _log.warning("message prune failed", exc_info=True)
+        return 0
 
     def _purge_queen_threads(self) -> int:
         """Purge resolved Queen chat threads past the retention window.

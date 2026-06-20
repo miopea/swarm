@@ -292,17 +292,46 @@ class MessageStore:
                 _log.warning("failed to mark messages read", exc_info=True)
                 return 0
 
-    def get_recent(self, limit: int = 50) -> list[Message]:
-        """Get recent messages (all, for dashboard display)."""
+    def get_recent(
+        self,
+        limit: int = 50,
+        *,
+        search: str | None = None,
+        unread_only: bool = False,
+        since: float | None = None,
+        until: float | None = None,
+        offset: int = 0,
+    ) -> list[Message]:
+        """Get recent messages (all recipients, for the dashboard).
+
+        Optional filters compose into a dynamic WHERE; the row shape is
+        unchanged so broadcast grouping stays a client concern. A bare
+        ``get_recent()`` reproduces the legacy behavior.
+        """
         if not self._conn:
             return []
+        clauses: list[str] = []
+        params: list[object] = []
+        if search:
+            clauses.append("content LIKE ?")
+            params.append(f"%{search}%")
+        if unread_only:
+            clauses.append("read_at IS NULL")
+        if since is not None:
+            clauses.append("created_at >= ?")
+            params.append(since)
+        if until is not None:
+            clauses.append("created_at <= ?")
+            params.append(until)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = (
+            "SELECT id, sender, recipient, msg_type, content, created_at, read_at"
+            f" FROM messages {where} ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        )
+        params.extend([limit, offset])
         with self._lock:
             try:
-                rows = self._conn.execute(
-                    "SELECT id, sender, recipient, msg_type, content, created_at, read_at"
-                    " FROM messages ORDER BY created_at DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
+                rows = self._conn.execute(sql, tuple(params)).fetchall()
                 return [Message(*r) for r in rows]
             except sqlite3.Error:
                 _log.warning("failed to get recent messages", exc_info=True)
@@ -325,14 +354,24 @@ class MessageStore:
                 _log.warning("failed to delete messages", exc_info=True)
                 return 0
 
-    def prune(self, max_age_days: int = 7) -> int:
-        """Delete messages older than max_age_days. Returns count deleted."""
+    def prune(self, max_age_days: int = 30, *, read_only: bool = True) -> int:
+        """Delete messages older than ``max_age_days``. Returns count deleted.
+
+        ``read_only=True`` (default) only deletes messages a recipient has
+        already consumed (``read_at IS NOT NULL``) — an unread message is
+        unconsumed coordination, not garbage, so it's kept regardless of
+        age. Pass ``read_only=False`` for the legacy "delete all old rows"
+        behavior.
+        """
         if not self._conn:
             return 0
         cutoff = time.time() - (max_age_days * 86400)
+        sql = "DELETE FROM messages WHERE created_at < ?"
+        if read_only:
+            sql += " AND read_at IS NOT NULL"
         with self._lock:
             try:
-                cur = self._conn.execute("DELETE FROM messages WHERE created_at < ?", (cutoff,))
+                cur = self._conn.execute(sql, (cutoff,))
                 self._conn.commit()
                 return cur.rowcount
             except sqlite3.Error:

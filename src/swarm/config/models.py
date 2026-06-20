@@ -299,6 +299,10 @@ class CoordinationConfig:
     mode: str = "single-branch"  # "single-branch" | "worktree"
     auto_pull: bool = True
     file_ownership: str = "warning"  # "off" | "warning" | "hard-block"
+    # Read inter-worker messages older than this are pruned by the daily DB
+    # maintenance loop. 0 = keep forever. Unread messages are never pruned
+    # (an unread message is unconsumed coordination, not garbage).
+    message_retention_days: int = 30
 
 
 @dataclass

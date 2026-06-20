@@ -378,6 +378,7 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
         "mode": config.coordination.mode,
         "auto_pull": config.coordination.auto_pull,
         "file_ownership": config.coordination.file_ownership,
+        "message_retention_days": config.coordination.message_retention_days,
     }
     _serialize_jira_optional(config, data)
     _serialize_optional(config, data)

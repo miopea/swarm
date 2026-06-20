@@ -252,7 +252,10 @@ class TestPrune:
         fresh_id = store.send("hub", "api", "finding", "fresh")
         old_id = store.send("hub", "platform", "finding", "old")
         assert fresh_id is not None and old_id is not None
-        # Backdate the second message beyond the retention window.
+        # Backdate the second message beyond the retention window AND mark it
+        # read — prune now spares *unread* messages regardless of age (B10),
+        # so a prunable message must be both old and consumed.
+        store.mark_read("platform", [old_id])
         with store._lock:
             store._conn.execute(
                 "UPDATE messages SET created_at = ? WHERE id = ?",
@@ -288,3 +291,85 @@ class TestDelete:
         store.send("a", "b", "finding", "keep me")
         assert store.delete([]) == 0
         assert len(store.get_recent()) == 1
+
+
+def _set_created(store, msg_id, ts):
+    store._conn.execute("UPDATE messages SET created_at=? WHERE id=?", (ts, msg_id))
+    store._conn.commit()
+
+
+class TestGetRecentFilters:
+    def test_search_content(self, store):
+        store.send("a", "b", "finding", "the redis migration is done")
+        store.send("a", "b", "warning", "unrelated note")
+        rows = store.get_recent(search="redis")
+        assert [m.content for m in rows] == ["the redis migration is done"]
+
+    def test_unread_only(self, store):
+        m1 = store.send("a", "b", "finding", "one")
+        store.send("a", "b", "warning", "two")
+        store.mark_read("b", [m1])
+        rows = store.get_recent(unread_only=True)
+        assert [m.content for m in rows] == ["two"]
+
+    def test_since_until_on_created_at(self, store):
+        old = store.send("a", "b", "finding", "old")
+        _set_created(store, old, 1000.0)
+        new = store.send("a", "b", "warning", "new")
+        _set_created(store, new, 5000.0)
+        assert [m.content for m in store.get_recent(since=2000.0)] == ["new"]
+        assert [m.content for m in store.get_recent(until=2000.0)] == ["old"]
+
+    def test_offset_paginates(self, store):
+        # Distinct types so the 60s same-type dedup doesn't merge rows.
+        for t in ("finding", "warning", "dependency", "status", "operator"):
+            store.send("a", "b", t, "m-" + t)
+        p1 = store.get_recent(limit=2, offset=0)
+        p2 = store.get_recent(limit=2, offset=2)
+        assert len(p1) == 2 and len(p2) == 2
+        assert {m.id for m in p1}.isdisjoint({m.id for m in p2})
+
+    def test_no_params_legacy(self, store):
+        store.send("a", "b", "finding", "x")
+        store.send("a", "b", "warning", "y")
+        assert len(store.get_recent()) == 2
+
+    def test_combined(self, store):
+        m1 = store.send("a", "b", "finding", "redis one")
+        store.send("a", "b", "warning", "redis two")
+        store.mark_read("b", [m1])
+        rows = store.get_recent(search="redis", unread_only=True)
+        assert [m.content for m in rows] == ["redis two"]
+
+
+class TestPruneReadOnly:
+    def test_default_spares_unread_regardless_of_age(self, store):
+        unread = store.send("a", "b", "finding", "never read")
+        _set_created(store, unread, 1000.0)  # ancient
+        read = store.send("a", "b", "warning", "was read")
+        _set_created(store, read, 1000.0)
+        store.mark_read("b", [read])
+        removed = store.prune(max_age_days=30)
+        assert removed == 1  # only the read one
+        remaining = [m.content for m in store.get_recent()]
+        assert remaining == ["never read"]
+
+    def test_read_only_false_is_legacy_deletes_all_old(self, store):
+        unread = store.send("a", "b", "finding", "never read")
+        _set_created(store, unread, 1000.0)
+        read = store.send("a", "b", "warning", "was read")
+        _set_created(store, read, 1000.0)
+        store.mark_read("b", [read])
+        removed = store.prune(max_age_days=30, read_only=False)
+        assert removed == 2
+        assert store.get_recent() == []
+
+    def test_respects_window(self, store):
+        old = store.send("a", "b", "finding", "old")
+        _set_created(store, old, 1000.0)
+        store.mark_read("b", [old])
+        recent = store.send("a", "b", "warning", "recent")
+        store.mark_read("b", [recent])
+        removed = store.prune(max_age_days=30)
+        assert removed == 1
+        assert [m.content for m in store.get_recent()] == ["recent"]

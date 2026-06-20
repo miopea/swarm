@@ -227,6 +227,11 @@ def _validate_coordination(config: HiveConfig) -> list[str]:
             f"coordination.file_ownership must be 'off', 'warning', "
             f"or 'hard-block', got '{c.file_ownership}'"
         )
+    if not isinstance(c.message_retention_days, int) or c.message_retention_days < 0:
+        errors.append(
+            f"coordination.message_retention_days must be a non-negative integer "
+            f"(0 = keep forever), got '{c.message_retention_days}'"
+        )
     return errors
 
 

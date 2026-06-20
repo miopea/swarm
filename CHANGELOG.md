@@ -10,6 +10,31 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.6.20.5] - 2026-06-20
+
+### Features
+
+- **Messages backend** (feature B10, phase 1 of 3). `GET /api/messages` is
+  now filterable for the upcoming Messages tab: new `q` (content search),
+  `unread_only`, `since`/`until` (created_at), and `offset` params on the
+  endpoint and `MessageStore.get_recent`. All optional — a bare call is
+  unchanged. The endpoint is **read-only and never marks anything read**
+  (a regression test pins this — operator browsing must not corrupt the
+  worker read-state that drives coordination nudges).
+
+### Changes
+
+- **Inter-worker message retention is now scoped, configurable, and
+  periodic.** `MessageStore.prune()` defaults flipped from *7 days, delete
+  everything old* to **30 days, read messages only** — an unread message is
+  unconsumed coordination and is never auto-deleted regardless of age. The
+  window is a new `coordination.message_retention_days` config knob (`0` =
+  keep forever), and the prune now runs daily in the maintenance loop (not
+  just at startup). Pass `read_only=False` for the legacy delete-all-old
+  behavior.
+
+### Fixes
+
 ## [2026.6.20.4] - 2026-06-20
 
 ### Features

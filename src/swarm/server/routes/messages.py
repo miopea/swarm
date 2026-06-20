@@ -121,12 +121,47 @@ async def handle_mark_read(request: web.Request) -> web.Response:
     return web.json_response({"marked": count})
 
 
+def _query_float(request: web.Request, key: str) -> float | None:
+    raw = request.query.get(key)
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
 @handle_errors
 async def handle_recent_messages(request: web.Request) -> web.Response:
-    """Get recent messages (all, for dashboard)."""
+    """Get recent messages (all recipients) for the dashboard Messages tab.
+
+    Optional filters: ``q`` (content search), ``unread_only``, ``since`` /
+    ``until`` (created_at epoch), ``limit`` / ``offset``. Omitting all
+    reproduces the legacy recent-messages behavior. This is a read-only
+    view — it never marks anything read (worker read-state drives the
+    coordination nudges and must not be touched by operator browsing).
+    """
     d = get_daemon(request)
-    limit = min(int(request.query.get("limit", "50")), 200)
-    messages = d.message_store.get_recent(limit)
+    try:
+        limit = min(int(request.query.get("limit", "50")), 200)
+    except ValueError:
+        limit = 50
+    try:
+        offset = max(0, int(request.query.get("offset", "0")))
+    except ValueError:
+        offset = 0
+    search = (request.query.get("q") or "").strip() or None
+    unread_only = request.query.get("unread_only") == "true"
+    since = _query_float(request, "since")
+    until = _query_float(request, "until")
+    messages = d.message_store.get_recent(
+        limit,
+        search=search,
+        unread_only=unread_only,
+        since=since,
+        until=until,
+        offset=offset,
+    )
     return web.json_response(
         {
             "messages": [m.to_dict() for m in messages],
