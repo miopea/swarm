@@ -312,7 +312,7 @@ the client honours reconnect contracts.
 - `server/` — Daemon, API routes (`routes/`), WebSocket, escalation/proposal handlers
 - `tasks/` — Task board, history, proposals, workflows, blockers (BlockerStore for worker-reported task dependencies)
 - `pipelines/` — Multi-step workflow engine (AGENT / AUTOMATED / HUMAN steps)
-- `mcp/` — HTTP MCP server + 12 worker tools (tools.py) + 15 Queen tools (queen_tools.py) exposed to the respective PTY sessions
+- `mcp/` — HTTP MCP server + 15 worker tools (tools.py) + 15 Queen tools (queen_tools.py) exposed to the respective PTY sessions
 - `analysis/` — Tool-usage analytics (`tool_usage.py`) backing `swarm analyze-tools`
 - `messages/` — Inter-worker message store (findings, warnings, dependencies, status, operator)
 - `coordination/` — File ownership tracking and auto-pull sync

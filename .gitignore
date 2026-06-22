@@ -15,6 +15,10 @@ swarm.yaml
 # Generated specs
 docs/specs/
 
+# Internal audit / post-mortem docs — local working notes, not public docs
+docs/audits/
+docs/audit/
+
 # Local dev overrides
 .env
 

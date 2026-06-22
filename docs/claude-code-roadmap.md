@@ -8,7 +8,7 @@
 >
 > **Last reviewed 2026-04-16.** Heavy post-roadmap shipping (releases 2026.4.22.2 – 2026.4.22.8) added: `swarm_report_blocker` (task #250, schema v7), `swarm_note_to_queen` (#248), interactive Queen CLAUDE.md + drift reconcile (#251/#254), `HEADLESS_DECISION_PROMPT` seeding (#253), pressure threshold tuning (#254 / version .6), and the two-Queens architecture decision (`docs/specs/headless-queen-architecture.md`).
 >
-> **Update (2026-05-05):** Further shipping since 2026-04-16 — verifier drone (`docs/specs/verifier-drone.md`), graceful PTY-holder restart (`swarm holder-restart`), dashboard task-modal WYSIWYG + paste-from-Word/Outlook → Markdown, drag-and-drop Jira issue import, ADF→Markdown for Jira and HTML→Markdown for email bodies, and the `#328` silent-drop bug class fix (Phases 2–9: top-level + per-section dispatch guards, generic dataclass dispatch, comprehensive round-trip persistence test, dashboard `_apply_result` toasts, `swarm.db` becoming canonical with `-c <yaml>` ignored on populated DBs). For the absolute latest status, check CHANGELOG.md rather than this roadmap.
+> **This is a planning doc; [`../CHANGELOG.md`](../CHANGELOG.md) is the authoritative record of what has shipped** (the project releases continuously — current version `2026.6.21`). Since this roadmap was last revised, shipped work includes the verifier drone, the playbook-synthesis loop, daemon health-sweep alerting, task/pipeline lifecycle notifications + a daily digest, DB auto-backup + `swarm db restore`, retry/backoff for the Jira/Graph integrations, the `swarm_query_peers` peer-visibility tool, and the dashboard's searchable Queen-history and inter-worker Messages tabs.
 
 ---
 

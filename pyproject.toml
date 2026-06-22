@@ -32,8 +32,8 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/bschleifer/swarm"
-Documentation = "https://github.com/bschleifer/swarm#readme"
+Repository = "https://github.com/miopea/swarm"
+Documentation = "https://github.com/miopea/swarm#readme"
 
 [project.optional-dependencies]
 dev = [

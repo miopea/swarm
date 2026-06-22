@@ -57,7 +57,7 @@ Drones are specialized background sweepers that share the daemon's poll loop. Ea
 **Worker Coordination (MCP)**
 
 - **MCP server** -- Swarm exposes an HTTP MCP server at `/mcp` so the agents themselves can coordinate via tool calls
-- **12 coordination tools** -- `check_messages`, `send_message`, `task_status`, `claim_file`, `complete_task`, `create_task`, `get_learnings`, `report_progress`, `report_blocker` (declare task-dependency blocker, suppresses idle nudges), `note_to_queen` (lightweight side-channel note), `draft_email` (create a Microsoft Graph draft in the operator's Outlook Drafts folder — never sent automatically), and `batch` (run multiple ops in one round-trip)
+- **15 coordination tools** -- `swarm_check_messages`, `swarm_send_message`, `swarm_task_status`, `swarm_claim_file`, `swarm_complete_task`, `swarm_create_task`, `swarm_park_task` (hand the current task back to the queue), `swarm_get_learnings`, `swarm_get_playbooks` (recall reusable procedures synthesized from past successes), `swarm_report_progress`, `swarm_report_blocker` (declare task-dependency blocker, suppresses idle nudges), `swarm_query_peers` (read-only snapshot of peer worker state for handoff decisions), `swarm_note_to_queen` (lightweight side-channel note), `swarm_draft_email` (create a Microsoft Graph draft in the operator's Outlook Drafts folder — never sent automatically), and `swarm_batch` (run multiple ops in one round-trip)
 - **Inter-worker messages** -- workers send findings, warnings, dependencies, and status updates to each other (or broadcast)
 - **File claims** -- advisory locks prevent two workers from editing the same file at once
 - **Learnings** -- resolutions from completed tasks are searchable by other workers for context
@@ -95,7 +95,7 @@ Drones are specialized background sweepers that share the daemon's poll loop. Ea
 ## Installation
 
 ```bash
-uv tool install git+https://github.com/bschleifer/swarm.git
+uv tool install git+https://github.com/miopea/swarm.git
 ```
 
 This puts `swarm` on your PATH. No clone, no venv. Then run the setup wizard:
@@ -149,8 +149,10 @@ The web dashboard is the primary interface. It auto-starts on boot via systemd (
 - **Interactive terminal** -- click "Attach" to open any worker's agent session in an in-browser terminal (full xterm.js PTY). Type commands, approve plans, interact directly.
 - **Task board** -- filterable by status and priority; tasks render as compact rows (click to open the Edit modal); WYSIWYG description editor with formatting toolbar, live preview, and View-source toggle; drag `.eml`/`.msg` / Outlook tiles / Jira URLs to create tasks; Queen proposals banner with approve/reject/approve-all
 - **Config page** -- tabbed editor with sections for General, LLMs, Workers, Automation (drones · Queen · workflows · pipelines), Notifications, Integrations (Microsoft Graph + Jira via OAuth), Security, Usage, Advanced, and Logs (live log viewer with severity filter and a running-daemon log-level dropdown)
-- **Drone log** -- real-time feed of autopilot decisions and actions
-- **Buzz log** -- notification history with browser push alerts
+- **Bottom-panel tabs** -- the work surface switches between Tasks, **Decisions** (Queen proposals + decision history), **Pipelines** (multi-step workflow runs), and **Playbooks** (procedures synthesized from past successes)
+- **Queen tab** -- searchable archive of every Queen thread (operator chats, oversight findings, escalations, proposals); filter by status (active/resolved), kind, and worker, or search titles + message bodies; click a thread for a read-only transcript, and reopen a resolved one to follow up
+- **Messages tab** -- the inter-worker message stream (findings, warnings, dependencies, status, notes): content search, unread-only and date filters, click a message for full detail, compose to a worker or broadcast, and bulk-delete; `*` broadcasts collapse to one row with per-recipient read state
+- **Activity tab** -- the buzz log: a real-time feed of autopilot decisions and system events, with browser push alerts
 
 ![Task board with proposals banner](docs/screenshots/task-board.png)
 
@@ -275,12 +277,15 @@ Swarm runs an MCP (Model Context Protocol) server on the same port as the dashbo
 | `swarm_task_status` | Query the task board (all / pending / assigned / mine); pass `{number: N}` to fetch the full detail of a single task — description, priority, type, tags, deps, jira key, acceptance criteria, context refs, attachments, resolution |
 | `swarm_create_task` | Create a task, optionally targeted at another worker |
 | `swarm_complete_task` | Mark the currently assigned task done with a resolution |
+| `swarm_park_task` | Hand the current task back to `ASSIGNED` (an intentional set-down, not a blocker) |
 | `swarm_report_progress` | Report phase / percent / narrative status — broadcasts over WebSocket to the dashboard |
 | `swarm_report_blocker` | Declare a task blocked on another task; IdleWatcher skips nudges until the upstream task completes or a new message arrives |
+| `swarm_query_peers` | Read-only snapshot of peer worker state (name, state, current task, context %, idle time, queue depth) to decide whether to hand off — never interrupts a peer |
 | `swarm_note_to_queen` | Send a lightweight side-channel note to the Queen (auto-relays into her PTY; not a formal message) |
 | `swarm_draft_email` | Create a draft email in the operator's Outlook Drafts folder via Microsoft Graph. Draft is never auto-sent — operator reviews + sends manually. Requires the Graph integration to be configured. |
 | `swarm_claim_file` | Take an advisory lock on a file path (60s TTL) before editing shared code |
 | `swarm_get_learnings` | Search resolutions and learnings from previously completed tasks |
+| `swarm_get_playbooks` | Recall reusable procedures synthesized from previously-successful tasks (look before re-deriving a solved approach) |
 | `swarm_batch` | Run multiple swarm_* ops in a single round-trip (sequential; nested batch rejected) |
 
 The server speaks both Streamable HTTP (`POST /mcp`) and legacy SSE (`GET /mcp/sse` + `POST /mcp/message`) so any MCP-capable client works. Claude Code hook installation wires this up automatically during `swarm init`.
@@ -439,7 +444,7 @@ Uninstalling the service leaves your config and database untouched — `~/.confi
 | `swarm check-states` | Diagnostic: show current worker states from PTY ring buffer |
 | `swarm analyze-tools [--since=7d] [--json]` | Summarise MCP tool usage from the buzz log (calls / errors / error samples per tool) |
 | `swarm test --pin-model=<id>` | Run orchestration tests and pin the model identifier in the infra snapshot for reproducibility |
-| `swarm db <stats\|export\|prune\|backup\|check>` | Database management — inspect, export, prune, and back up `~/.swarm/swarm.db` |
+| `swarm db <stats\|export\|prune\|backup\|restore\|check>` | Database management — inspect, export, prune, back up, restore, and integrity-check `~/.swarm/swarm.db`. `restore` recovers from a backup (newest auto-backup by default), keeping the replaced DB at `swarm.db.pre-restore` |
 | `swarm queen sync-claude-md [--accept-shipped\|--keep-local]` | Three-way reconcile the interactive Queen's CLAUDE.md against the shipped `QUEEN_SYSTEM_PROMPT` constant. No flags = status report; `--accept-shipped` overwrites on-disk with shipped; `--keep-local` ack drift + preserve edits |
 | `swarm queen contribute-claude-md` | Reverse-sync local interactive-Queen CLAUDE.md edits back into the shipped `QUEEN_SYSTEM_PROMPT` constant — for promoting operator-tuned coordination policy into the next ship |
 | `swarm test` | Run supervised orchestration tests — scaffolds a synthetic project, auto-resolves proposals, and generates an AI-powered report to `~/.swarm/reports/` |
@@ -475,7 +480,7 @@ All settings are managed from the web dashboard at `/config` — a tabbed editor
 
 ![Config editor — workers, drones, Queen tuning](docs/screenshots/config-editor.png)
 
-**Runtime state lives in SQLite — `~/.swarm/swarm.db` is the source of truth.** On first run Swarm seeds the DB from a YAML (renaming the source file to `config.yaml.migrated` once consumed); from then on the daemon reads and writes workers, groups, approval rules, tasks, proposals, task history, messages, pipelines, buzz log, secrets, and scalar config directly from the DB. Dashboard edits hit the DB immediately and are hot-applied in the same request; **YAML is not re-written** by the dashboard. Use `swarm db stats`, `swarm db export`, `swarm db backup`, and `swarm db prune` to inspect and maintain it.
+**Runtime state lives in SQLite — `~/.swarm/swarm.db` is the source of truth.** On first run Swarm seeds the DB from a YAML (renaming the source file to `config.yaml.migrated` once consumed); from then on the daemon reads and writes workers, groups, approval rules, tasks, proposals, task history, messages, pipelines, buzz log, secrets, and scalar config directly from the DB. Dashboard edits hit the DB immediately and are hot-applied in the same request; **YAML is not re-written** by the dashboard. Use `swarm db stats`, `swarm db export`, `swarm db backup`, `swarm db restore`, and `swarm db prune` to inspect and maintain it (the daemon also auto-backs-up daily and runs an integrity check).
 
 **YAML is a bootstrap-only seed.** `swarm init` writes the initial config to `~/.config/swarm/config.yaml` and you can also place a `swarm.yaml` in your project directory. The YAML loaders are consulted **only when `swarm.db` has no user data** (fresh install, explicit DB-empty bootstrap). For a populated DB the YAML loaders — including the `-c /path/to/config.yaml` flag — are intentionally ignored, with a WARNING log on every silently-discarded `-c`. Re-importing from YAML after first run is possible but explicit; treat `swarm.yaml` as a seed/import format, not a live mirror.
 
@@ -552,6 +557,7 @@ queen:
   min_confidence: 0.7                  # below this, proposals require approval
   max_session_calls: 20                # API calls before rotating session
   max_session_age: 1800.0              # seconds before rotating session (30 min)
+  queen_thread_retention_days: 90      # purge resolved Queen chat threads after N days (0 = keep forever)
   system_prompt: |
     You coordinate agents working across our codebase.
     Match tasks to workers by project path. Never assign overlapping
@@ -566,6 +572,7 @@ coordination:
   mode: worktree                       # "single-branch" or "worktree"
   auto_pull: true                      # auto-pull changes from remote
   file_ownership: warning              # "off", "warning", or "hard-block"
+  message_retention_days: 30           # prune read inter-worker messages after N days (unread are never auto-deleted; 0 = keep forever)
 
 workflows:
   bug: /fix-and-ship
@@ -610,11 +617,16 @@ notifications:
 
 resources:                             # system resource monitoring
   enabled: true
-  memory_elevated_pct: 75              # log when memory exceeds this
-  memory_high_pct: 85                  # auto-suspend workers on HIGH
-  memory_critical_pct: 95              # page the operator
-  swap_high_pct: 50
-  dstate_scan_enabled: true            # scan for wedged (D-state) processes
+  poll_interval: 10.0                  # seconds between resource snapshots
+  elevated_mem_pct: 80.0               # mem % -> ELEVATED warning
+  high_mem_pct: 90.0                   # mem % -> HIGH (auto-suspend workers if suspend_on_high)
+  critical_mem_pct: 95.0               # mem % -> CRITICAL
+  elevated_swap_pct: 40.0              # swap % -> ELEVATED (only escalates when mem is also strained)
+  high_swap_pct: 70.0
+  critical_swap_pct: 85.0
+  suspend_on_high: true                # auto-suspend workers at HIGH pressure
+  dstate_scan: true                    # scan for wedged (D-state) processes
+  dstate_threshold_sec: 120.0          # D-state age before alerting
 
 action_buttons:                        # dashboard action bar buttons
   - label: "Revive"
@@ -707,22 +719,35 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | | `GET /api/drones/tuning` | Drone tuning suggestions |
 | | `POST /api/drones/rules/suggest` | AI-suggested approval rules |
 | **Tasks** | `GET /api/tasks`, `POST /api/tasks` | List / create tasks |
-| | `POST /api/tasks/{id}/assign`, `/complete`, `/fail`, `/unassign` | Task lifecycle |
+| | `POST /api/tasks/{id}/assign`, `/start`, `/complete`, `/fail`, `/unassign`, `/reopen` | Task lifecycle |
+| | `POST /api/tasks/{id}/approve`, `/reject` | Plan-mode approval gate (user-channel tasks) |
+| | `POST /api/tasks/{id}/force-complete` | Force-close a wedged task (bypasses the verifier/BLOCKED guard) |
 | | `PATCH /api/tasks/{id}`, `DELETE /api/tasks/{id}` | Edit / remove |
+| | `POST /api/tasks/bulk` | Bulk action over multiple tasks (complete / fail / reopen / assign / remove) |
+| | `POST /api/tasks/cross` | Create a cross-project handoff task |
+| | `GET /api/tasks/export`, `GET /api/tasks/history` | Export the board / search task history |
 | | `POST /api/tasks/from-email`, `POST /api/tasks/{id}/attachments` | Email import, file upload |
-| | `POST /api/tasks/{id}/reopen` | Reopen a completed or failed task |
 | | `POST /api/tasks/{id}/retry-draft` | Retry email draft generation |
-| | `GET /api/tasks/{id}/history` | Audit trail |
+| | `GET /api/tasks/{id}/history` | Per-task audit trail |
 | **Proposals** | `GET /api/proposals` | List pending proposals |
 | | `POST /api/proposals/{id}/approve`, `/reject` | Approve / reject |
 | | `POST /api/proposals/reject-all` | Bulk reject |
 | | `GET /api/decisions` | Proposal history / audit trail |
-| **Queen** | `POST /api/queen/coordinate` | Trigger hive coordination |
-| | `GET /api/queen/queue` | Queen call queue status (running/queued counts) |
+| **Queen** | `GET /api/queen/queue`, `GET /api/queen/health` | Queen call-queue status, runtime health |
 | | `GET /api/queen/oversight` | Queen oversight monitor status |
-| **Messages** | `POST /api/messages/send` | Send an inter-worker message (finding, warning, dependency, status) |
-| | `GET /api/messages`, `GET /api/messages/{worker}` | Recent messages / inbox for a worker |
-| | `POST /api/messages/{worker}/read` | Mark messages as read |
+| | `GET /api/queen/threads`, `POST /api/queen/threads` | List (filter `?status&kind&worker&q&since&until&limit&offset`) / start a thread |
+| | `GET /api/queen/threads/{id}`, `POST /api/queen/threads/{id}/messages` | Thread transcript / post a reply |
+| | `POST /api/queen/threads/{id}/resolve`, `/reopen` | Resolve or reopen a thread |
+| | `GET /api/queen/learnings`, `DELETE /api/queen/learnings/{id}` | List / delete saved Queen learnings |
+| **Messages** | `POST /api/messages/send` | Send an inter-worker message (finding, warning, dependency, status, note) |
+| | `GET /api/messages`, `GET /api/messages/{worker}` | Recent messages (filter `?q&unread_only&since&until&limit&offset`) / inbox for a worker |
+| | `POST /api/messages/{worker}/read`, `POST /api/messages/delete` | Mark read / bulk delete by id |
+| **Playbooks** | `GET /api/playbooks`, `GET /api/playbooks/analytics` | List playbooks / synthesis analytics |
+| | `GET /api/playbooks/{name}/events` | Event history for a playbook |
+| | `POST /api/playbooks/{name}/promote`, `/retire` | Promote to fleet-active / retire |
+| **Attention** | `GET /api/attention` | Command-center attention feed (active threads needing the operator) |
+| | `POST /api/attention/{id}/reply`, `/resolve` | Respond to / resolve an attention item |
+| **Analytics** | `GET /api/analytics/summary` | Task throughput, completion-time, and per-worker stats (`?days=N`) |
 | **Pipelines** | `GET /api/pipelines`, `POST /api/pipelines` | List / create pipelines |
 | | `GET /api/pipelines/{id}`, `PUT /api/pipelines/{id}`, `DELETE /api/pipelines/{id}` | Read / update / delete |
 | | `POST /api/pipelines/{id}/start`, `/pause`, `/resume` | Pipeline lifecycle |
@@ -740,7 +765,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | **Jira** | `GET /api/jira/status` | Jira sync status and stats |
 | | `GET /api/jira/preview` | Preview importable Jira issues |
 | | `POST /api/jira/sync` | Trigger manual Jira sync |
-| | `POST /api/tasks/{id}/jira` | Create Jira issue from task |
+| | `POST /api/tasks/{id}/jira`, `POST /api/tasks/{id}/jira/refresh` | Create / refresh the Jira issue linked to a task |
 | **Auth** | `GET /auth/jira/login`, `/callback`, `/status`, `POST /auth/jira/disconnect` | Jira OAuth flow |
 | | `GET /auth/graph/login`, `/callback`, `/status`, `POST /auth/graph/disconnect` | Graph OAuth flow |
 | **Coordination** | `GET /api/coordination/ownership` | File ownership map |
@@ -782,8 +807,9 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 │  .eml/.msg import              OAuth · two-way sync      │
 ├─────────────────────────────────────────────────────────┤
 │  MCP Server (/mcp)             Inter-worker Messages     │
-│  12 worker · 15 Queen tools    findings · warnings · etc │
+│  15 worker · 15 Queen tools    findings · warnings · etc │
 │  file claims · learnings       dedup · read tracking     │
+│  playbooks (synthesized)       health-sweep · digests    │
 ├─────────────────────────────────────────────────────────┤
 │  SQLite (~/.swarm/swarm.db)    Notification Bus          │
 │  tasks · proposals · history   terminal · desktop · push │
@@ -824,7 +850,7 @@ Reports are saved as JSONL logs at `~/.swarm/reports/`. Configure via the `test:
 ## Development
 
 ```bash
-git clone https://github.com/bschleifer/swarm.git
+git clone https://github.com/miopea/swarm.git
 cd swarm
 uv sync                    # install dependencies
 uv run swarm --help        # run CLI from source
@@ -837,6 +863,12 @@ uv run ruff format src/    # formatting
 
 Swarm uses calver (`YYYY.M.D[.N]`). The release helper at `scripts/release.py` bumps the version anchor across `pyproject.toml` and `src/swarm/__init__.py` and promotes `CHANGELOG.md`'s `## Unreleased` section to a dated entry in a single motion. The global `/ship` slash command auto-detects this script and runs it before committing — no manual invocation required for normal flows. See `~/.claude/CLAUDE.md` (Release Management) for the contract every release script must honour.
 
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup,
+the local test/lint gate, and code conventions. Bug reports and feature
+requests go in [GitHub issues](https://github.com/miopea/swarm/issues).
+
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
