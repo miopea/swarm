@@ -4,6 +4,10 @@ A web-based control center for AI coding agents — [Claude Code](https://docs.a
 
 Every agent session runs in a managed PTY. The **web dashboard** gives you real-time visibility into all of them: read their output, type into their terminals, create and assign tasks, and let background **drones** handle routine approvals so your agents never stall. A **Queen** conductor watches the hive, proposes task assignments, detects when work is done, and drafts email replies — all surfaced as proposals you approve with one click.
 
+<p align="center">
+  <img src="docs/swarm-demo.gif" alt="Swarm — run 1–10 AI coding agents from one browser tab" width="900">
+</p>
+
 ![Dashboard overview — workers, terminal, and task board](docs/screenshots/dashboard-overview.png)
 
 ## Why Swarm
