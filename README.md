@@ -156,6 +156,10 @@ The web dashboard is the primary interface. It auto-starts on boot via systemd (
 
 ![Task board with proposals banner](docs/screenshots/task-board.png)
 
+![Queen tab — searchable archive of Queen threads with filters and per-thread detail](docs/screenshots/queen-tab.png)
+
+![Messages tab — inter-worker message stream with search, compose, and bulk delete](docs/screenshots/messages-tab.png)
+
 If `api_password` is set in the config (or `SWARM_API_PASSWORD` env var), config mutations require a Bearer token.
 
 ### Keyboard Shortcuts
