@@ -185,6 +185,17 @@ class DroneConfig:
     # far more output than a normal task — see cross-project #523 at ~257K
     # output tokens) to catch runaways without parking legitimate work.
     task_token_ceiling: int = 0
+    # Standing background-improvement loops (task #765). A standing loop is a
+    # recurring task GENERATOR: when its worker is idle with an empty queue it
+    # files one normal one-shot maintenance task (tagged ``standing-loop``).
+    # Operator-controlled (start/pause/stop + global kill switch via the
+    # dashboard); off until an operator enables a worker's loop.
+    # ``standing_loop_daily_token_cap`` is the rolling 24h per-loop OUTPUT-token
+    # budget — the loop sleeps when it is exhausted (layered on top of the
+    # #762 per-task ceiling). ``standing_loop_topics`` overrides the built-in
+    # deterministic topic set when non-empty.
+    standing_loop_daily_token_cap: int = 200_000
+    standing_loop_topics: list[str] = field(default_factory=list)
     # Plan-mode gate for user-request tasks: when True (default), the
     # dispatch path prepends a plan-mode preamble to tasks originating
     # from Jira sync, email import, or the operator dashboard (i.e.

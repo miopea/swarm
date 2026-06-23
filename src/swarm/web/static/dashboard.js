@@ -119,6 +119,10 @@
         switchPriorityFilter: function(el) { switchPriorityFilter(el.dataset.priority); },
         switchVerifyFilter: function(el) { switchVerifyFilter(el.dataset.verifyFilter); },
         switchBuzzFilter: function(el) { switchBuzzFilter(el.dataset.buzzCat); },
+        standingLoopStart: function(el) { standingLoopPost('start', { worker: el.dataset.worker }); },
+        standingLoopPause: function(el) { standingLoopPost('pause', { worker: el.dataset.worker }); },
+        standingLoopStop: function(el) { standingLoopPost('stop', { worker: el.dataset.worker }); },
+        standingLoopKill: function() { var on = !document.getElementById('standing-kill-btn').classList.contains('btn-danger'); standingLoopPost('kill-switch', { on: on }); },
         doAction: function(el) { doAction(el.dataset.doAction, el.dataset.doCommand ? JSON.parse(el.dataset.doCommand) : null); },
         devReload: function() { devReload(); },
         footerCheckForUpdate: function() { footerCheckForUpdate(); },
@@ -5340,7 +5344,73 @@
             var badge = document.getElementById('notif-badge');
             if (badge) badge.style.display = 'none';
             refreshBuzzLog();
+        } else if (tab === 'loops') {
+            refreshStandingLoops();
         }
+    }
+
+    // --- Standing background-improvement loops tab (#765) ---
+    // Operator controls (per-worker start/pause/stop + global kill switch)
+    // and a live per-loop token-burn readout, backed by /api/standing-loops.
+    function renderStandingLoops(data) {
+        var killBtn = document.getElementById('standing-kill-btn');
+        if (killBtn) {
+            var on = !!data.kill_switch;
+            killBtn.textContent = 'Kill switch: ' + (on ? 'ON' : 'off');
+            killBtn.classList.toggle('btn-danger', on);
+        }
+        var capLabel = document.getElementById('standing-cap-label');
+        if (capLabel) {
+            capLabel.textContent = 'Daily cap: ' + (data.daily_token_cap > 0
+                ? Number(data.daily_token_cap).toLocaleString() + ' output tokens' : 'unlimited');
+        }
+        var box = document.getElementById('standing-loops-list');
+        if (!box) return;
+        var loops = data.loops || [];
+        if (!loops.length) {
+            box.innerHTML = '<div class="muted" style="padding:10px;">No standing loops yet. '
+                + 'Start one on an idle worker to file background-improvement tasks.</div>';
+            return;
+        }
+        var html = '';
+        loops.forEach(function(l) {
+            var state = !l.enabled ? 'off' : (l.paused ? 'paused' : (l.exhausted ? 'asleep (cap)' : 'running'));
+            var pct = l.daily_token_cap > 0 ? Math.min(100, Math.round(100 * l.tokens_in_window / l.daily_token_cap)) : 0;
+            html += '<div class="task-item flex-center gap-sm" style="justify-content:space-between;">'
+                + '<span><strong>' + escapeHtml(l.worker) + '</strong> '
+                + '<span class="muted">— ' + state + '</span><br>'
+                + '<span class="muted" style="font-size:0.85em;">burn: '
+                + Number(l.tokens_in_window).toLocaleString()
+                + (l.daily_token_cap > 0 ? ' / ' + Number(l.daily_token_cap).toLocaleString() + ' (' + pct + '%)' : '')
+                + ' output tokens this window</span></span>'
+                + '<span class="flex-center gap-sm">'
+                + '<button class="btn btn-xs btn-approve" data-action="standingLoopStart" data-worker="' + escapeHtml(l.worker) + '">Start</button>'
+                + '<button class="btn btn-xs btn-secondary" data-action="standingLoopPause" data-worker="' + escapeHtml(l.worker) + '">Pause</button>'
+                + '<button class="btn btn-xs btn-secondary" data-action="standingLoopStop" data-worker="' + escapeHtml(l.worker) + '">Stop</button>'
+                + '</span></div>';
+        });
+        box.innerHTML = html;
+    }
+
+    function refreshStandingLoops() {
+        fetch('/api/standing-loops')
+            .then(function(r) { return r.json(); })
+            .then(renderStandingLoops)
+            .catch(function(err) { showToast('Standing loops load failed: ' + err.message, true); });
+    }
+
+    function standingLoopPost(path, body) {
+        fetch('/api/standing-loops/' + path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
+            body: JSON.stringify(body || {})
+        })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data && data.error) { showToast(data.error, true); return; }
+                renderStandingLoops(data);
+            })
+            .catch(function(err) { showToast('Standing loop action failed: ' + err.message, true); });
     }
 
     // --- Queen history tab (B4): searchable archive of Queen chat threads ---

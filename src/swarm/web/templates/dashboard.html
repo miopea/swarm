@@ -245,6 +245,9 @@
                     <button class="tab-btn" id="tab-buzz-btn" role="tab" aria-selected="false" aria-controls="tab-buzz" data-action="switchTab" data-tab="buzz">
                         Activity <span id="notif-badge" class="notification-badge" style="display:none">0</span>
                     </button>
+                    <button class="tab-btn" id="tab-loops-btn" role="tab" aria-selected="false" aria-controls="tab-loops" data-action="switchTab" data-tab="loops">
+                        Loops
+                    </button>
                 </div>
                 <span class="tab-header-utils flex-center gap-sm">
                     <button class="btn btn-sm" data-action="previewJiraSync" data-show-on-tab="tasks" title="Preview what Jira sync would import">Preview Jira</button>
@@ -516,6 +519,14 @@
                     <input type="text" id="buzz-search" placeholder="Search log..." data-input-action="debouncedBuzzSearch" class="task-search">
                 </div>
                 <div class="panel-body" id="buzz-log"></div>
+            </div>
+            <!-- Standing background-improvement loops tab (#765) -->
+            <div class="tab-content" id="tab-loops" role="tabpanel" aria-labelledby="tab-loops-btn">
+                <div class="panel-header panel-header-flush flex-center gap-sm" style="padding:6px 10px;">
+                    <button class="btn btn-sm" id="standing-kill-btn" data-action="standingLoopKill" title="Global kill switch — halts every standing loop at once">Kill switch: …</button>
+                    <span class="muted" id="standing-cap-label"></span>
+                </div>
+                <div class="panel-body" id="standing-loops-list"></div>
             </div>
         </div>
     </div>

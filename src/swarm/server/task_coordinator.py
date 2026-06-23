@@ -678,6 +678,10 @@ class TaskCoordinator:
             None,
         )
         if next_assigned is None:
+            # #765: empty queue → let the worker's standing loop (if the
+            # operator enabled one) file one lowest-priority filler task.
+            # Real work never reaches here, so the loop is always preempted.
+            d._maybe_run_standing_loop(worker_name)
             return
         try:
             # Go through ``d.start_task`` (the daemon proxy) rather than

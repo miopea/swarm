@@ -439,6 +439,37 @@ migration); it resets on restart alongside the delta baseline. The **per-loop
 daily aggregate cap** (spec §3.4, for standing loops) is a separate later layer
 built on top of this per-task foundation, landing with #765.
 
+### Standing background-improvement loops (task #765)
+
+The "my job is to write loops" model, scoped to Swarm
+(`docs/specs/native-loop-functions.md` §3). A standing loop is a recurring
+**task generator**, not a board entity: `StandingLoopManager`
+(`drones/standing_loop.py`) files **one normal one-shot task** (tagged
+`standing-loop`) through the existing board — no new task status, no verifier
+branching.
+
+- **Idle-triggered, preempted by real work.** The only caller is the
+  **empty-queue branch** of `task_coordinator.auto_start_next_assigned` (→
+  `daemon._maybe_run_standing_loop`). A real ASSIGNED / operator / cross-project
+  task is started there first, so the loop is preempted **by construction** —
+  it is lowest-priority filler that runs only when the worker is otherwise idle.
+- **Deterministic v1 generator.** Round-robins `DEFAULT_TOPICS` (override:
+  `DroneConfig.standing_loop_topics`), **dedups** against the worker's open task
+  titles. Pressure-tested as a plain rule before any headless-Queen call, per
+  the "prefer a deterministic drone rule" guidance.
+- **Rolling daily per-loop cap.** `record_burn` (called from
+  `_enforce_task_token_ceiling` with the same output-token delta, only when the
+  ACTIVE task carries the `standing-loop` tag) accumulates into a 24h window;
+  the loop **sleeps** when `standing_loop_daily_token_cap` (default 200 000) is
+  crossed and auto-resets after 24h. Layered on #762's per-task ceiling.
+- **Operator-controlled from the dashboard.** `routes/standing_loops.py` exposes
+  `GET /api/standing-loops` + `POST .../start|pause|stop` (per worker) +
+  `POST .../kill-switch` (global). The **"Loops"** dashboard tab renders the
+  controls, the **global kill switch** (the one-click stop for the whole
+  always-on burn source), and a **live per-loop token-burn readout**. Loops are
+  **off** until an operator starts one; nothing is Queen-driven (the Queen may
+  *suggest*, the operator holds the switch).
+
 ### PTY Integration
 - Output read from in-process ring buffer via `worker.process.get_content()`
 - Input sent via `worker.process.send_keys()` / `send_enter()` / `send_interrupt()`

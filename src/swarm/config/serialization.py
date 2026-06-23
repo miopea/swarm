@@ -318,6 +318,8 @@ def _serialize_drones(config: HiveConfig) -> dict[str, Any]:
         "native_loop_coexistence_enabled": d.native_loop_coexistence_enabled,
         "native_loop_grace_seconds": d.native_loop_grace_seconds,
         "task_token_ceiling": d.task_token_ceiling,
+        "standing_loop_daily_token_cap": d.standing_loop_daily_token_cap,
+        "standing_loop_topics": list(d.standing_loop_topics),
         "user_request_plan_mode": d.user_request_plan_mode,
         "dreamer_interval_seconds": d.dreamer_interval_seconds,
         "dreamer_lookback_hours": d.dreamer_lookback_hours,

@@ -22,6 +22,7 @@ def register_all(app: web.Application) -> None:
         playbooks,
         proposals,
         queen,
+        standing_loops,
         system,
         tasks,
         websocket,
@@ -40,6 +41,7 @@ def register_all(app: web.Application) -> None:
     pipelines.register(app)
     playbooks.register(app)
     proposals.register(app)
+    standing_loops.register(app)
     system.register(app)
     config.register(app)
     feedback.register(app)

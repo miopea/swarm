@@ -346,6 +346,10 @@ def _parse_config(path: Path) -> HiveConfig:
         native_loop_coexistence_enabled=drones_data.get("native_loop_coexistence_enabled", True),
         native_loop_grace_seconds=drones_data.get("native_loop_grace_seconds", 30.0),
         task_token_ceiling=int(drones_data.get("task_token_ceiling", 0)),
+        standing_loop_daily_token_cap=int(
+            drones_data.get("standing_loop_daily_token_cap", 200_000)
+        ),
+        standing_loop_topics=list(drones_data.get("standing_loop_topics", []) or []),
         user_request_plan_mode=drones_data.get("user_request_plan_mode", True),
         dreamer_interval_seconds=drones_data.get("dreamer_interval_seconds", 14400.0),
         dreamer_lookback_hours=drones_data.get("dreamer_lookback_hours", 24.0),
