@@ -470,6 +470,29 @@ branching.
   **off** until an operator starts one; nothing is Queen-driven (the Queen may
   *suggest*, the operator holds the switch).
 
+### Harness-improvement digest (operator-gated hill-climbing)
+
+The outermost loop-engineering loop ("analyze production traces → improve the
+harness"). Swarm already *collects* the signals (`analysis/tool_usage.py`,
+`drones/dreamer.py`, `drones/suggest.py`, `drones/tuning.py`, playbook
+win-rates) but surfaced them piecemeal. `analysis/harness_digest.py`
+**aggregates** them into one dashboard "Harness" tab (`GET /api/harness-digest`).
+
+**The load-bearing safety property is operator-gating — NEVER autonomous.** A
+suggestion either carries an `apply_action` naming an **existing, already-
+validated** endpoint (`/api/config/approval-rules` for an approval rule,
+`/api/playbooks/{name}/retire|promote` for a playbook) or is **display-only**
+(`apply_action=None`). Tool-description and prompt rewrites are display-only —
+they're code/judgment edits a human must make. The aggregator never mutates
+anything; the dashboard's Apply button POSTs the existing endpoint. Two
+constants make this structural (and a test asserts them): `DISPLAY_ONLY_TYPES`
+(tool_description / dreamer_pattern / tuning always `apply_action=None`) and
+`APPLY_ENDPOINTS` (the closed set of reusable apply routes — the new route adds
+none of its own). This matches the article's #1 principle: codify the easy
+wins, reserve live review for sensitive actions. Why not autonomous? Auto-
+rewriting an approval rule is a silent security regression (cf. the #331
+escalation-pattern incident) — the operator holds the apply switch.
+
 ### PTY Integration
 - Output read from in-process ring buffer via `worker.process.get_content()`
 - Input sent via `worker.process.send_keys()` / `send_enter()` / `send_interrupt()`

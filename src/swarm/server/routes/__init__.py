@@ -15,6 +15,7 @@ def register_all(app: web.Application) -> None:
         drones,
         events,
         feedback,
+        harness_digest,
         hooks,
         jira,
         messages,
@@ -41,6 +42,7 @@ def register_all(app: web.Application) -> None:
     pipelines.register(app)
     playbooks.register(app)
     proposals.register(app)
+    harness_digest.register(app)
     standing_loops.register(app)
     system.register(app)
     config.register(app)

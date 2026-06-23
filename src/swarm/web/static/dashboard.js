@@ -123,6 +123,8 @@
         standingLoopPause: function(el) { standingLoopPost('pause', { worker: el.dataset.worker }); },
         standingLoopStop: function(el) { standingLoopPost('stop', { worker: el.dataset.worker }); },
         standingLoopKill: function() { var on = !document.getElementById('standing-kill-btn').classList.contains('btn-danger'); standingLoopPost('kill-switch', { on: on }); },
+        refreshHarness: function() { refreshHarness(); },
+        harnessApply: function(el) { harnessApply(el); },
         doAction: function(el) { doAction(el.dataset.doAction, el.dataset.doCommand ? JSON.parse(el.dataset.doCommand) : null); },
         devReload: function() { devReload(); },
         footerCheckForUpdate: function() { footerCheckForUpdate(); },
@@ -5346,7 +5348,74 @@
             refreshBuzzLog();
         } else if (tab === 'loops') {
             refreshStandingLoops();
+        } else if (tab === 'harness') {
+            refreshHarness();
         }
+    }
+
+    // --- Harness-improvement digest tab (#789) ---
+    // Operator-gated hill-climbing (LangChain Loop 4): surface the improvement
+    // signals Swarm already mines (error-prone tools, suggested approval rules,
+    // playbook win-rates, dreamer patterns, override tuning) with one-click
+    // apply for ONLY the low-risk actions that carry an apply_action. Display-
+    // only items (tool/prompt rewrites) never get a button.
+    var _harnessApply = {};   // index -> apply_action {endpoint, method, body}
+
+    function renderHarness(data) {
+        var summary = document.getElementById('harness-summary');
+        if (summary) {
+            summary.textContent = (data.actionable || 0) + ' actionable / '
+                + (data.suggestions || []).length + ' total';
+        }
+        var box = document.getElementById('harness-digest-list');
+        if (!box) return;
+        var items = data.suggestions || [];
+        if (!items.length) {
+            box.innerHTML = '<div class="muted" style="padding:10px;">No harness '
+                + 'improvements suggested yet — the signals build up as the swarm runs.</div>';
+            return;
+        }
+        _harnessApply = {};
+        var html = '';
+        items.forEach(function(s, i) {
+            var pct = Math.round((s.confidence || 0) * 100);
+            var applyBtn = '';
+            if (s.apply_action) {
+                _harnessApply[i] = s.apply_action;   // keep JSON OUT of the DOM
+                applyBtn = '<button class="btn btn-xs btn-approve" data-action="harnessApply" '
+                    + 'data-harness-idx="' + i + '">Apply</button>';
+            }
+            html += '<div class="task-item" style="display:flex;justify-content:space-between;gap:8px;">'
+                + '<span><strong>' + escapeHtml(s.title) + '</strong> '
+                + '<span class="muted">[' + escapeHtml(s.type) + ' · ' + pct + '%]</span><br>'
+                + '<span class="muted" style="font-size:0.85em;">' + escapeHtml(s.detail || '') + '</span></span>'
+                + '<span class="flex-center">' + applyBtn + '</span></div>';
+        });
+        box.innerHTML = html;
+    }
+
+    function refreshHarness() {
+        fetch('/api/harness-digest')
+            .then(function(r) { return r.json(); })
+            .then(renderHarness)
+            .catch(function(err) { showToast('Harness digest load failed: ' + err.message, true); });
+    }
+
+    function harnessApply(el) {
+        var action = _harnessApply[el.dataset.harnessIdx];
+        if (!action) return;
+        fetch(action.endpoint, {
+            method: action.method || 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
+            body: JSON.stringify(action.body || {})
+        })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data && data.error) { showToast(data.error, true); return; }
+                showToast('Applied — refreshing digest');
+                refreshHarness();
+            })
+            .catch(function(err) { showToast('Apply failed: ' + err.message, true); });
     }
 
     // --- Standing background-improvement loops tab (#765) ---

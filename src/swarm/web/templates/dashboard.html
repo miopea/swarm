@@ -248,6 +248,9 @@
                     <button class="tab-btn" id="tab-loops-btn" role="tab" aria-selected="false" aria-controls="tab-loops" data-action="switchTab" data-tab="loops">
                         Loops
                     </button>
+                    <button class="tab-btn" id="tab-harness-btn" role="tab" aria-selected="false" aria-controls="tab-harness" data-action="switchTab" data-tab="harness">
+                        Harness
+                    </button>
                 </div>
                 <span class="tab-header-utils flex-center gap-sm">
                     <button class="btn btn-sm" data-action="previewJiraSync" data-show-on-tab="tasks" title="Preview what Jira sync would import">Preview Jira</button>
@@ -527,6 +530,14 @@
                     <span class="muted" id="standing-cap-label"></span>
                 </div>
                 <div class="panel-body" id="standing-loops-list"></div>
+            </div>
+            <!-- Harness-improvement digest tab (#789 — operator-gated hill-climbing) -->
+            <div class="tab-content" id="tab-harness" role="tabpanel" aria-labelledby="tab-harness-btn">
+                <div class="panel-header panel-header-flush flex-center gap-sm" style="padding:6px 10px;">
+                    <button class="btn btn-sm" data-action="refreshHarness" title="Re-aggregate the improvement signals">Refresh</button>
+                    <span class="muted" id="harness-summary"></span>
+                </div>
+                <div class="panel-body" id="harness-digest-list"></div>
             </div>
         </div>
     </div>
