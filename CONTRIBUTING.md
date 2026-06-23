@@ -42,6 +42,19 @@ suggestion. Fix it before pushing.
   (`worker/`, `drones/`, `queen/`, `tasks/`, `mcp/`, `server/`, …). See the
   README "Architecture" section for the layout.
 
+## Docs & screenshots
+
+After a dashboard UI change, refresh the README screenshots with:
+
+```bash
+uv run python scripts/docs_screenshots.py
+```
+
+This spins up a **throwaway, isolated** dashboard (`HOME` redirected to a temp
+dir, no `api_password`, seeded with generic FAKE data) and captures the tabs via
+Playwright — never the live daemon, which holds real project data. Add new tabs
+to the `TABS` list in that script. Output overwrites `docs/screenshots/*.png`.
+
 ## Commits & releases
 
 - Conventional-commit summaries (`fix:`, `feat:`, `docs:`, …).

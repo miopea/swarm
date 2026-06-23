@@ -306,14 +306,14 @@ the client honours reconnect contracts.
 - `db/` — Unified SQLite store (`swarm.db`) — tasks, proposals, config, messages, pipelines, buzz log, secrets, worker_blockers (v7), task verification fields (v8), queen threads/messages/learnings (v6)
 - `pty/` — PTY holder, process management, ring buffer, WS bridge (holder.py, process.py, pool.py, buffer.py, bridge.py)
 - `worker/` — Worker dataclass + lifecycle (worker.py, manager.py, headless.py). State detection lives in `providers/` + `drones/state_tracker.py`.
-- `drones/` — Background drone loop + specialized watchers (pilot.py, rules.py, log.py, idle_watcher.py, inter_worker_watcher.py, pressure.py, context_pressure.py, verifier.py, oversight_handler.py, state_tracker.py, task_lifecycle.py, directives.py, decision_executor.py, coordination.py, poll_dispatcher.py)
+- `drones/` — Background drone loop + specialized watchers (pilot.py, rules.py, log.py, idle_watcher.py, inter_worker_watcher.py, pressure.py, context_pressure.py, verifier.py, oversight_handler.py, state_tracker.py, task_lifecycle.py, directives.py, decision_executor.py, coordination.py, poll_dispatcher.py, standing_loop.py, dreamer.py, suggest.py, tuning.py, nudge_guard.py). Per-worker health detectors (context_files, diminishing_returns, rate_limit, recovery, loop, pressure) live in `drones/detectors/`.
 - `queen/` — Two Queens: interactive PTY runtime + headless `claude -p` decision function (queen.py with `HEADLESS_DECISION_PROMPT`, runtime.py with reconcile logic, session.py, oversight.py, queue.py, context.py, verifier.py for the dedicated verifier subprocess wrapper, contribute.py for shipped→local CLAUDE.md sync)
 - `hooks/` — Claude Code hook installer (install.py) — installs PreToolUse / SessionStart / PreCompact / PostCompact hooks plus per-worker `/swarm-*` slash commands and `swarm-checkpoint` / `swarm-coordinate` Skills
-- `server/` — Daemon, API routes (`routes/`), WebSocket, escalation/proposal handlers
+- `server/` — Daemon (`daemon.py`), API routes (`routes/`, incl. `standing_loops.py`, `harness_digest.py`), loop lifecycle (`loop_runner.py`), WebSocket, escalation/proposal handlers
 - `tasks/` — Task board, history, proposals, workflows, blockers (BlockerStore for worker-reported task dependencies)
 - `pipelines/` — Multi-step workflow engine (AGENT / AUTOMATED / HUMAN steps)
 - `mcp/` — HTTP MCP server + 15 worker tools (tools.py) + 15 Queen tools (queen_tools.py) exposed to the respective PTY sessions
-- `analysis/` — Tool-usage analytics (`tool_usage.py`) backing `swarm analyze-tools`
+- `analysis/` — Tool-usage analytics (`tool_usage.py`) backing `swarm analyze-tools`, and the harness-improvement digest (`harness_digest.py`) backing the dashboard's Harness tab
 - `messages/` — Inter-worker message store (findings, warnings, dependencies, status, operator)
 - `coordination/` — File ownership tracking and auto-pull sync
 - `providers/` — LLM provider abstraction (claude, gemini, codex, opencode, generic, styled, tuned)

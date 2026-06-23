@@ -153,16 +153,22 @@ The web dashboard is the primary interface. It auto-starts on boot via systemd (
 - **Interactive terminal** -- click "Attach" to open any worker's agent session in an in-browser terminal (full xterm.js PTY). Type commands, approve plans, interact directly.
 - **Task board** -- filterable by status and priority; tasks render as compact rows (click to open the Edit modal); WYSIWYG description editor with formatting toolbar, live preview, and View-source toggle; drag `.eml`/`.msg` / Outlook tiles / Jira URLs to create tasks; Queen proposals banner with approve/reject/approve-all
 - **Config page** -- tabbed editor with sections for General, LLMs, Workers, Automation (drones · Queen · workflows · pipelines), Notifications, Integrations (Microsoft Graph + Jira via OAuth), Security, Usage, Advanced, and Logs (live log viewer with severity filter and a running-daemon log-level dropdown)
-- **Bottom-panel tabs** -- the work surface switches between Tasks, **Decisions** (Queen proposals + decision history), **Pipelines** (multi-step workflow runs), and **Playbooks** (procedures synthesized from past successes)
+- **Bottom-panel tabs** -- the work surface switches between Tasks, **Decisions** (Queen proposals + decision history), **Pipelines** (multi-step workflow runs), **Playbooks** (procedures synthesized from past successes), **Loops** (standing-loop controls), and **Harness** (improvement digest)
 - **Queen tab** -- searchable archive of every Queen thread (operator chats, oversight findings, escalations, proposals); filter by status (active/resolved), kind, and worker, or search titles + message bodies; click a thread for a read-only transcript, and reopen a resolved one to follow up
 - **Messages tab** -- the inter-worker message stream (findings, warnings, dependencies, status, notes): content search, unread-only and date filters, click a message for full detail, compose to a worker or broadcast, and bulk-delete; `*` broadcasts collapse to one row with per-recipient read state
 - **Activity tab** -- the buzz log: a real-time feed of autopilot decisions and system events, with browser push alerts
+- **Loops tab** -- operator controls for standing background-improvement loops: per-worker start/pause/stop, a global kill switch, and a live per-loop token-burn readout against the daily cap (loops are off until you start one)
+- **Harness tab** -- the harness-improvement digest: the signals Swarm already mines (error-prone tools, suggested approval rules, playbook win-rates, dreamer-mined patterns) surfaced with one-click apply for the low-risk actions — operator-gated, never autonomous
 
 ![Task board with proposals banner](docs/screenshots/task-board.png)
 
 ![Queen tab — searchable archive of Queen threads with filters and per-thread detail](docs/screenshots/queen-tab.png)
 
 ![Messages tab — inter-worker message stream with search, compose, and bulk delete](docs/screenshots/messages-tab.png)
+
+![Loops tab — standing background-improvement loops with per-worker controls, a global kill switch, and a live token-burn readout](docs/screenshots/loops-tab.png)
+
+![Harness tab — operator-gated improvement digest with one-click apply for low-risk actions](docs/screenshots/harness-tab.png)
 
 If `api_password` is set in the config (or `SWARM_API_PASSWORD` env var), config mutations require a Bearer token.
 
@@ -558,6 +564,23 @@ drones:
       action: escalate
     - pattern: ".*"                    # everything else auto-approved
       action: approve
+  reconcile_interval_seconds: 90.0     # task-board invariant reconciler sweep
+  idle_nudge_max_repeats: 3            # consecutive no-progress nudges before escalating
+  native_goal_enabled: true            # seed task acceptance_criteria as a native /goal
+  native_goal_max_turns: 25            # runaway bound baked into the /goal condition
+  assign_affinity_floor: 0.5           # min affinity score to auto-assign a task to a worker
+  assign_operator_engagement_minutes: 10.0  # skip auto-nudge if operator typed recently
+  dreamer_interval_seconds: 14400.0    # pattern-mining drone sweep (4h)
+  dreamer_lookback_hours: 24.0         # buzz-log window the dreamer mines
+  dreamer_min_pattern_count: 3         # repeats before a pattern becomes a learning
+  # Native /loop coexistence (task #761)
+  native_loop_coexistence_enabled: true  # leave workers parked between /loop fires undisturbed
+  native_loop_grace_seconds: 30.0      # padding on the ScheduleWakeup dwell before re-nudging
+  # Per-task token-budget governor (task #762)
+  task_token_ceiling: 0                # output-token budget per task (0=off); escalates + parks on breach
+  # Standing background-improvement loops (task #765)
+  standing_loop_daily_token_cap: 200000  # rolling 24h per-loop output-token cap
+  standing_loop_topics: []             # override the built-in deterministic topic set when non-empty
 
 queen:
   enabled: true
@@ -686,6 +709,12 @@ test:
 - **`drones.poll_interval_buzzing/waiting/resting`** -- per-state poll interval overrides (set to `0` to use defaults derived from `poll_interval`: buzzing=2×, waiting=1×, resting=3×)
 - **`drones.allowed_read_paths`** -- paths where Read() tool auto-approves without escalation
 - **`drones.auto_complete_min_idle`** -- seconds a worker must be idle before Queen proposes task completion
+- **`drones.idle_nudge_max_repeats`** -- consecutive no-progress idle-nudges before the watcher escalates to the operator instead of re-poking (`0` = unbounded)
+- **`drones.native_goal_enabled` / `native_goal_max_turns`** -- seed a task's `acceptance_criteria` as a native `/goal` on providers that support it (Claude Code); `max_turns` is the runaway bound baked into the condition
+- **`drones.dreamer_interval_seconds` / `dreamer_lookback_hours` / `dreamer_min_pattern_count`** -- the pattern-mining "dreamer" drone: how often it sweeps the buzz log, the window it mines, and how many repeats before a pattern becomes a learning
+- **`drones.native_loop_coexistence_enabled` / `native_loop_grace_seconds`** -- native `/loop` support: leave a worker parked between loop fires undisturbed (no idle-nudge / assign-over); `grace_seconds` pads the ScheduleWakeup dwell read from the worker
+- **`drones.task_token_ceiling`** -- per-task OUTPUT-token budget ceiling (`0` = off); on breach the task is escalated and parked (`ACTIVE → BLOCKED`) without interrupting the PTY
+- **`drones.standing_loop_daily_token_cap` / `standing_loop_topics`** -- standing background-improvement loops: rolling 24h per-loop output-token cap (the loop sleeps when exhausted), and an optional override of the built-in deterministic topic set
 - **`action_buttons`** -- customize the dashboard action bar (built-in actions or custom commands)
 - **`task_buttons`** -- customize the task row action buttons
 - **`tunnel_domain`** -- custom domain for a named Cloudflare tunnel (leave empty for random subdomain)
@@ -726,6 +755,10 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | | `GET /api/drones/approval-rate` | Auto-approval rate over a rolling window (`?hours=24`) |
 | | `GET /api/drones/tuning` | Drone tuning suggestions |
 | | `POST /api/drones/rules/suggest` | AI-suggested approval rules |
+| **Standing loops** | `GET /api/standing-loops` | Per-loop status + token-burn readout (backs the **Loops** tab) |
+| | `POST /api/standing-loops/start`, `/pause`, `/stop` | Per-worker standing-loop control (`{worker}` body) |
+| | `POST /api/standing-loops/kill-switch` | Global kill switch (`{on}` body) |
+| **Harness** | `GET /api/harness-digest` | Operator-gated improvement digest (backs the **Harness** tab) |
 | **Tasks** | `GET /api/tasks`, `POST /api/tasks` | List / create tasks |
 | | `POST /api/tasks/{id}/assign`, `/start`, `/complete`, `/fail`, `/unassign`, `/reopen` | Task lifecycle |
 | | `POST /api/tasks/{id}/approve`, `/reject` | Plan-mode approval gate (user-channel tasks) |
