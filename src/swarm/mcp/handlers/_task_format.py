@@ -19,7 +19,12 @@ if TYPE_CHECKING:
 
 _TASK_STATUS_DEFAULT_LIMIT = 50
 _TASK_STATUS_MAX_LIMIT = 500
-_OPEN_STATUSES = {"backlog", "unassigned", "assigned", "active"}
+# #876: BLOCKED is an OPEN state — a task held on an internal/external blocker
+# is tracked work awaiting resume, NOT a closed task. It must stay in the
+# default "mine"/open views and sort with open work (top), not sink into the
+# done/failed bucket. (It is still excluded from ``active_tasks``, so the
+# idle-watcher does not nudge it — visibility and nudge-gating are separate.)
+_OPEN_STATUSES = {"backlog", "unassigned", "assigned", "active", "blocked"}
 
 
 def _format_task_line(t: SwarmTask) -> str:
@@ -82,6 +87,15 @@ def _format_task_detail(t: SwarmTask) -> str:
 
     if getattr(t, "jira_key", None):
         lines.append(f"  jira: {t.jira_key}")
+
+    # #876: surface what a BLOCKED task is waiting on so the operator/worker
+    # sees the unblock condition without digging into history.
+    ext_ref = (getattr(t, "external_blocker_ref", None) or "").strip()
+    if ext_ref:
+        lines.append(f"  blocked-on-external: {ext_ref}")
+    block_reason = (getattr(t, "block_reason", None) or "").strip()
+    if block_reason:
+        lines.append(f"  block_reason: {block_reason}")
 
     desc = (getattr(t, "description", None) or "").strip()
     if desc:

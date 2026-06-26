@@ -15,7 +15,8 @@ if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
 
 
-_OPEN_STATUSES = {"backlog", "unassigned", "assigned", "active"}
+# #876: BLOCKED is an OPEN (tracked, awaiting-resume) state, not a closed one.
+_OPEN_STATUSES = {"backlog", "unassigned", "assigned", "active", "blocked"}
 _DONE_STATUSES = {"done"}
 
 

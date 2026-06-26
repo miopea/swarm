@@ -122,6 +122,7 @@ def _task_full_dict(t: SwarmTask) -> dict[str, object]:
         "attachments": list(t.attachments),
         "resolution": t.resolution,
         "block_reason": t.block_reason,
+        "external_blocker_ref": t.external_blocker_ref,
         "is_cross_project": t.is_cross_project,
         "source_worker": t.source_worker,
         "target_worker": t.target_worker,

@@ -509,6 +509,44 @@ class TaskBoard(EventEmitter):
             _log.info("task %s parked by %s (%s)", task_id, worker_name, reason[:80])
         return True
 
+    def block_on_external(
+        self, task_id: str, worker_name: str, watch_ref: str, reason: str
+    ) -> bool:
+        """#876: a worker parks its OWN task as BLOCKED-on-external.
+
+        For work that is correctly waiting on an EXTERNAL/upstream
+        dependency with no internal swarm task to reference (a package
+        release, a vendor PR merging). Transitions an owned ASSIGNED/ACTIVE
+        task → BLOCKED, recording ``watch_ref`` (what it's waiting on) and
+        ``reason``. BLOCKED is off-active: it's excluded from
+        ``active_tasks`` so the IdleWatcher never nudges it, yet it stays in
+        ``all_tasks`` so it remains visible/tracked (not completed/archived).
+        Unpark is the normal operator re-dispatch (``activate`` →
+        BLOCKED→ACTIVE), which clears the watch reference.
+
+        Rejects (returns False) unless the task exists, is owned by
+        *worker_name*, and is ASSIGNED or ACTIVE — no cross-worker blocking,
+        no blocking of terminal/already-blocked tasks.
+        """
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if (
+                task is None
+                or task.assigned_worker != worker_name
+                or task.status not in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE)
+            ):
+                return False
+            task.block(reason, external_ref=watch_ref)
+            self._persist()
+            self._notify()
+            _log.info(
+                "task %s blocked-on-external by %s (watch=%s)",
+                task_id,
+                worker_name,
+                watch_ref[:80],
+            )
+        return True
+
     def block_for_operator(self, task_id: str, reason: str) -> bool:
         """Operator-approved park of a stalled, operator-blocked task:
         ACTIVE → BLOCKED (off-active, not auto-assignable, owner retained).

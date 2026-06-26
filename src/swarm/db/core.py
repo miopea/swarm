@@ -115,6 +115,7 @@ class SwarmDB:
             (12, self._migrate_v12_messages_dedup_index),
             (13, self._migrate_v13_query_indexes),
             (14, self._migrate_v14_started_at),
+            (15, self._migrate_v15_external_blocker_ref),
         ]
         for version, migrate in migrations:
             if from_version < version:
@@ -371,6 +372,22 @@ class SwarmDB:
             _log.info("v11: added tasks.block_reason")
         except sqlite3.OperationalError:
             _log.debug("v11 migration: block_reason column likely already exists")
+
+    def _migrate_v15_external_blocker_ref(self) -> None:
+        """v15 (#876): add ``tasks.external_blocker_ref`` — a free-text
+        reference to the EXTERNAL/upstream dependency a BLOCKED task is
+        waiting on (no internal task number exists for it). Defaults to ''
+        for legacy rows. ALTER wrapped in try/except — fresh DBs already have
+        it via SCHEMA_V1.
+        """
+        assert self._conn is not None
+        try:
+            self._conn.execute(
+                "ALTER TABLE tasks ADD COLUMN external_blocker_ref TEXT NOT NULL DEFAULT ''"
+            )
+            _log.info("v15: added tasks.external_blocker_ref")
+        except sqlite3.OperationalError:
+            _log.debug("v15 migration: external_blocker_ref column likely already exists")
 
     def _migrate_v14_started_at(self) -> None:
         """v14 (#611 P2): add ``tasks.started_at`` (when the task last went

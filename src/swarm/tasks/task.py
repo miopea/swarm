@@ -120,6 +120,12 @@ class SwarmTask:
     attachments: list[str] = field(default_factory=list)  # file paths
     resolution: str = ""  # explanation of what was done (filled on completion)
     block_reason: str = ""  # #405: why this task is BLOCKED (held off-active)
+    # #876: free-text reference to the EXTERNAL/upstream dependency a BLOCKED
+    # task is waiting on (e.g. an npm package@range release, a vendor PR URL).
+    # Set by the blocked-on-external flow (``board.block_on_external`` /
+    # ``swarm_block_on_external``); empty for internal operator/blocker parks.
+    # Cleared on resume (``task.start``). Persisted (schema v15).
+    external_blocker_ref: str = ""
     source_email_id: str = ""  # Graph message ID if created from email
     jira_key: str = ""  # Jira ticket key (e.g. "PROJ-123") if synced from Jira
     number: int = 0  # auto-incrementing display number (set by TaskBoard)
@@ -172,18 +178,27 @@ class SwarmTask:
         self.started_at = now
         # Resuming clears any stale hold reason — covers the operator
         # unpark of an operator-blocked task (BLOCKED→ACTIVE via
-        # board.activate) and any #405 blocker-binding resume.
+        # board.activate) and any #405 blocker-binding resume. #876: also
+        # clears the external watch reference so a resumed task no longer
+        # advertises a (now-satisfied) upstream dependency.
         self.block_reason = ""
+        self.external_blocker_ref = ""
         self.updated_at = now
 
-    def block(self, reason: str = "") -> None:
+    def block(self, reason: str = "", external_ref: str = "") -> None:
         """#405 INV-2: park this task off-ACTIVE on a blocker binding.
 
         Keeps ``assigned_worker`` (the same worker resumes when the
         blocker clears) but the task no longer counts as worker-active.
+
+        #876: ``external_ref`` records an EXTERNAL/upstream dependency the
+        task is waiting on (no internal task number exists for it) — e.g. a
+        package release or vendor PR. Left empty for internal operator /
+        blocker-binding parks.
         """
         self.status = TaskStatus.BLOCKED
         self.block_reason = reason
+        self.external_blocker_ref = external_ref
         self.updated_at = time.time()
 
     @property

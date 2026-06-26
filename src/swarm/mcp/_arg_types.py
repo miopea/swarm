@@ -63,6 +63,14 @@ class ParkTaskArgs(TypedDict, total=False):
     task_number: int
 
 
+class BlockExternalArgs(TypedDict, total=False):
+    """``swarm_block_on_external`` — park a task on an upstream/external wait."""
+
+    watch_ref: str
+    reason: str
+    task_number: int
+
+
 class NoteToQueenArgs(TypedDict, total=False):
     """``swarm_note_to_queen`` — side-channel note to the Queen."""
 

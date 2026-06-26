@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any, TypedDict
 # Per-domain modules contribute both their schemas and their handlers.
 from swarm.mcp.handlers._batch import HANDLERS as _BATCH_H
 from swarm.mcp.handlers._batch import TOOLS as _BATCH_T
+from swarm.mcp.handlers._block_external import HANDLERS as _BLOCK_EXT_H
+from swarm.mcp.handlers._block_external import TOOLS as _BLOCK_EXT_T
 from swarm.mcp.handlers._blockers import HANDLERS as _BLOCKER_H
 from swarm.mcp.handlers._blockers import TOOLS as _BLOCKER_T
 from swarm.mcp.handlers._create import HANDLERS as _CREATE_H
@@ -123,6 +125,7 @@ def tools_source_drift() -> ToolsSourceDrift:
 TOOLS: list[dict[str, Any]] = [
     *_MSG_T,
     *_BLOCKER_T,
+    *_BLOCK_EXT_T,
     *_PARK_T,
     *_EMAIL_T,
     *_TASKS_T,
@@ -138,6 +141,7 @@ TOOLS: list[dict[str, Any]] = [
 _HANDLERS = {
     **_MSG_H,
     **_BLOCKER_H,
+    **_BLOCK_EXT_H,
     **_PARK_H,
     **_EMAIL_H,
     **_TASKS_H,

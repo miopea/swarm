@@ -28,6 +28,7 @@ class TaskAction(Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     UNASSIGNED = "UNASSIGNED"
+    BLOCKED = "BLOCKED"  # #876: parked on an external/upstream dependency
     REOPENED = "REOPENED"
     REMOVED = "REMOVED"
     EDITED = "EDITED"
