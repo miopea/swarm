@@ -1996,32 +1996,26 @@
         }
 
         /* Mobile D-pad: directional keys + a center Enter circle, floating
-           bottom-right of a worker terminal. Sits above the jump-to-bottom
-           pill when it shows, otherwise in the pill's corner. Touch-first —
-           hidden on desktop where a real keyboard is available. */
+           top-right of a worker terminal — out of the way of the composer and
+           the jump-to-bottom pill, which both live along the bottom edge.
+           Touch-first — hidden on desktop where a real keyboard is available. */
         .term-dpad {
             position: absolute;
             right: 12px;
-            bottom: 12px;
+            top: 12px;
             display: none;
             grid-template-columns: repeat(3, 44px);
             grid-template-rows: repeat(3, 44px);
             gap: 4px;
             z-index: 11;
-            transition: bottom 150ms ease;
         }
-        .term-dpad.dpad-raised { bottom: 64px; }  /* clear the pill */
-        /* Lift the floating terminal controls clear of the mobile composer
-           (send bar) whenever it's visible, so neither the d-pad nor the
-           jump-to-bottom pill covers/crowds the text input + command bar.
-           Coarse-pointer only — the send bar shows only on touch; :has()
-           reacts to its .visible toggle (same pattern as the bottom-tabbed
-           collapse rules elsewhere). The pill clears the composer at 68px;
-           the d-pad stays above it (per "d-pad sits above the pill"). */
+        /* Lift the jump-to-bottom pill clear of the mobile composer (send bar)
+           whenever it's visible, so it doesn't cover/crowd the text input +
+           command bar. Coarse-pointer only — the send bar shows only on touch;
+           :has() reacts to its .visible toggle. The d-pad sits at the top, so
+           it no longer needs to dodge the composer. */
         @media (pointer: coarse) {
             .detail-area:has(.mobile-send-bar.visible) .jump-to-bottom-pill { bottom: 68px; }
-            .detail-area:has(.mobile-send-bar.visible) .term-dpad { bottom: 68px; }
-            .detail-area:has(.mobile-send-bar.visible) .term-dpad.dpad-raised { bottom: 120px; }
         }
         .term-dpad-btn {
             -webkit-appearance: none;

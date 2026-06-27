@@ -4313,11 +4313,9 @@
     function updateJumpToBottomPill(entry) {
         if (!entry) return;
         var showing = !entry.stickyBottom;
-        // Pill is visible only when scrolled away from the bottom; the d-pad
-        // rides above it then, and drops back into the pill's corner when the
-        // pill is hidden.
+        // Pill is visible only when scrolled away from the bottom. The d-pad
+        // floats at the top-right, clear of the pill, so it needs no shift.
         if (entry._jumpBtn) entry._jumpBtn.classList.toggle('show', showing);
-        if (entry._dpad) entry._dpad.classList.toggle('dpad-raised', showing);
     }
 
     function resyncTermViewport(name, entry, stickToBottom) {
