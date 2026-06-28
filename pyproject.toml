@@ -42,7 +42,11 @@ dev = [
     "pytest-cov>=4.0",
     "pytest-timeout>=2.1",
     "mypy>=1.0",
-    "ruff>=0.1",
+    # Pinned exactly: ruff's isort (I001) behavior drifts between minor
+    # releases, so an unpinned local ruff gave false-green /check runs while
+    # CI (which installs this same spec) rejected the imports. Keep in lockstep
+    # with CI — bump both together.
+    "ruff==0.15.20",
 ]
 
 [project.scripts]
