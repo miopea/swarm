@@ -3,7 +3,6 @@
 import time
 
 from swarm.analysis.throughput import compute_throughput
-
 from swarm.tasks.task import SwarmTask, TaskStatus
 
 NOW = 1_750_000_000.0

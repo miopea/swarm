@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from swarm.server.health import DiskUsage, HealthSweep
-
 from swarm.notify.bus import EventType, Severity
+from swarm.server.health import DiskUsage, HealthSweep
 
 
 def make_sweep(
