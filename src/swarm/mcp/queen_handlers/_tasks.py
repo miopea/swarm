@@ -31,13 +31,16 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "queen_reassign_task",
         "description": (
-            "Move an assigned or in-progress task from one worker to another.  Use "
-            "when you've determined the original assignee can't reach the work "
-            "(blocked, wrong expertise, over-loaded) and a peer is better-positioned. "
-            "Call queen_view_worker_state on both workers first so you're acting on "
-            "current reality, not a stale assumption.  If `start` is true, the new "
-            "worker is immediately sent the task message; otherwise the task sits "
-            "ASSIGNED for the next poll cycle."
+            "Give a task an owner: MOVE an assigned/in-progress task between workers, "
+            "OR ASSIGN an UNASSIGNED task (including an authority-guard / HOLD-parked "
+            "one) to a worker for the first time.  Use when the original assignee can't "
+            "reach the work (blocked, wrong expertise, over-loaded) and a peer is "
+            "better-positioned, or when an orphaned unassigned/parked task needs an "
+            "owner.  Assigning a HOLD-parked task clears the HOLD — your assignment is "
+            "the endorsement.  Call queen_view_worker_state on the target worker first "
+            "so you're acting on current reality, not a stale assumption.  If `start` is "
+            "true, the worker is immediately sent the task message; otherwise the task "
+            "sits ASSIGNED for the next poll cycle."
         ),
         "inputSchema": {
             "type": "object",
@@ -195,9 +198,20 @@ def _handle_reassign_task(
     if prev == to_worker:
         return [{"type": "text", "text": f"Task #{task.number} already assigned to {to_worker}."}]
 
-    # Unassign first so assign() accepts (it checks is_available).
     if task.assigned_worker:
+        # Move: unassign first so board.assign accepts (it checks is_available).
         d.task_board.unassign(task.id)
+    elif task.is_on_hold:
+        # #939: assigning an UNASSIGNED, HOLD-parked task is a plain assign +
+        # endorsement — clear the HOLD so board.assign's is_available gate
+        # accepts it. Orphaned authority-guard / HOLD tasks (#919/#929/#935)
+        # were otherwise un-assignable by anyone: the Queen couldn't give them
+        # an owner and a worker couldn't self-close them (a coordination
+        # dead-zone, closed together with the #939 self-close path).
+        from swarm.tasks.task import HOLD_TAGS
+
+        kept = [t for t in task.tags if str(t).strip().lower() not in HOLD_TAGS]
+        d.edit_task(task.id, tags=kept, actor="queen")
     if not d.task_board.assign(task.id, to_worker):
         return [
             {

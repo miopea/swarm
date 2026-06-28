@@ -194,8 +194,16 @@ def _handle_prompt_worker(
     ack = bool(args.get("acknowledge_engaged"))
     drones_cfg = getattr(d.config, "drones", None)
     window = float(getattr(drones_cfg, "prompt_collision_window_seconds", 0.0))
+    # #939: surface the target's live PROCESS state too — a worker with no
+    # board task can still be BUZZING (e.g. a task-less audit run), and
+    # "no ACTIVE task" was being misread as "idle/free".
     snap = engagement_snapshot(
-        getattr(d, "task_board", None), getattr(d, "message_store", None), target, now=_time.time()
+        getattr(d, "task_board", None),
+        getattr(d, "message_store", None),
+        target,
+        now=_time.time(),
+        process_state=worker.display_state.value,
+        process_state_ago=worker.state_duration,
     )
     collided = snap.collides_within(window)
     engagement_str = snap.summary()

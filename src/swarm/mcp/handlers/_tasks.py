@@ -98,7 +98,10 @@ TOOLS: list[dict[str, Any]] = [
             "can be omitted. When you have multiple active assignments, pass ``number`` "
             "explicitly — the tool refuses to guess which task you mean, because silent "
             "guessing is how resolutions get attached to the wrong record. Fails if you "
-            "have no active task or the specified number isn't assigned to you."
+            "have no active task or the specified ``number`` is owned by another worker. "
+            "If the ``number`` you pass is UNASSIGNED (e.g. an authority-guard / HOLD park "
+            "you nonetheless completed), you self-assign-on-close: the tool adopts the task "
+            "to you, clears the HOLD, and closes it — no Queen force-complete needed."
         ),
         "inputSchema": {
             "type": "object",
@@ -188,6 +191,44 @@ def _handle_task_status(d: SwarmDaemon, worker_name: str, args: TaskStatusArgs) 
     }
 
 
+def _self_close_unassigned(
+    d: SwarmDaemon, worker_name: str, task: Any, resolution: str
+) -> list[TextContent]:
+    """#939: close an UNASSIGNED task the caller demonstrably did.
+
+    The doer adopts the task — clears any HOLD park (completing it IS the
+    endorsement), self-assigns for attribution, then force-completes. Refuses
+    only when the task is already terminal (nothing to close). Every call logs
+    a ``TASK_SELF_CLOSED`` audit entry naming the doer.
+    """
+    from swarm.tasks.task import HOLD_TAGS
+
+    if task.status.value in ("done", "failed"):
+        return [{"type": "text", "text": f"Task #{task.number} is already {task.status.value}."}]
+    if task.is_on_hold:
+        kept = [t for t in task.tags if str(t).strip().lower() not in HOLD_TAGS]
+        d.edit_task(task.id, tags=kept, actor=worker_name)
+    # Adopt directly — board.assign would reject a still-HOLD/parked task via
+    # is_available; the caller completing it is its own authorization.
+    task.assign(worker_name)
+    from swarm.drones.log import LogCategory, SystemAction
+
+    d.drone_log.add(
+        SystemAction.TASK_SELF_CLOSED,
+        worker_name,
+        f"self-assigned + closed unassigned #{task.number} (caller is the doer)",
+        category=LogCategory.TASK,
+    )
+    if not d.complete_task(task.id, actor=worker_name, resolution=resolution, force=True):
+        return [
+            {
+                "type": "text",
+                "text": f"Failed to close #{task.number} (status={task.status.value}).",
+            }
+        ]
+    return [{"type": "text", "text": f"Task #{task.number} self-assigned + completed."}]
+
+
 def _handle_complete_task(
     d: SwarmDaemon, worker_name: str, args: CompleteTaskArgs
 ) -> list[TextContent]:
@@ -239,8 +280,17 @@ def _handle_complete_task(
         )
         if match is None:
             return [{"type": "text", "text": f"No task found with number #{target_num}."}]
+        # #939: a task left UNASSIGNED (authority-guard park, or HOLD) that the
+        # caller demonstrably completed can't be closed the normal way —
+        # ownership is required and there's no self-assign tool, so every such
+        # closure used to route through the Queen (force-complete; 3× on
+        # 2026-06-28 alone). Let the doer self-assign-on-close: when the task
+        # has NO owner, the caller adopts it (clearing any HOLD park —
+        # completing it IS the endorsement) and closes it, with an audit entry.
+        if not match.assigned_worker:
+            return _self_close_unassigned(d, worker_name, match, resolution)
         if match.assigned_worker != worker_name:
-            owner = match.assigned_worker or "nobody"
+            owner = match.assigned_worker
             return [
                 {
                     "type": "text",

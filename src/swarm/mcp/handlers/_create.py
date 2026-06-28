@@ -14,8 +14,9 @@ from typing import TYPE_CHECKING, Any
 
 from swarm.mcp._arg_types import CreateTaskArgs
 from swarm.mcp.types import TextContent
-from swarm.tasks.authority_guard import screen_task_authority
+from swarm.tasks.authority_guard import AuthorityVerdict, screen_task_authority
 from swarm.tasks.task import HOLD_TAG
+from swarm.worker.worker import QUEEN_WORKER_NAME
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -191,7 +192,15 @@ def _handle_create_task(
     # source, it's fabricated authorization (the @types/node "operator opted
     # in, amendment in flight" case). Park it HOLD for operator review instead
     # of dispatching — never let an auto-task invent authority to act.
-    authority = screen_task_authority(title, description)
+    # #939: the Queen is the operator's authorized relay — surfacing operator
+    # reports ("operator says…", "operator reported…") IS her job, so the
+    # authority guard must not park every Queen-authored task. Exempt her
+    # (mirrors her #873 fanout-cap exemption); the guard still catches genuine
+    # auto-generated / worker-spawned fabrications.
+    if worker_name == QUEEN_WORKER_NAME:
+        authority = AuthorityVerdict(flagged=False, matched="")
+    else:
+        authority = screen_task_authority(title, description)
     # A HOLD task is filed UNASSIGNED but tagged so the auto-assign drone won't
     # grab it (see SwarmTask.is_available). Stays visible/tracked. Authority-
     # flagged tasks are forced HOLD regardless of the caller's ``hold`` arg.

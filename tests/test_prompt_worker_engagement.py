@@ -18,18 +18,29 @@ from swarm.worker.worker import QUEEN_WORKER_NAME, WorkerState
 _NOTE = "NOTE: target appears freshly engaged"
 
 
-def _worker(name: str, state: WorkerState = WorkerState.RESTING) -> MagicMock:
+def _worker(
+    name: str, state: WorkerState = WorkerState.RESTING, duration: float = 0.0
+) -> MagicMock:
     w = MagicMock()
     w.name = name
     w.state = state
+    # #939: the handler now reads live process state for the engagement snapshot.
+    w.display_state = state  # WorkerState exposes .value
+    w.state_duration = duration
     return w
 
 
 def _daemon(
-    *, target_state=WorkerState.RESTING, active=None, assigned=None, unread=None, window=300.0
+    *,
+    target_state=WorkerState.RESTING,
+    target_duration=0.0,
+    active=None,
+    assigned=None,
+    unread=None,
+    window=300.0,
 ) -> MagicMock:
     d = MagicMock()
-    d.workers = [_worker("alice", target_state)]
+    d.workers = [_worker("alice", target_state, target_duration)]
     d.drone_log = MagicMock()
     d.config = HiveConfig(drones=DroneConfig(prompt_collision_window_seconds=window))
     board = MagicMock()

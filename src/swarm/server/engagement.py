@@ -63,6 +63,13 @@ class EngagementInfo:
     assigned_count: int = 0  # ASSIGNED + ACTIVE tasks owned by the worker
     recent_handoff: Message | None = None  # most-recent unread inbound dependency/warning
     recent_handoff_ago: float | None = None  # seconds since that handoff arrived
+    # #939: the worker's live PROCESS state (BUZZING/WAITING/RESTING/SLEEPING)
+    # + how long it's held it. A worker with NO board task can still be BUSY
+    # (e.g. a task-less /audit-docs run while BUZZING) — "no ACTIVE task" must
+    # not be misread as "idle/free". Empty/None when the caller didn't supply
+    # state (e.g. a defensive snapshot built without a worker handle).
+    process_state: str = ""
+    process_state_ago: float | None = None  # seconds in the current process state
 
     def collides_within(self, window_seconds: float) -> bool:
         """Soft collision: the worker became engaged within ``window_seconds``
@@ -79,6 +86,11 @@ class EngagementInfo:
     def summary(self) -> str:
         """One-line human summary for the tool result + buzz log."""
         parts: list[str] = []
+        # Lead with the live process state so "busy but task-less" reads as
+        # busy — the #939 misread was treating "no ACTIVE task" as "free".
+        if self.process_state:
+            ago = f" {int(self.process_state_ago)}s" if self.process_state_ago is not None else ""
+            parts.append(f"{self.process_state}{ago}")
         if self.active_task is not None:
             num = getattr(self.active_task, "number", 0)
             title = (getattr(self.active_task, "title", "") or "")[:60]
@@ -110,10 +122,19 @@ def engagement_snapshot(
     worker_name: str,
     *,
     now: float,
+    process_state: str | None = None,
+    process_state_ago: float | None = None,
 ) -> EngagementInfo:
     """Build an :class:`EngagementInfo` for ``worker_name``. Never raises —
-    a ``None`` board/store or any internal error yields an empty snapshot."""
+    a ``None`` board/store or any internal error yields an empty snapshot.
+
+    ``process_state`` / ``process_state_ago`` (#939) carry the worker's live
+    PTY state so prompt-time awareness reflects ACTUAL busyness, not just
+    board-task assignment. Optional — callers without a worker handle (defensive
+    snapshots) omit them and the state simply isn't surfaced."""
     info = EngagementInfo(worker=worker_name or "")
+    info.process_state = (process_state or "").strip()
+    info.process_state_ago = process_state_ago
     if not worker_name:
         return info
     if board is not None:
