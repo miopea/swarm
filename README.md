@@ -61,7 +61,7 @@ Drones are specialized background sweepers that share the daemon's poll loop. Ea
 **Worker Coordination (MCP)**
 
 - **MCP server** -- Swarm exposes an HTTP MCP server at `/mcp` so the agents themselves can coordinate via tool calls
-- **15 coordination tools** -- `swarm_check_messages`, `swarm_send_message`, `swarm_task_status`, `swarm_claim_file`, `swarm_complete_task`, `swarm_create_task`, `swarm_park_task` (hand the current task back to the queue), `swarm_get_learnings`, `swarm_get_playbooks` (recall reusable procedures synthesized from past successes), `swarm_report_progress`, `swarm_report_blocker` (declare task-dependency blocker, suppresses idle nudges), `swarm_query_peers` (read-only snapshot of peer worker state for handoff decisions), `swarm_note_to_queen` (lightweight side-channel note), `swarm_draft_email` (create a Microsoft Graph draft in the operator's Outlook Drafts folder — never sent automatically), and `swarm_batch` (run multiple ops in one round-trip)
+- **16 coordination tools** -- `swarm_check_messages`, `swarm_send_message`, `swarm_task_status`, `swarm_claim_file`, `swarm_complete_task`, `swarm_create_task`, `swarm_park_task` (hand the current task back to the queue), `swarm_block_on_external` (mark a task blocked on an external dependency so the swarm stops nudging it), `swarm_get_learnings`, `swarm_get_playbooks` (recall reusable procedures synthesized from past successes), `swarm_report_progress`, `swarm_report_blocker` (declare task-dependency blocker, suppresses idle nudges), `swarm_query_peers` (read-only snapshot of peer worker state for handoff decisions), `swarm_note_to_queen` (lightweight side-channel note), `swarm_draft_email` (create a Microsoft Graph draft in the operator's Outlook Drafts folder — never sent automatically), and `swarm_batch` (run multiple ops in one round-trip)
 - **Inter-worker messages** -- workers send findings, warnings, dependencies, and status updates to each other (or broadcast)
 - **File claims** -- advisory locks prevent two workers from editing the same file at once
 - **Learnings** -- resolutions from completed tasks are searchable by other workers for context
@@ -418,7 +418,15 @@ The dashboard checks for updates automatically on startup and shows a banner whe
 
 Claude Code hooks and the cross-task hook script (`~/.swarm/hooks/cross-task-hook.sh`) are automatically reinstalled every time the daemon starts (`swarm serve`), so they stay in sync with the installed package version — no manual `swarm init` or `swarm install-hooks` needed after upgrades.
 
-For the historical roadmap (Tier 1–3 items shipped, deferred items, future research bundles) see [`docs/features-roadmap.md`](docs/features-roadmap.md) and [`docs/claude-code-roadmap.md`](docs/claude-code-roadmap.md).
+## Documentation
+
+[`CHANGELOG.md`](CHANGELOG.md) is the authoritative record of what has shipped. Additional reference docs:
+
+- [`docs/features-roadmap.md`](docs/features-roadmap.md) and [`docs/claude-code-roadmap.md`](docs/claude-code-roadmap.md) — historical roadmap (Tier 1–3 items shipped, deferred items, future research bundles).
+- [`docs/websocket-protocol.md`](docs/websocket-protocol.md) — real-time dashboard ↔ daemon WebSocket event and command protocol.
+- [`docs/multi-llm-providers.md`](docs/multi-llm-providers.md) — architecture reference for the Gemini / Codex / OpenCode worker backends.
+- [`docs/claude-code-insights.md`](docs/claude-code-insights.md) — reference notes on Claude Code internals informing future improvements.
+- [`docs/qa-mobile-findings-2026-05-20.md`](docs/qa-mobile-findings-2026-05-20.md) — mobile-viewport QA findings snapshot.
 
 ## Service Management
 
@@ -457,11 +465,10 @@ Uninstalling the service leaves your config and database untouched — `~/.confi
 | `swarm install-service` | Install/manage background service (systemd or launchd) |
 | `swarm check-states` | Diagnostic: show current worker states from PTY ring buffer |
 | `swarm analyze-tools [--since=7d] [--json]` | Summarise MCP tool usage from the buzz log (calls / errors / error samples per tool) |
-| `swarm test --pin-model=<id>` | Run orchestration tests and pin the model identifier in the infra snapshot for reproducibility |
 | `swarm db <stats\|export\|prune\|backup\|restore\|check>` | Database management — inspect, export, prune, back up, restore, and integrity-check `~/.swarm/swarm.db`. `restore` recovers from a backup (newest auto-backup by default), keeping the replaced DB at `swarm.db.pre-restore` |
 | `swarm queen sync-claude-md [--accept-shipped\|--keep-local]` | Three-way reconcile the interactive Queen's CLAUDE.md against the shipped `QUEEN_SYSTEM_PROMPT` constant. No flags = status report; `--accept-shipped` overwrites on-disk with shipped; `--keep-local` ack drift + preserve edits |
 | `swarm queen contribute-claude-md` | Reverse-sync local interactive-Queen CLAUDE.md edits back into the shipped `QUEEN_SYSTEM_PROMPT` constant — for promoting operator-tuned coordination policy into the next ship |
-| `swarm test` | Run supervised orchestration tests — scaffolds a synthetic project, auto-resolves proposals, and generates an AI-powered report to `~/.swarm/reports/` |
+| `swarm test [--pin-model=<id>]` | Run supervised orchestration tests — scaffolds a synthetic project, auto-resolves proposals, and generates an AI-powered report to `~/.swarm/reports/`. `--pin-model` records the model identifier in the infra snapshot for reproducible regressions |
 | `swarm tunnel [--port N]` | Start Cloudflare Tunnel for remote HTTPS access |
 
 ### Global Flags
@@ -848,7 +855,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 │  .eml/.msg import              OAuth · two-way sync      │
 ├─────────────────────────────────────────────────────────┤
 │  MCP Server (/mcp)             Inter-worker Messages     │
-│  15 worker · 15 Queen tools    findings · warnings · etc │
+│  16 worker · 15 Queen tools    findings · warnings · etc │
 │  file claims · learnings       dedup · read tracking     │
 │  playbooks (synthesized)       health-sweep · digests    │
 ├─────────────────────────────────────────────────────────┤

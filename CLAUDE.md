@@ -20,7 +20,7 @@
 | File | When to Check |
 |------|---------------|
 | `swarm.yaml` | Configuring workers, drones, queen, groups |
-| `src/swarm/worker/state.py` | Debugging state detection issues |
+| `src/swarm/drones/state_tracker.py` | Debugging state detection issues (provider patterns in `src/swarm/providers/`) |
 | `src/swarm/drones/pilot.py` | Understanding the poll loop and drone actions |
 | `src/swarm/server/daemon.py` | Core daemon lifecycle, events, WebSocket broadcasts |
 | `src/swarm/server/api.py` | All HTTP/WebSocket endpoints |
@@ -312,10 +312,12 @@ the client honours reconnect contracts.
 - `server/` — Daemon (`daemon.py`), API routes (`routes/`, incl. `standing_loops.py`, `harness_digest.py`), loop lifecycle (`loop_runner.py`), WebSocket, escalation/proposal handlers
 - `tasks/` — Task board, history, proposals, workflows, blockers (BlockerStore for worker-reported task dependencies)
 - `pipelines/` — Multi-step workflow engine (AGENT / AUTOMATED / HUMAN steps)
-- `mcp/` — HTTP MCP server + 15 worker tools (tools.py) + 15 Queen tools (queen_tools.py) exposed to the respective PTY sessions
+- `mcp/` — HTTP MCP server + 16 worker tools (tools.py) + 15 Queen tools (queen_tools.py) exposed to the respective PTY sessions
 - `analysis/` — Tool-usage analytics (`tool_usage.py`) backing `swarm analyze-tools`, and the harness-improvement digest (`harness_digest.py`) backing the dashboard's Harness tab
 - `messages/` — Inter-worker message store (findings, warnings, dependencies, status, operator)
 - `coordination/` — File ownership tracking and auto-pull sync
+- `git/` — Git conflict detection and worktree management
+- `playbooks/` — Reusable-procedure synthesis and consolidation (recalled via `swarm_get_playbooks`)
 - `providers/` — LLM provider abstraction (claude, gemini, codex, opencode, generic, styled, tuned)
 - `feedback/` — In-app feedback: redaction, builder, `gh` CLI submission
 - `resources/` — Memory / swap / load monitoring with pressure-based worker suspend
