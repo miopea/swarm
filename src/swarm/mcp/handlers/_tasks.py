@@ -21,6 +21,7 @@ from swarm.mcp.handlers._task_format import (
     _task_to_payload,
 )
 from swarm.mcp.types import HandlerResult, TextContent
+from swarm.tasks.task import TaskStatus
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -101,7 +102,10 @@ TOOLS: list[dict[str, Any]] = [
             "have no active task or the specified ``number`` is owned by another worker. "
             "If the ``number`` you pass is UNASSIGNED (e.g. an authority-guard / HOLD park "
             "you nonetheless completed), you self-assign-on-close: the tool adopts the task "
-            "to you, clears the HOLD, and closes it — no Queen force-complete needed."
+            "to you, clears the HOLD, and closes it — no Queen force-complete needed. "
+            "You can also close YOUR OWN task while it is BLOCKED (e.g. you parked it via "
+            "swarm_report_blocker / an operator hold and then finished the work): the close "
+            "clears the blocker binding and persists — no Queen force-complete needed."
         ),
         "inputSchema": {
             "type": "object",
@@ -297,6 +301,24 @@ def _handle_complete_task(
                     "text": (
                         f"Task #{target_num} is not assigned to you (assigned_worker={owner})."
                     ),
+                }
+            ]
+        # #941: a worker can self-close its OWN done-but-BLOCKED task — the
+        # closure dead-zone sibling of #939's unassigned case. swarm_complete_task
+        # rejected any non-ACTIVE status, so a worker that parked its own task in
+        # BLOCKED (swarm_report_blocker, operator hold) and then finished the work
+        # had to route closure through the Queen's force-complete. Close it via the
+        # force path: that clears the blocker binding and passes the status gate,
+        # so the close persists (DONE is terminal — reconciliation can't revert it,
+        # and no dangling binding re-blocks it). ``verify`` stays at its default —
+        # this is a normal worker completion claim the verifier should still check;
+        # ``force`` only handles the binding + the BLOCKED status gate.
+        if match.status == TaskStatus.BLOCKED:
+            d.complete_task(match.id, actor=worker_name, resolution=resolution, force=True)
+            return [
+                {
+                    "type": "text",
+                    "text": (f"Task #{target_num} completed (was BLOCKED — blocker cleared)."),
                 }
             ]
         if match.status.value not in _ACTIVE_STATUSES:
