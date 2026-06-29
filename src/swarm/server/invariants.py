@@ -83,7 +83,7 @@ class InvariantReconciler:
                 continue
         return {
             t.id
-            for t in self._task_board.active_tasks()
+            for t in self._task_board.active_tasks
             if (t.assigned_worker or "", t.number) in bindings
         }
 

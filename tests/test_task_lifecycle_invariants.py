@@ -214,3 +214,38 @@ def test_persist_leaves_single_active_untouched(board):
     a.status = TaskStatus.ACTIVE
     board._persist()
     assert a.status == TaskStatus.ACTIVE
+
+
+# --- regression: InvariantReconciler.blocked_task_ids() must not crash ------
+
+
+def test_blocked_task_ids_uses_active_tasks_property(board):
+    """``TaskBoard.active_tasks`` became a @property in #876, but
+    ``InvariantReconciler.blocked_task_ids`` kept calling it as ``active_tasks()``
+    — a 'list object is not callable' TypeError that fired every sweep and
+    silently disabled the whole #405 reconciler (the except in ``run`` swallowed
+    it). Regression: the method resolves the binding and returns the matching
+    ACTIVE task id without raising.
+    """
+    from types import SimpleNamespace
+
+    from swarm.server.invariants import InvariantReconciler
+
+    a = _assigned(board, "blocked work", "w1")
+    a.status = TaskStatus.ACTIVE
+    board._persist()
+
+    blocker_store = SimpleNamespace(
+        list_for_worker=lambda name: (
+            [SimpleNamespace(worker="w1", task_number=a.number)] if name == "w1" else []
+        )
+    )
+    rec = InvariantReconciler(
+        task_board=board,
+        task_history=None,
+        drone_log=None,
+        blocker_store=blocker_store,
+        get_workers=lambda: [SimpleNamespace(name="w1")],
+    )
+
+    assert rec.blocked_task_ids() == {a.id}
