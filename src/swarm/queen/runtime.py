@@ -468,16 +468,6 @@ def sync_queen_claude_md(mode: str, workdir: Path | None = None) -> ClaudeMdReco
     raise ValueError(f"unknown sync mode: {mode!r} (expected 'accept-shipped' or 'keep-local')")
 
 
-def _ensure_queen_claude_md(workdir: Path) -> ClaudeMdReconcileResult:
-    """Back-compat wrapper around :func:`reconcile_queen_claude_md`.
-
-    Kept under the old name so external callers (and tests) don't
-    break.  Returns the reconcile result so the daemon can surface
-    drift events to the operator / Queen inbox.
-    """
-    return reconcile_queen_claude_md(workdir)
-
-
 def queen_worker_config(config: HiveConfig) -> WorkerConfig:
     """Build a WorkerConfig for the Queen.
 

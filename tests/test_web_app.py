@@ -14,7 +14,6 @@ from swarm.server.helpers import handle_errors, json_error
 from swarm.tasks.board import TaskBoard
 from swarm.web.app import (
     _format_age,
-    _require_queen,
     _system_log_dicts,
     _task_dicts,
     _worker_dicts,
@@ -52,22 +51,6 @@ def test_json_error_default_status():
 def test_json_error_custom_status():
     resp = json_error("not found", 404)
     assert resp.status == 404
-
-
-# --- _require_queen ---
-
-
-def test_require_queen_present():
-    d = MagicMock()
-    d.queen = MagicMock()
-    assert _require_queen(d) is d.queen
-
-
-def test_require_queen_missing():
-    d = MagicMock()
-    d.queen = None
-    with pytest.raises(SwarmOperationError, match="Queen not configured"):
-        _require_queen(d)
 
 
 # --- _worker_dicts ---

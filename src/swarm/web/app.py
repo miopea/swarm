@@ -10,7 +10,6 @@ import jinja2
 from aiohttp import web
 
 from swarm.logging import get_logger
-from swarm.server.daemon import SwarmOperationError
 from swarm.tasks.task import (
     PRIORITY_LABEL,
     STATUS_ICON,
@@ -21,7 +20,6 @@ from swarm.tasks.task import (
 from swarm.worker.worker import WorkerState, format_duration
 
 if TYPE_CHECKING:
-    from swarm.queen.queen import Queen
     from swarm.server.daemon import SwarmDaemon
 
 _log = get_logger("web.app")
@@ -44,13 +42,6 @@ def _get_ws_token(daemon: SwarmDaemon) -> str:
     from swarm.server.api import get_api_password
 
     return get_api_password(daemon)
-
-
-def _require_queen(d: SwarmDaemon) -> Queen:
-    """Return the Queen instance or raise SwarmOperationError."""
-    if not d.queen:
-        raise SwarmOperationError("Queen not configured")
-    return d.queen
 
 
 def _worker_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:

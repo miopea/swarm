@@ -9,6 +9,7 @@ for the operator's UI.
 from __future__ import annotations
 
 import json
+import sqlite3
 import threading
 import time
 import uuid
@@ -439,7 +440,7 @@ class QueenChatStore(BaseStore):
 # ----------------------------------------------------------------------
 
 
-def _row_to_thread(row: Any) -> QueenThread:
+def _row_to_thread(row: sqlite3.Row) -> QueenThread:
     return QueenThread(
         id=row["id"],
         title=row["title"] or "",
@@ -455,7 +456,7 @@ def _row_to_thread(row: Any) -> QueenThread:
     )
 
 
-def _row_to_message(row: Any, store: QueenChatStore) -> QueenMessage:
+def _row_to_message(row: sqlite3.Row, store: QueenChatStore) -> QueenMessage:
     widgets = store._parse_json_field(row["widgets"], [])
     return QueenMessage(
         id=row["id"],
@@ -467,7 +468,7 @@ def _row_to_message(row: Any, store: QueenChatStore) -> QueenMessage:
     )
 
 
-def _row_to_learning(row: Any) -> QueenLearning:
+def _row_to_learning(row: sqlite3.Row) -> QueenLearning:
     return QueenLearning(
         id=row["id"],
         context=row["context"],

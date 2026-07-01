@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from swarm.logging import get_logger
 
 if TYPE_CHECKING:
+    from swarm.drones.log import SystemLog
     from swarm.integrations.jira import JiraSyncService
     from swarm.tasks.board import TaskBoard
     from swarm.tasks.task import TaskStatus
@@ -25,7 +26,7 @@ class JiraService:
         get_jira: Callable[[], JiraSyncService],
         task_board: TaskBoard,
         broadcast_ws: Callable[[dict[str, Any]], None],
-        drone_log: Any,
+        drone_log: SystemLog,
         track_task: Callable[[asyncio.Task[object]], None],
         get_sync_interval: Callable[[], int],
     ) -> None:

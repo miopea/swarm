@@ -695,6 +695,14 @@ class TaskCoordinator:
                     thread.id, resolved_by="queen", reason="upstream task DONE"
                 )
             except Exception:
+                # State mutation (resolving an attention thread) — a silent
+                # failure would leave a stuck card with no forensic trail.
+                _log.warning(
+                    "failed to auto-resolve thread %s for task %s",
+                    thread.id,
+                    task_id,
+                    exc_info=True,
+                )
                 continue
             if ok:
                 try:
@@ -702,7 +710,9 @@ class TaskCoordinator:
 
                     _broadcast_thread(d, thread.id, "resolved")
                 except Exception:
-                    pass
+                    # Best-effort UI refresh only — the thread IS resolved;
+                    # a missed broadcast just delays the dashboard update.
+                    _log.debug("thread %s resolve broadcast failed", thread.id, exc_info=True)
 
     def auto_start_next_assigned(self, worker_name: str | None) -> None:
         """Fire-and-forget: start the next ASSIGNED task for *worker_name*.

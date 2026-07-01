@@ -590,15 +590,16 @@ def _parse_notify_config(blob: str) -> NotifyConfig:
     return NotifyConfig(**kwargs)
 
 
-def _parse_json_dataclass(blob: str, cls: type) -> Any:
-    """Generic parser for simple dataclasses from JSON."""
+def _parse_json_dataclass[T](blob: str, cls: type[T]) -> T:
+    """Generic parser for simple dataclasses from JSON. ``cls`` must be a
+    dataclass — the return type mirrors it so callers get a concrete type."""
     try:
         d = json.loads(blob)
     except json.JSONDecodeError:
         return cls()
     if not isinstance(d, dict):
         return cls()
-    valid = cls.__dataclass_fields__
+    valid = getattr(cls, "__dataclass_fields__", {})
     return cls(**{k: v for k, v in d.items() if k in valid})
 
 

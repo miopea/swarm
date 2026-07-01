@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from swarm.auth.jira import JiraTokenManager
     from swarm.pty.provider import WorkerProcessProvider
     from swarm.queen.oversight import OversightResult, OversightSignal
+    from swarm.resources.monitor import ResourceSnapshot
     from swarm.update import UpdateResult
 
 from swarm.config import HiveConfig, WorkerConfig
@@ -937,7 +938,10 @@ class SwarmDaemon(EventEmitter):
             while True:
                 await asyncio.sleep(_WAL_INTERVAL)
                 try:
-                    self.swarm_db.checkpoint()
+                    # Offload to a thread — checkpoint runs a PRAGMA under the
+                    # DB lock; on the event loop it would stall all worker
+                    # polling / WS / MCP for the duration of a large WAL flush.
+                    await asyncio.to_thread(self.swarm_db.checkpoint)
                 except Exception:
                     # Bloat risk if the WAL never checkpoints — surface at WARNING.
                     _log.warning("WAL checkpoint failed", exc_info=True)
@@ -948,7 +952,10 @@ class SwarmDaemon(EventEmitter):
 
                         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                         dest = backup_dir / f"swarm_{stamp}.db"
-                        self.swarm_db.backup(dest)
+                        # Offload to a thread — backup() is a full page-by-page
+                        # DB copy under the lock; on the event loop it would
+                        # block everything for the whole copy (grows with DB).
+                        await asyncio.to_thread(self.swarm_db.backup, dest)
                         # Rotate: remove backups older than _BACKUP_KEEP_DAYS
                         cutoff = time.time() - _BACKUP_KEEP_DAYS * 86400
                         for f in sorted(backup_dir.glob("swarm_*.db")):
@@ -1630,7 +1637,7 @@ class SwarmDaemon(EventEmitter):
         """Collect live worker PIDs from the pool."""
         return await self.resource_mon.collect_worker_pids()
 
-    def _handle_resource_snapshot(self, snap: Any) -> None:
+    def _handle_resource_snapshot(self, snap: ResourceSnapshot) -> None:
         """Process a resource snapshot: broadcast, check pressure, alert D-state."""
         self.resource_mon.handle_snapshot(snap)
 

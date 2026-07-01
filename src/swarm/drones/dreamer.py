@@ -50,6 +50,9 @@ from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from swarm.config.models import DroneConfig
     from swarm.drones.log import SystemLog
 
 _log = get_logger("drones.dreamer")
@@ -177,11 +180,11 @@ class Dreamer:
     def __init__(
         self,
         *,
-        drone_config: Any,
+        drone_config: DroneConfig,
         buzz_store: _BuzzStoreProto | None,
         learnings_store: _LearningsStoreProto | None,
         drone_log: SystemLog,
-        wall_clock: Any = None,
+        wall_clock: Callable[[], float] | None = None,
     ) -> None:
         self._config = drone_config
         self._buzz_store = buzz_store

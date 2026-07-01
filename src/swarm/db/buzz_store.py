@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import TYPE_CHECKING, Any
 
 from swarm.db.base_store import BaseStore
@@ -190,7 +191,7 @@ class BuzzStore(BaseStore):
         """No-op — lifecycle managed by SwarmDB."""
 
 
-def _row_to_dict(row: Any) -> dict[str, Any]:
+def _row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     meta = row["metadata"]
     if isinstance(meta, str) or meta is None:
         metadata = BaseStore._parse_json_field(meta, {})

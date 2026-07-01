@@ -21,6 +21,7 @@ enums to their value strings before writing here.
 from __future__ import annotations
 
 import json
+import sqlite3
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -135,7 +136,7 @@ class SkillsStore:
         return added
 
 
-def _row_to_record(row: object) -> SkillRecord:
+def _row_to_record(row: sqlite3.Row) -> SkillRecord:
     return SkillRecord(
         name=row["name"],
         description=row["description"] or "",

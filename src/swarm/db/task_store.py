@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import TYPE_CHECKING, Any
 
 from swarm.db.base_store import BaseStore
@@ -136,7 +137,7 @@ class SqliteTaskStore(BaseStore):
         """DB-level backup handled by SwarmDB.backup() — no-op here."""
 
 
-def _safe_get(row: Any, key: str, default: Any) -> Any:
+def _safe_get(row: sqlite3.Row, key: str, default: Any) -> Any:
     """Read a row column that might not exist on legacy DBs (pre-v8)."""
     try:
         value = row[key]
@@ -182,7 +183,7 @@ def _task_to_row(task: SwarmTask) -> dict[str, Any]:
     }
 
 
-def _row_to_task(row: Any) -> SwarmTask:
+def _row_to_task(row: sqlite3.Row) -> SwarmTask:
     _jl = BaseStore._parse_json_field
 
     return SwarmTask(

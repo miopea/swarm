@@ -22,7 +22,6 @@ from swarm.queen.runtime import (
     SHIPPED_MARKER_FILENAME,
     ClaudeMdReconcileResult,
     ReconcileAction,
-    _ensure_queen_claude_md,
     find_queen,
     queen_worker_config,
     reconcile_queen_claude_md,
@@ -144,16 +143,6 @@ class TestReconcileDrift:
         result = reconcile_queen_claude_md(tmp_path, shipped_latest="v2")
         assert f"{CLAUDE_MD_FILENAME}{DRIFT_SHIPPED_LATEST_SUFFIX}" in result.details
         assert f"{CLAUDE_MD_FILENAME}{DRIFT_SHIPPED_LAST_SUFFIX}" in result.details
-
-
-class TestEnsureQueenClaudeMd:
-    def test_is_backward_compat_alias_for_reconcile(self, tmp_path: Path) -> None:
-        # The wrapper exists to keep older call sites working — assert
-        # it returns the same shape.
-        result = _ensure_queen_claude_md(tmp_path)
-        # Fresh tmp_path → SEEDED outcome from the underlying reconcile
-        assert isinstance(result, ClaudeMdReconcileResult)
-        assert result.action == ReconcileAction.SEEDED
 
 
 # ---------------------------------------------------------------------------

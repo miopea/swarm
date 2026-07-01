@@ -15,6 +15,7 @@ re-exported below so the split is invisible to existing call sites.
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -63,6 +64,8 @@ from swarm.mcp.types import HandlerResult
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
+
+_log = logging.getLogger(__name__)
 
 
 class ToolsSourceDrift(TypedDict):
@@ -191,6 +194,13 @@ def handle_tool_call(
     try:
         result = handler(daemon, worker_name, arguments)
     except Exception as e:
+        # A handler failure (DB write, state mutation) must not be silently
+        # downgraded to a text reply the worker sees but the operator never
+        # does — surface at WARNING with a traceback for forensics, then still
+        # return the error text so the caller isn't left hanging.
+        _log.warning(
+            "MCP tool %s failed for worker %s: %s", tool_name, worker_name, e, exc_info=True
+        )
         return [{"type": "text", "text": f"Error: {e}"}]
 
     # Extract the operator-facing detail line for the buzz log audit
