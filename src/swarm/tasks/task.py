@@ -585,15 +585,23 @@ async def smart_title(description: str, max_len: int = 80) -> str:
         f"Return ONLY the title, no quotes or extra text.\n\n{truncated}"
     )
     try:
+        import tempfile
+
         from swarm.providers import get_provider
 
         provider = get_provider()
         args = provider.headless_command(prompt, output_format="text", max_turns=1)
+        # Run in a NEUTRAL cwd, not the daemon's (the swarm repo). A headless
+        # `claude -p` inherits the project it starts in — loading the swarm
+        # CLAUDE.md made it title unrelated emails after *this project* (a
+        # GPO/Intune email came out "Import email from Outlook: …"). Titling is
+        # a pure text transform that must not absorb any project context.
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=tempfile.gettempdir(),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
         if proc.returncode != 0:

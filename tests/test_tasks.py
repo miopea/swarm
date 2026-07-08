@@ -102,6 +102,25 @@ class TestSmartTitle:
             assert result == "Fix login validation bug"
 
     @pytest.mark.asyncio
+    async def test_smart_title_runs_in_neutral_cwd(self):
+        """Regression: the title LLM must run OUTSIDE the project directory.
+
+        Run in the daemon's cwd (the swarm repo) it loads the project CLAUDE.md
+        and titles the email after *this project* — a GPO/Intune email came out
+        "Import email from Outlook: …". A neutral cwd yields a title about the
+        actual email content.
+        """
+        import tempfile
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"Computer locks after inactivity", b""))
+        mock_proc.returncode = 0
+
+        with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as m:
+            await smart_title("DEV NOTE: We upgraded our GPOs to move to intune")
+        assert m.call_args.kwargs.get("cwd") == tempfile.gettempdir()
+
+    @pytest.mark.asyncio
     async def test_smart_title_timeout_fallback(self):
         """smart_title falls back to auto_title on timeout."""
 
