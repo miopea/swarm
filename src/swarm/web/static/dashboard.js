@@ -145,6 +145,10 @@
         submitRule: function() { submitRule(); },
         previewJiraSync: function() { previewJiraSync(); },
         syncJira: function() { syncJira(); },
+        showOutlookImport: function() { showOutlookImport(); },
+        hideOutlookImport: function() { hideOutlookImport(); },
+        importOutlookSeparate: function() { submitOutlookImport('separate'); },
+        importOutlookMerge: function() { submitOutlookImport('merge'); },
         showCreatePipeline: function() { showCreatePipeline(); },
         hidePipelineModal: function() { hidePipelineModal(); },
         createPipeline: function() { submitPipeline(); },  // legacy alias
@@ -6376,6 +6380,121 @@
             })
             .catch(function() { showToast('Jira sync failed', true); });
     };
+
+    // --- Import from Outlook (Microsoft Graph) ---------------------------
+    // Direct drag from Outlook-for-Mac can't reach the browser (macOS
+    // promised-file drags), so this picker pulls the inbox via Graph and
+    // creates task(s) server-side — no dragging required.
+
+    window.showOutlookImport = function() {
+        var modal = document.getElementById('outlook-import-modal');
+        if (!modal) return;
+        modal.style.display = 'flex';
+        var selectAll = document.getElementById('oi-select-all');
+        if (selectAll) selectAll.checked = false;
+        loadOutlookMessages();
+    };
+
+    window.hideOutlookImport = function() {
+        var modal = document.getElementById('outlook-import-modal');
+        if (modal) modal.style.display = 'none';
+    };
+
+    function updateOutlookSelCount() {
+        var checked = document.querySelectorAll('#oi-list .oi-cb:checked').length;
+        var countEl = document.getElementById('oi-count');
+        if (countEl) countEl.textContent = checked;
+        var sep = document.getElementById('oi-separate-btn');
+        var merge = document.getElementById('oi-merge-btn');
+        if (sep) { sep.disabled = checked < 1; sep.textContent = checked > 1 ? 'Create ' + checked + ' tasks' : 'Create task'; }
+        if (merge) merge.disabled = checked < 2;  // merging one email == a single task
+    }
+
+    function loadOutlookMessages() {
+        var list = document.getElementById('oi-list');
+        var status = document.getElementById('oi-status');
+        if (list) list.innerHTML = '';
+        if (status) status.textContent = 'Loading inbox…';
+        updateOutlookSelCount();
+        fetch('/api/outlook/messages?limit=25', { headers: { 'X-Requested-With': 'fetch' } })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.connected) {
+                    if (status) status.textContent = data.error || 'Outlook not connected';
+                    if (list) list.innerHTML = '<div class="text-sm text-muted" style="padding:0.6rem">Connect Microsoft Graph in Settings to import from Outlook.</div>';
+                    return;
+                }
+                var msgs = data.messages || [];
+                if (status) status.textContent = msgs.length + ' recent message(s)';
+                if (!msgs.length) { if (list) list.innerHTML = '<div class="text-sm text-muted" style="padding:0.6rem">Inbox is empty.</div>'; return; }
+                var html = '';
+                for (var i = 0; i < msgs.length; i++) {
+                    var m = msgs[i];
+                    var when = '';
+                    try { when = m.received ? new Date(m.received).toLocaleString() : ''; } catch (e) { when = m.received || ''; }
+                    var dot = m.is_read ? '<span class="msg-dot msg-read"></span>' : '<span class="msg-dot msg-unread"></span>';
+                    html += '<label class="oi-row" style="display:flex; gap:0.5rem; align-items:flex-start; padding:0.4rem 0.5rem; border-bottom:1px solid var(--border); cursor:pointer">'
+                        + '<input type="checkbox" class="oi-cb" data-id="' + escapeHtml(m.id) + '" style="margin-top:0.25rem; flex:0 0 auto">'
+                        + '<span style="flex:0 0 auto; margin-top:0.35rem">' + dot + '</span>'
+                        + '<span style="min-width:0; flex:1 1 auto">'
+                          + '<span style="display:block; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">' + escapeHtml(m.subject) + '</span>'
+                          + '<span class="text-sm text-muted" style="display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">' + escapeHtml(m.from_name || m.from) + (when ? ' · ' + escapeHtml(when) : '') + '</span>'
+                          + '<span class="text-sm text-muted" style="display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">' + escapeHtml(m.preview || '') + '</span>'
+                        + '</span></label>';
+                }
+                if (list) list.innerHTML = html;
+                updateOutlookSelCount();
+            })
+            .catch(function(err) { if (status) status.textContent = 'Error loading inbox: ' + err; });
+    }
+
+    window.submitOutlookImport = function(mode) {
+        var ids = [];
+        document.querySelectorAll('#oi-list .oi-cb:checked').forEach(function(cb) {
+            if (cb.dataset.id) ids.push(cb.dataset.id);
+        });
+        if (!ids.length) return;
+        var sep = document.getElementById('oi-separate-btn');
+        var merge = document.getElementById('oi-merge-btn');
+        if (sep) sep.disabled = true;
+        if (merge) merge.disabled = true;
+        showToast('Importing ' + ids.length + ' email(s)…');
+        fetch('/api/tasks/from-outlook', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
+            body: JSON.stringify({ message_ids: ids, mode: mode })
+        })
+            .then(function(r) {
+                if (!r.ok) return r.json().then(function(d) { throw new Error(d.error || 'import failed'); });
+                return r.json();
+            })
+            .then(function(data) {
+                var n = data.count || 0;
+                var msg = mode === 'merge'
+                    ? 'Merged ' + ids.length + ' emails into 1 task'
+                    : 'Created ' + n + ' task(s) from Outlook';
+                if (data.errors && data.errors.length) msg += ' (' + data.errors.length + ' failed)';
+                showToast(msg);
+                hideOutlookImport();
+                if (typeof refreshTasks === 'function') refreshTasks();
+            })
+            .catch(function(err) {
+                showToast('Outlook import error: ' + err.message, true);
+                updateOutlookSelCount();  // re-enable buttons per current selection
+            });
+    };
+
+    // Selection changes inside the Outlook picker (delegated — rows are
+    // rendered dynamically). Select-all toggles every visible checkbox.
+    document.addEventListener('change', function(e) {
+        if (e.target && e.target.id === 'oi-select-all') {
+            var on = e.target.checked;
+            document.querySelectorAll('#oi-list .oi-cb').forEach(function(cb) { cb.checked = on; });
+            updateOutlookSelCount();
+        } else if (e.target && e.target.classList && e.target.classList.contains('oi-cb')) {
+            updateOutlookSelCount();
+        }
+    });
 
     // Match a Jira issue URL or bare key. Picks up cloud (atlassian.net),
     // self-hosted (jira.<host>/browse/KEY-N), and bare KEY-N strings.

@@ -11,6 +11,7 @@ import os
 import secrets
 import time
 from pathlib import Path
+from typing import Any
 
 import aiohttp
 
@@ -242,6 +243,52 @@ class GraphTokenManager:
         except Exception as exc:
             _log.warning("resolve_message_id error: %s", exc)
             return None
+
+    async def list_inbox_messages(self, limit: int = 25) -> list[dict[str, Any]]:
+        """List the most recent Inbox messages via Graph, newest first.
+
+        Returns a normalized list of dicts (id, subject, from, from_name,
+        received, preview, is_read). Empty list when not connected or on any
+        Graph error — the caller reports connectivity separately via
+        :meth:`get_token`.
+        """
+        token = await self.get_token()
+        if not token:
+            return []
+        limit = max(1, min(int(limit), 100))
+        url = (
+            "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages"
+            "?$select=id,subject,from,receivedDateTime,bodyPreview,isRead"
+            f"&$top={limit}&$orderby=receivedDateTime desc"
+        )
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(
+                    url, headers=headers, timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp:
+                    if resp.status != 200:
+                        _log.warning("list_inbox_messages failed (%s)", resp.status)
+                        return []
+                    data = await resp.json()
+        except Exception as exc:
+            _log.warning("list_inbox_messages error: %s", exc)
+            return []
+        out: list[dict[str, Any]] = []
+        for m in data.get("value", []):
+            frm = (m.get("from") or {}).get("emailAddress") or {}
+            out.append(
+                {
+                    "id": m.get("id", ""),
+                    "subject": (m.get("subject") or "(no subject)"),
+                    "from": frm.get("address", ""),
+                    "from_name": frm.get("name", "") or frm.get("address", ""),
+                    "received": m.get("receivedDateTime", ""),
+                    "preview": (m.get("bodyPreview") or "").strip()[:200],
+                    "is_read": bool(m.get("isRead", True)),
+                }
+            )
+        return out
 
     def disconnect(self) -> None:
         """Remove stored tokens from DB and file."""

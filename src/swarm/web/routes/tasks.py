@@ -15,6 +15,7 @@ from swarm.tasks.task import (
     PRIORITY_MAP,
     TYPE_MAP,
     TaskPriority,
+    TaskType,
     smart_title,
 )
 
@@ -430,7 +431,104 @@ async def handle_action_fetch_outlook_email(request: web.Request) -> web.Respons
         return json_error("Microsoft Graph not connected — authenticate first")
 
     console_log(f"Fetching email via Graph: {message_id[:30]}...")
-    return await _fetch_graph_email(d, message_id, graph_token)
+    fields = await _graph_email_fields(d, message_id, graph_token)
+    if "error" in fields:
+        return json_error(fields["error"])
+    return web.json_response(fields)
+
+
+@handle_errors
+async def handle_list_outlook_messages(request: web.Request) -> web.Response:
+    """List recent Inbox messages via Microsoft Graph for the import picker."""
+    d = get_daemon(request)
+    if not d.graph_mgr:
+        return web.json_response(
+            {"connected": False, "messages": [], "error": "Microsoft Graph not configured"}
+        )
+    token = await d.graph_mgr.get_token()
+    if not token:
+        return web.json_response(
+            {
+                "connected": False,
+                "messages": [],
+                "error": "Microsoft Graph not connected — authenticate first",
+            }
+        )
+    try:
+        limit = int(request.query.get("limit", "25"))
+    except (TypeError, ValueError):
+        limit = 25
+    messages = await d.graph_mgr.list_inbox_messages(limit)
+    return web.json_response({"connected": True, "messages": messages})
+
+
+@handle_errors
+async def handle_create_tasks_from_outlook(request: web.Request) -> web.Response:
+    """Create task(s) from selected Outlook messages fetched via Graph.
+
+    Body: ``{message_ids: [...], mode: "separate" | "merge"}``.
+    ``separate`` files one task per email; ``merge`` combines all selected
+    emails into a single task (bodies concatenated, attachments unioned).
+    Tasks are filed UNASSIGNED for the operator to route from the board.
+    """
+    d = get_daemon(request)
+    if not d.graph_mgr:
+        return json_error("Microsoft Graph not configured")
+    token = await d.graph_mgr.get_token()
+    if not token:
+        return json_error("Microsoft Graph not connected — authenticate first")
+
+    body = await request.json()
+    message_ids = body.get("message_ids") or []
+    mode = (body.get("mode") or "separate").strip().lower()
+    if not isinstance(message_ids, list) or not message_ids:
+        return json_error("message_ids required")
+    if mode not in ("separate", "merge"):
+        return json_error("mode must be 'separate' or 'merge'")
+
+    # Fetch each selected email's task fields via Graph (reuses the shared
+    # single-email path). Collect per-message failures rather than aborting the
+    # whole batch on one bad id.
+    fetched: list[dict[str, Any]] = []
+    errors: list[str] = []
+    for mid in message_ids:
+        fields = await _graph_email_fields(d, str(mid), token)
+        if "error" in fields:
+            errors.append(fields["error"])
+            continue
+        fetched.append(fields)
+    if not fetched:
+        return json_error("Could not fetch any selected email(s): " + "; ".join(errors[:3]))
+
+    created: list[dict[str, Any]] = []
+    if mode == "separate":
+        for f in fetched:
+            task = d.create_task(
+                title=f.get("title") or "(no subject)",
+                description=f.get("description", ""),
+                task_type=TYPE_MAP.get(f.get("task_type", ""), TaskType.CHORE),
+                attachments=f.get("attachments", []),
+                source_email_id=f.get("message_id", ""),
+                actor="user",
+            )
+            created.append({"number": task.number, "title": task.title})
+    else:  # merge
+        parts: list[str] = []
+        merged_attachments: list[str] = []
+        for i, f in enumerate(fetched, 1):
+            parts.append(f"--- Email {i}: {f.get('title', '')} ---\n{f.get('description', '')}")
+            merged_attachments.extend(f.get("attachments", []))
+        merged_title = f"{len(fetched)} emails: {fetched[0].get('title', '')}"[:120]
+        task = d.create_task(
+            title=merged_title,
+            description="\n\n".join(parts),
+            task_type=TYPE_MAP.get(fetched[0].get("task_type", ""), TaskType.CHORE),
+            attachments=merged_attachments,
+            actor="user",
+        )
+        created.append({"number": task.number, "title": task.title})
+
+    return web.json_response({"created": created, "count": len(created), "errors": errors})
 
 
 async def _translate_exchange_id(
@@ -502,8 +600,11 @@ async def _fetch_attachment_bytes(
         return ""
 
 
-async def _fetch_graph_email(d: SwarmDaemon, message_id: str, token: str) -> web.Response:
-    """Fetch email + attachments from Microsoft Graph API."""
+async def _graph_email_fields(d: SwarmDaemon, message_id: str, token: str) -> dict[str, Any]:
+    """Fetch one email + attachments from Microsoft Graph and process it into
+    task fields. Returns the processed dict (title/description/task_type/
+    attachments/message_id) or ``{"error": "..."}`` on failure. Shared by the
+    single-email drag path and the bulk Outlook-import path."""
     from urllib.parse import quote
 
     import aiohttp as _aiohttp
@@ -544,7 +645,7 @@ async def _fetch_graph_email(d: SwarmDaemon, message_id: str, token: str) -> web
 
             if status != 200:
                 console_log(f"Graph API error {status}: {body[:200]}", level="error")
-                return json_error(f"Graph API {status}: {body[:200]}")
+                return {"error": f"Graph API {status}: {body[:200]}"}
 
             msg = _json.loads(body)
 
@@ -560,7 +661,7 @@ async def _fetch_graph_email(d: SwarmDaemon, message_id: str, token: str) -> web
                         sess, headers, effective_id, att["id"], quote, yarl
                     )
     except Exception as exc:
-        return json_error(str(exc)[:200])
+        return {"error": str(exc)[:200]}
 
     # Pick the best body field. Graph populates these in this priority order
     # for a typical message: ``uniqueBody`` (the latest reply *only*, with the
@@ -615,7 +716,7 @@ async def _fetch_graph_email(d: SwarmDaemon, message_id: str, token: str) -> web
         attachment_dicts=attachments,
         effective_id=effective_id,
     )
-    return web.json_response(result)
+    return result
 
 
 @handle_errors
@@ -660,4 +761,6 @@ def register(app: web.Application) -> None:
     app.router.add_post("/action/upload", handle_action_upload)
     app.router.add_post("/action/fetch-image", handle_action_fetch_image)
     app.router.add_post("/action/fetch-outlook-email", handle_action_fetch_outlook_email)
+    app.router.add_get("/api/outlook/messages", handle_list_outlook_messages)
+    app.router.add_post("/api/tasks/from-outlook", handle_create_tasks_from_outlook)
     app.router.add_post("/action/task/retry-draft", handle_action_retry_draft)

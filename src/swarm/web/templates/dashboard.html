@@ -255,6 +255,7 @@
                 <span class="tab-header-utils flex-center gap-sm">
                     <button class="btn btn-sm" data-action="previewJiraSync" data-show-on-tab="tasks" title="Preview what Jira sync would import">Preview Jira</button>
                     <button class="btn btn-sm" data-action="syncJira" data-show-on-tab="tasks" title="Import issues from Jira now">Sync Jira</button>
+                    <button class="btn btn-sm" data-action="showOutlookImport" data-show-on-tab="tasks" title="Import emails from your Outlook inbox (Microsoft Graph)">Import Outlook</button>
                     <button class="btn btn-sm" data-action="showCreateTask" data-show-on-tab="tasks">+ New Task</button>
                     <button class="btn btn-sm" data-action="showCreatePipeline" data-show-on-tab="pipelines" style="display:none">+ New Pipeline</button>
                     <label class="btn btn-sm btn-secondary hide-desktop" data-show-on-tab="tasks" title="Upload .eml/.msg file to create a task" style="cursor:pointer">Upload <input type="file" id="mobile-email-upload" accept=".eml,.msg" style="display:none" data-input-action="mobileEmailUpload"></label>
@@ -1035,6 +1036,30 @@
 <!-- Retry-on-COMPLETED confirmation modal (cleanup batch follow-up).
      Operator clicks Retry on a COMPLETED step → this modal explains the
      side-effect risk and gates the retry behind an explicit checkbox. -->
+<div id="outlook-import-modal" class="modal-overlay" style="display:none" data-modal-dismiss="hideOutlookImport">
+    <div class="modal-box modal-md" role="dialog" aria-modal="true">
+        <div class="panel-header">
+            <span>Import from Outlook</span>
+            <button class="btn btn-sm btn-secondary" data-action="hideOutlookImport">Close</button>
+        </div>
+        <div class="modal-padding">
+            <div class="flex-center gap-sm" style="justify-content:space-between; margin-bottom:0.5rem">
+                <span class="text-sm text-muted" id="oi-status">Loading inbox…</span>
+                <label class="text-sm" style="cursor:pointer; flex:0 0 auto"><input type="checkbox" id="oi-select-all"> Select all</label>
+            </div>
+            <div id="oi-list" style="max-height:50vh; overflow:auto; border:1px solid var(--border); border-radius:6px"></div>
+            <div class="modal-footer modal-footer-flush mt-md" style="justify-content:space-between; align-items:center">
+                <span class="text-sm text-muted"><span id="oi-count">0</span> selected</span>
+                <span class="flex-center gap-sm">
+                    <button class="btn btn-secondary" data-action="hideOutlookImport">Cancel</button>
+                    <button class="btn" id="oi-merge-btn" data-action="importOutlookMerge" title="Combine the selected emails into a single task" disabled>Merge into 1 task</button>
+                    <button class="btn btn-amber" id="oi-separate-btn" data-action="importOutlookSeparate" title="Create one task per selected email" disabled>Create tasks</button>
+                </span>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div id="retry-confirm-modal" class="modal-overlay" style="display:none" data-modal-dismiss="hideRetryConfirm">
     <div class="modal-box modal-md" role="dialog" aria-modal="true">
         <div class="panel-header">
