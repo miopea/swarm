@@ -3662,9 +3662,20 @@
             try { term.focus(); } catch (e) {}
         });
 
-        // GPU-accelerated rendering: WebGL → Canvas → DOM fallback
+        // GPU-accelerated rendering: WebGL → Canvas → DOM fallback.
+        // macOS Chromium/Edge crashes the *whole* renderer through xterm's
+        // WebGL path on a redraw (e.g. the selection repaint a right-click
+        // triggers) — a hard GPU-process crash, not the graceful onContextLoss
+        // this code handles. Symptom: right-click reliably crashes the Swarm
+        // tab on Mac Edge/Chrome while Windows is fine. So on macOS we skip the
+        // GPU renderers entirely and use xterm's DOM renderer (stable, no GPU;
+        // perf is a non-issue for viewing worker output). Other platforms keep
+        // WebGL→Canvas.
         var rendererAddon = null;
-        if (typeof WebglAddon !== 'undefined' && WebglAddon.WebglAddon) {
+        var _uaPlat = (navigator.userAgentData && navigator.userAgentData.platform)
+            || navigator.platform || navigator.userAgent || '';
+        var _isMac = /Mac|iPhone|iPad|iPod/.test(_uaPlat);
+        if (!_isMac && typeof WebglAddon !== 'undefined' && WebglAddon.WebglAddon) {
             try {
                 rendererAddon = new WebglAddon.WebglAddon();
                 rendererAddon.onContextLoss(function() {
