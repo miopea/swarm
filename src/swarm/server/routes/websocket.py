@@ -212,7 +212,12 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     # every subsequent connection with 429 "Too many WebSocket
     # connections" and the dashboard cannot reconnect until the daemon
     # is restarted.
-    ws = web.WebSocketResponse(heartbeat=20.0)
+    # heartbeat sends a WS ping every N seconds and drops the connection if the
+    # client misses a pong. A shorter interval means a genuinely dead socket
+    # (e.g. a mobile client that suspended without a clean close) is detected and
+    # torn down sooner, which helps the paths that don't force-reconnect on
+    # resume. Kept conservative — pings are cheap but hit every connected client.
+    ws = web.WebSocketResponse(heartbeat=15.0)
     try:
         await ws.prepare(request)
 

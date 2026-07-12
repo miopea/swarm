@@ -34,6 +34,14 @@
 
     // Page visibility — title flash state
     let pageHidden = document.hidden;
+    // Wall-clock (ms) of when the tab was last hidden. Used on resume to decide
+    // whether a background→foreground cycle was long enough to have killed the
+    // WebSocket at the OS level. Mobile suspends backgrounded tabs and silently
+    // tears down the socket's TCP connection while ws.readyState still reports
+    // OPEN (the "zombie socket"), so on resume we can't trust readyState — a
+    // long-enough hide forces a fresh reconnect instead of waiting for the
+    // browser to notice the socket is dead (the old 5–15s red→green delay).
+    let lastHiddenAt = 0;
     let titleFlashTimer = null;
     let pendingTitleCount = 0;
     const ORIGINAL_TITLE = document.title;
@@ -558,6 +566,31 @@
         if (reconnectTimer) {
             clearTimeout(reconnectTimer);
             reconnectTimer = null;
+        }
+        connect();
+    }
+
+    // Tear down the current main WS unconditionally and reconnect fresh. Used on
+    // resume from a real background (see lastHiddenAt) where readyState can lie
+    // (zombie OPEN socket). Detaching the old handlers first stops a late
+    // onclose from scheduling a competing reconnect after we've already opened a
+    // new socket. connect() guards on ws being OPEN/CONNECTING, so we null it
+    // first to let the reconnect proceed.
+    function forceReconnectMainWs() {
+        console.warn('[swarm-restart] force-reconnecting main WS; state=', ws ? ws.readyState : 'none');
+        if (reconnectTimer) {
+            clearTimeout(reconnectTimer);
+            reconnectTimer = null;
+        }
+        reconnectDelay = 1000;
+        if (ws) {
+            try {
+                ws.onclose = null;
+                ws.onerror = null;
+                ws.onmessage = null;
+                ws.close();
+            } catch (e) { /* already closing/closed */ }
+            ws = null;
         }
         connect();
     }
@@ -10628,12 +10661,24 @@
     function onAppFocus() {
         pageHidden = false;
         stopTitleFlash();
+        // How long the tab was backgrounded. A long hide (mobile lock/switch)
+        // very likely killed the socket at the OS level even though readyState
+        // may still say OPEN, so force a fresh reconnect rather than trusting it.
+        // A brief flap (desktop alt-tab) with a healthy socket takes the cheap
+        // path and leaves the connection untouched.
+        var hiddenMs = lastHiddenAt ? (Date.now() - lastHiddenAt) : 0;
+        var staleAfterHide = hiddenMs > 2000;
         console.warn('[swarm-restart] app focus', {
             restarting: _restarting,
             mainWs: ws ? ws.readyState : 'none',
+            hiddenMs: hiddenMs,
             activeTermWorker: activeTermWorker || null
         });
-        ensureMainWsConnected();
+        if (staleAfterHide || !ws || ws.readyState !== WebSocket.OPEN) {
+            forceReconnectMainWs();
+        } else {
+            ensureMainWsConnected();
+        }
         if (_restarting) _restarting = false;
         // Catch up on any missed WS events while tab was hidden. Worker state
         // ('state' events) goes stale while a mobile tab is backgrounded (WS
@@ -10654,15 +10699,27 @@
             var badge = document.getElementById('notif-badge');
             if (badge) badge.style.display = 'none';
         }
-        // Reconnect terminal WS if it died while tab was hidden
+        // Reconnect terminal WS if it died while tab was hidden. Same zombie-
+        // socket caveat as the main WS: after a long hide, readyState === OPEN
+        // can't be trusted, so force a reconnect. Close the stale socket first —
+        // connectTermEntryWs reassigns entry.ws without closing the old one, so
+        // otherwise a live zombie's handlers would linger against this entry.
         if (activeTermWorker) {
             var focusEntry = termCache.get(activeTermWorker);
             if (focusEntry) {
-                if (!focusEntry.ws || focusEntry.ws.readyState !== WebSocket.OPEN) {
+                if (staleAfterHide || !focusEntry.ws || focusEntry.ws.readyState !== WebSocket.OPEN) {
                     console.warn('[swarm-restart] app focus reconnecting terminal', {
                         worker: activeTermWorker,
-                        wsState: focusEntry.ws ? focusEntry.ws.readyState : 'none'
+                        wsState: focusEntry.ws ? focusEntry.ws.readyState : 'none',
+                        hiddenMs: hiddenMs
                     });
+                    if (focusEntry.ws) {
+                        try {
+                            focusEntry.ws.onclose = null;
+                            focusEntry.ws.onerror = null;
+                            focusEntry.ws.close();
+                        } catch (e) { /* already closing/closed */ }
+                    }
                     focusEntry.reconnectAttempts = 0;
                     connectTermEntryWs(activeTermWorker, focusEntry);
                 } else {
@@ -10670,10 +10727,17 @@
                 }
             }
         }
+        // Reset so a subsequent bare window.focus (no intervening hide) doesn't
+        // re-trigger a force-reconnect on an already-healthy socket.
+        lastHiddenAt = 0;
     }
     document.addEventListener('visibilitychange', function() {
         pageHidden = document.hidden;
-        if (!pageHidden) onAppFocus();
+        if (pageHidden) {
+            lastHiddenAt = Date.now();
+        } else {
+            onAppFocus();
+        }
     });
     window.addEventListener('focus', onAppFocus);
 
