@@ -77,7 +77,7 @@ async def test_check_gh_status_not_authenticated():
 async def test_submit_via_gh_success():
     fake = _FakeProc(
         0,
-        stdout=b"https://github.com/bschleifer/swarm/issues/42\n",
+        stdout=b"https://github.com/miopea/swarm/issues/42\n",
     )
     with (
         patch("swarm.feedback.gh_submit._find_gh", return_value="/usr/bin/gh"),
@@ -91,7 +91,7 @@ async def test_submit_via_gh_success():
             body="## Description\n\nSomething broke.",
             category="bug",
         )
-    assert result.url == "https://github.com/bschleifer/swarm/issues/42"
+    assert result.url == "https://github.com/miopea/swarm/issues/42"
 
 
 @pytest.mark.asyncio

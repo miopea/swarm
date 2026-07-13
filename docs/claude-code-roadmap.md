@@ -2,7 +2,7 @@
 
 > Derived from reverse-engineering Claude Code v2.1.88 (512K lines, 1,900 files).
 > Source analysis: `docs/claude-code-insights.md`
-> Private source archive: `github.com/bschleifer/claude-code-source` (private)
+> Private source archive: `github.com/miopea/claude-code-source` (private)
 >
 > **Status (2026-04-16):** Phase 0 is fully shipped. Most of Phase 1 and the MCP work from Phase 4 have landed. A follow-on batch of Anthropic-engineering-inspired features (tracked in CHANGELOG Unreleased) has also shipped: `swarm_batch` MCP tool, cron pipeline schedules, compact event telemetry, approval-rate gauge, `InfraSnapshot` in test runs, SQLite skills registry (schema v5), `claude_code_security` service handler, `swarm analyze-tools` CLI, and opt-in Claude Code sandbox. Grep for the named files/fields to verify.
 >

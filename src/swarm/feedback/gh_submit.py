@@ -21,7 +21,7 @@ from swarm.feedback.builder import Category
 
 _log = logging.getLogger("swarm.feedback.gh_submit")
 
-_DEFAULT_REPO = "bschleifer/swarm"
+_DEFAULT_REPO = "miopea/swarm"
 _CATEGORY_LABELS: dict[Category, str] = {
     "bug": "bug",
     "feature": "enhancement",

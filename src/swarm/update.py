@@ -23,17 +23,15 @@ _CACHE_DIR = Path.home() / ".swarm"
 _CACHE_FILE = _CACHE_DIR / "update_cache.json"
 _CACHE_TTL = 86400  # 24 hours
 
-_GITHUB_RAW_URL = "https://raw.githubusercontent.com/bschleifer/swarm/main/src/swarm/__init__.py"
-_GITHUB_RAW_AT_SHA = (
-    "https://raw.githubusercontent.com/bschleifer/swarm/{sha}/src/swarm/__init__.py"
-)
-_GITHUB_API_COMMITS_URL = "https://api.github.com/repos/bschleifer/swarm/commits?per_page=1"
+_GITHUB_RAW_URL = "https://raw.githubusercontent.com/miopea/swarm/main/src/swarm/__init__.py"
+_GITHUB_RAW_AT_SHA = "https://raw.githubusercontent.com/miopea/swarm/{sha}/src/swarm/__init__.py"
+_GITHUB_API_COMMITS_URL = "https://api.github.com/repos/miopea/swarm/commits?per_page=1"
 _VERSION_RE = re.compile(r'__version__\s*=\s*["\']([^"\']+)["\']')
 
 _CURL_TIMEOUT = "10"  # seconds (string for CLI arg)
 _INSTALL_TIMEOUT = 120  # seconds
 
-_INSTALL_SOURCE = "git+https://github.com/bschleifer/swarm.git"
+_INSTALL_SOURCE = "git+https://github.com/miopea/swarm.git"
 
 
 def _version_tuple(v: str) -> tuple[int, ...]:
