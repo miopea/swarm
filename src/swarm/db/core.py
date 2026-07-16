@@ -116,6 +116,7 @@ class SwarmDB:
             (13, self._migrate_v13_query_indexes),
             (14, self._migrate_v14_started_at),
             (15, self._migrate_v15_external_blocker_ref),
+            (16, self._migrate_v16_effort_tier),
         ]
         for version, migrate in migrations:
             if from_version < version:
@@ -388,6 +389,20 @@ class SwarmDB:
             _log.info("v15: added tasks.external_blocker_ref")
         except sqlite3.OperationalError:
             _log.debug("v15 migration: external_blocker_ref column likely already exists")
+
+    def _migrate_v16_effort_tier(self) -> None:
+        """v16: add ``tasks.effort_tier`` — an advisory complexity tier
+        (``low|medium|high`` or '') synthesized by the headless Queen at task
+        creation and rendered as dispatch guidance for providers that support
+        workflows/subagents (P2). Defaults to '' for legacy rows. ALTER wrapped
+        in try/except — fresh DBs already have it via SCHEMA_V1.
+        """
+        assert self._conn is not None
+        try:
+            self._conn.execute("ALTER TABLE tasks ADD COLUMN effort_tier TEXT NOT NULL DEFAULT ''")
+            _log.info("v16: added tasks.effort_tier")
+        except sqlite3.OperationalError:
+            _log.debug("v16 migration: effort_tier column likely already exists")
 
     def _migrate_v14_started_at(self) -> None:
         """v14 (#611 P2): add ``tasks.started_at`` (when the task last went

@@ -10,6 +10,44 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.7.16] - 2026-07-16
+
+### Features
+
+- **Criteria-graded verification (Outcomes pattern).** At task creation the
+  headless Queen now synthesizes best-effort acceptance criteria (+ an advisory
+  effort tier) so the verifier has a rubric to grade against and the worker gets
+  an explicit done-definition. Empty for open-ended/exploratory tasks (no
+  fabricated criteria → no false failures); skipped for standing-loop filler.
+  Gated by `verifier_criteria_synthesis` (default on).
+- **Verifier re-wired into completion — SHADOW mode by default.** The tiered
+  verifier (dead-wired since 2026.5.25.4) fires again after `swarm_complete_task`
+  but, by default, only *records* verdicts for the Harness metrics without
+  reopening tasks. Flip `verifier_enforce` on once the verdict stream looks
+  trustworthy. No-diff task types (content/research/operator) grade the
+  resolution instead of a diff; the reopen cap is now configurable
+  (`verify_reopen_cap`, default 2).
+- **Dispatch enrichment.** Task messages carry the acceptance-criteria
+  done-definition plus a Claude-gated advisory effort tier (never shown to
+  non-Claude workers, never enforced). Gated by `dispatch_enrichment`.
+- **Learning preload.** The top relevant prior-task learnings are pushed into the
+  dispatch message (keyword-overlap relevance) instead of waiting for a
+  `swarm_get_learnings` pull. Gated by `learning_preload`.
+- **Harness digest: verifier metrics + stale-learning surfacing.** New
+  display-only read-outs — verdict mix, acceptance-criteria coverage %, shadow
+  would-reopen count, and dreamer learnings old enough to review for retirement
+  (operator-gated; never auto-deleted).
+
+### Changes
+
+- New `DroneConfig` flags (all default-on except `verifier_enforce`):
+  `verifier_criteria_synthesis`, `verifier_enabled`, `verifier_enforce`,
+  `verify_reopen_cap`, `dispatch_enrichment`, `learning_preload`. Documented in
+  `swarm.yaml.example`.
+- DB schema v16: adds `tasks.effort_tier`.
+
+### Fixes
+
 ## [2026.6.27] - 2026-06-27
 
 ### Features

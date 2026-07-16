@@ -54,6 +54,7 @@ _TASK_COLUMNS = (
     "verification_status",
     "verification_reason",
     "verification_reopen_count",
+    "effort_tier",
 )
 
 
@@ -180,6 +181,7 @@ def _task_to_row(task: SwarmTask) -> dict[str, Any]:
         "verification_status": task.verification_status.value,
         "verification_reason": task.verification_reason,
         "verification_reopen_count": task.verification_reopen_count,
+        "effort_tier": task.effort_tier,
     }
 
 
@@ -219,4 +221,5 @@ def _row_to_task(row: sqlite3.Row) -> SwarmTask:
         verification_status=VerificationStatus(_safe_get(row, "verification_status", "not_run")),
         verification_reason=_safe_get(row, "verification_reason", ""),
         verification_reopen_count=_safe_get(row, "verification_reopen_count", 0) or 0,
+        effort_tier=_safe_get(row, "effort_tier", "") or "",
     )

@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 15
+CURRENT_VERSION = 16
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -114,7 +114,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   learnings         TEXT NOT NULL DEFAULT '',
   verification_status        TEXT    NOT NULL DEFAULT 'not_run',
   verification_reason        TEXT    NOT NULL DEFAULT '',
-  verification_reopen_count  INTEGER NOT NULL DEFAULT 0
+  verification_reopen_count  INTEGER NOT NULL DEFAULT 0,
+  effort_tier                TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);

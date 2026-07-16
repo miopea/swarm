@@ -296,3 +296,47 @@ class TestPlanModePreamble:
         assert requires_plan_approval(SwarmTask(title="x", source_worker="admin")) is False
         # Global opt-out
         assert requires_plan_approval(SwarmTask(title="x", jira_key="A-1"), enabled=False) is False
+
+
+class TestDispatchEnrichment:
+    """P2: acceptance-criteria done-definition + advisory effort tier."""
+
+    def test_criteria_rendered_as_done_definition(self):
+        task = SwarmTask(
+            title="Add endpoint",
+            task_type=TaskType.CHORE,
+            acceptance_criteria=["Returns 200 for valid id", "Regression test added"],
+        )
+        msg = build_task_message(task, supports_slash_commands=True)
+        assert "ACCEPTANCE CRITERIA" in msg
+        assert "Returns 200 for valid id" in msg
+        assert "Regression test added" in msg
+
+    def test_high_effort_tier_advises_fanout_for_claude(self):
+        task = SwarmTask(title="Big refactor", task_type=TaskType.CHORE, effort_tier="high")
+        msg = build_task_message(task, supports_slash_commands=True)
+        assert "Complexity: high" in msg
+
+    def test_effort_tier_hidden_for_non_claude_providers(self):
+        task = SwarmTask(title="Big refactor", task_type=TaskType.CHORE, effort_tier="high")
+        msg = build_task_message(task, supports_slash_commands=False)
+        assert "Complexity" not in msg
+
+    def test_low_effort_tier_adds_no_note(self):
+        task = SwarmTask(title="Tiny", task_type=TaskType.CHORE, effort_tier="low")
+        msg = build_task_message(task, supports_slash_commands=True)
+        assert "Complexity" not in msg
+
+    def test_enrich_disabled_omits_block(self):
+        task = SwarmTask(
+            title="X", task_type=TaskType.CHORE, acceptance_criteria=["c1"], effort_tier="high"
+        )
+        msg = build_task_message(task, supports_slash_commands=True, enrich_dispatch=False)
+        assert "ACCEPTANCE CRITERIA" not in msg
+        assert "Complexity" not in msg
+
+    def test_no_criteria_no_tier_adds_nothing(self):
+        task = SwarmTask(title="Plain", task_type=TaskType.CHORE)
+        with_enrich = build_task_message(task, supports_slash_commands=True)
+        without = build_task_message(task, supports_slash_commands=True, enrich_dispatch=False)
+        assert with_enrich == without

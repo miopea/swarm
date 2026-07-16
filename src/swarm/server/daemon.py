@@ -377,6 +377,7 @@ class SwarmDaemon(EventEmitter):
             task_history=self.task_history,
             drone_log=self.drone_log,
             notification_bus=self.notification_bus,
+            config=self.config,
         )
         self.config_mgr = ConfigManager(
             config=self.config,

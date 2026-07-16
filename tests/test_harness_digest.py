@@ -238,3 +238,58 @@ class TestRoute:
         assert data["suggestions"] == []
         assert data["actionable"] == 0
         assert "counts" in data
+
+
+class TestVerifierMetrics:
+    def test_counts_verdicts_and_flags_shadow(self):
+        from swarm.analysis.harness_digest import build_verifier_metrics_suggestions
+
+        rows = [
+            {"action": "VERIFIER_TIER2_VERIFIED"},
+            {"action": "VERIFIER_TIER2_VERIFIED"},
+            {"action": "VERIFIER_SHADOW_WOULD_REOPEN"},
+            {"action": "SOMETHING_ELSE"},
+        ]
+        out = build_verifier_metrics_suggestions(rows, criteria_coverage=(3, 4))
+        assert len(out) == 1
+        s = out[0]
+        assert s.type == "verifier_metrics"
+        assert s.apply_action is None
+        assert "verified: 2" in s.detail
+        assert "shadow would-reopen: 1" in s.detail
+        assert "75%" in s.detail
+        assert "SHADOW mode" in s.detail
+
+    def test_empty_when_no_verifier_activity(self):
+        from swarm.analysis.harness_digest import build_verifier_metrics_suggestions
+
+        assert build_verifier_metrics_suggestions([], criteria_coverage=None) == []
+
+
+class TestStaleLearnings:
+    def test_flags_old_dreamer_learnings_only(self):
+        from swarm.analysis.harness_digest import build_stale_learning_suggestions
+
+        now = 1_000_000_000.0
+        old = SimpleNamespace(
+            id="a", applied_to="discovered_by_dreamer:X:h", created_at=now - 90 * 86400
+        )
+        fresh = SimpleNamespace(
+            id="b", applied_to="discovered_by_dreamer:Y:h", created_at=now - 1 * 86400
+        )
+        non_dreamer = SimpleNamespace(id="c", applied_to="manual", created_at=now - 90 * 86400)
+        out = build_stale_learning_suggestions([old, fresh, non_dreamer], now=now)
+        assert len(out) == 1
+        assert out[0].type == "stale_learning"
+        assert out[0].apply_action is None
+        assert out[0].evidence["count"] == 1
+        assert out[0].evidence["ids"] == ["a"]
+
+    def test_empty_when_nothing_stale(self):
+        from swarm.analysis.harness_digest import build_stale_learning_suggestions
+
+        now = 1_000_000_000.0
+        fresh = SimpleNamespace(
+            id="b", applied_to="discovered_by_dreamer:Y:h", created_at=now - 1 * 86400
+        )
+        assert build_stale_learning_suggestions([fresh], now=now) == []

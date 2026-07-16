@@ -225,6 +225,7 @@ class TaskBoard(EventEmitter):
         dependency_type: str | None = None,
         acceptance_criteria: list[str] | None = None,
         context_refs: list[str] | None = None,
+        effort_tier: str | None = None,
     ) -> bool:
         """Update fields on an existing task. Only non-None fields are changed."""
         import time
@@ -254,6 +255,8 @@ class TaskBoard(EventEmitter):
                 acceptance_criteria,
                 context_refs,
             )
+            if effort_tier is not None:
+                task.effort_tier = effort_tier
             task.updated_at = time.time()
             self._persist()
             self._notify()

@@ -169,6 +169,22 @@ class TaskCoordinator:
         d.jira_svc.fire_export(task_id, "active")
         return True
 
+    def _augment_with_recall(self, task: SwarmTask, worker_name: str, msg: str) -> str:
+        """Append recalled procedural memory to a dispatch message: the playbook
+        block (existing) plus, when ``learning_preload`` is on, the top relevant
+        prior learnings (P3) so the worker starts with them instead of pulling
+        via ``swarm_get_learnings``. Both are best-effort and exception-guarded
+        inside the ops layer."""
+        d = self._d
+        pb_block = d.playbook_ops.recall_for_task(task, worker_name)
+        if pb_block:
+            msg = f"{msg}\n{pb_block}"
+        if d.config.drones.learning_preload:
+            learn_block = d.playbook_ops.recall_learnings_for_task(task)
+            if learn_block:
+                msg = f"{msg}\n{learn_block}"
+        return msg
+
     async def start_task(
         self,
         task_id: str,
@@ -204,13 +220,12 @@ class TaskCoordinator:
             task,
             supports_slash_commands=worker_prov.supports_slash_commands,
             plan_mode_for_user_requests=d.config.drones.user_request_plan_mode,
+            enrich_dispatch=d.config.drones.dispatch_enrichment,
         )
         if message:
             msg = f"{msg}\n\nQueen context: {message}"
 
-        pb_block = d.playbook_ops.recall_for_task(task, worker_name)
-        if pb_block:
-            msg = f"{msg}\n{pb_block}"
+        msg = self._augment_with_recall(task, worker_name, msg)
 
         _log.info(
             "starting task %s on %s (%d chars)",
@@ -667,10 +682,76 @@ class TaskCoordinator:
             # queen_force_complete_task keeps its audit semantics.
             if not verify:
                 d.playbook_ops.log_verifier_skip(task, actor=actor)
+            else:
+                # Fire the tiered verifier (shadow by default — see
+                # _fire_verifier). This is the re-wired call site the
+                # 2026.5.25.4 cleanup removed; gated on verifier_enabled.
+                self._fire_verifier(task)
             # Playbook synthesis (independent of verification): mine this
             # successful completion into reusable procedural memory.
             d.playbook_ops.fire_synthesis(task, resolution)
         return result
+
+    def _fire_verifier(self, task: SwarmTask) -> None:
+        """Construct and asynchronously fire the tiered verifier drone for a
+        just-completed task.
+
+        No-op when ``DroneConfig.verifier_enabled`` is False or there is no
+        running event loop (CLI/test context). The drone runs
+        fire-and-forget so it never blocks completion. By default it runs in
+        SHADOW mode (``verifier_enforce=False``): it records verdicts for the
+        Harness metrics but reopens/escalates nothing until the operator
+        enables enforcement from the dashboard.
+        """
+        d = self._d
+        if not d.config.drones.verifier_enabled:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # No event loop (test/CLI) — skip the async verifier.
+
+        from swarm.drones.verifier import (
+            VerifierDrone,
+            fire_and_forget,
+            has_check_evidence,
+            safe_git_diff,
+        )
+        from swarm.messages.store import Message
+        from swarm.queen.verifier import VerifierClient
+
+        worker = d.get_worker(task.assigned_worker) if task.assigned_worker else None
+        repo = (worker.repo_path or worker.path) if worker else "."
+
+        async def _diff(_t: SwarmTask) -> str:
+            return await safe_git_diff(repo, "HEAD~1")
+
+        def _check(worker_name: str) -> bool:
+            return has_check_evidence(d.drone_log.entries, worker_name)
+
+        async def _warn(*, to: str, msg_type: str, content: str, from_: str) -> None:
+            try:
+                d.message_store.send(
+                    Message(sender=from_, recipient=to, msg_type=msg_type, content=content)
+                )
+            except Exception:
+                _log.warning(
+                    "verifier warning send failed for task #%d", task.number, exc_info=True
+                )
+
+        drone = VerifierDrone(
+            drone_log=d.drone_log,
+            task_board=d.task_board,
+            verifier_client=VerifierClient(),
+            diff_provider=_diff,
+            check_evidence_provider=_check,
+            send_warning=_warn,
+            enforce=d.config.drones.verifier_enforce,
+            max_reopens=d.config.drones.verify_reopen_cap,
+        )
+        t = loop.create_task(fire_and_forget(drone, task))
+        t.add_done_callback(_log_task_exception)
+        d._track_task(t)
 
     def auto_resolve_attention_for_task(self, task_id: str) -> None:
         """Resolve active Attention threads whose ``task_id`` matches.

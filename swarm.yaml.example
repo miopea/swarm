@@ -30,6 +30,14 @@ drones:
   max_poll_failures: 5               # consecutive poll failures before circuit-breaker trips
   max_idle_interval: 30.0            # max backoff interval when hive is idle (seconds)
   auto_stop_on_complete: true        # stop pilot when all tasks done and workers idle
+  # Criteria-graded verification (Outcomes pattern). Defaults shown.
+  verifier_criteria_synthesis: true  # synthesize acceptance criteria at task creation (headless Queen)
+  verifier_enabled: true             # run the tiered verifier on completion (records verdicts)
+  verifier_enforce: false            # SHADOW by default: record verdicts but don't reopen tasks.
+                                     #   flip true once the verdict stream looks trustworthy
+  verify_reopen_cap: 2               # verifier reopens before escalating to the operator
+  dispatch_enrichment: true          # add acceptance criteria + advisory effort tier to dispatch
+  learning_preload: true             # preload the top relevant prior learnings into dispatch
 
 # Queen conductor settings
 queen:

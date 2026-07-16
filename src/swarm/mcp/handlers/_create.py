@@ -9,9 +9,11 @@ schema-and-handler-co-located pattern.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from swarm.logging import get_logger
 from swarm.mcp._arg_types import CreateTaskArgs
 from swarm.mcp.types import TextContent
 from swarm.tasks.authority_guard import AuthorityVerdict, screen_task_authority
@@ -20,6 +22,51 @@ from swarm.worker.worker import QUEEN_WORKER_NAME
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
+
+_log = get_logger("mcp.create")
+
+
+async def _synthesize_then_dispatch(
+    d: SwarmDaemon, task_id: str, actor: str, dispatch: Awaitable[Any]
+) -> Any:
+    """Synthesize the Outcomes rubric for a just-created task, THEN await its
+    assign/dispatch coroutine — so the criteria are visible in the task message
+    the target worker receives and available to the verifier. Runs inside the
+    scheduled background coroutine (not the sync tool call), so swarm_create_task
+    returns immediately and the synthesis latency is absorbed before dispatch,
+    not before the reply. Synthesis failure never blocks dispatch.
+    """
+    task = d.task_board.get(task_id)
+    if task is not None:
+        try:
+            await d.tasks.apply_synthesized_criteria(task, actor=actor)
+        except Exception:
+            _log.warning("criteria synthesis failed for task %s", task_id, exc_info=True)
+    return await dispatch
+
+
+def _schedule_synth_dispatch(
+    d: SwarmDaemon, task_id: str, target: str, worker_name: str, dispatch: Awaitable[Any]
+) -> None:
+    """Schedule synthesis+dispatch on the running loop, or fall back to a
+    synchronous board-level assign when there's no loop (test/CLI context).
+
+    Extracted from ``_handle_create_task`` to keep that handler under the
+    complexity budget. ``dispatch`` is an already-created coroutine (so the
+    assign call is recorded synchronously); on the no-loop path it is closed
+    to avoid an un-awaited-coroutine warning.
+    """
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        try:
+            dispatch.close()  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        d.task_board.assign(task_id, target)
+        return
+    _task = loop.create_task(_synthesize_then_dispatch(d, task_id, worker_name, dispatch))
+    _task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -249,23 +296,13 @@ def _handle_create_task(
         # injecting a task description back into the caller's own PTY
         # would interleave with the response it is currently producing.
         should_dispatch = bool(args.get("start", True)) and target != worker_name
+        # Create the dispatch coroutine eagerly (records the assign call), then
+        # schedule it behind Outcomes-rubric synthesis.
         if should_dispatch:
-            coro = d.assign_and_start_task(task.id, target, actor=worker_name)
+            dispatch = d.assign_and_start_task(task.id, target, actor=worker_name)
         else:
-            coro = d.assign_task(task.id, target, actor=worker_name)
-        try:
-            loop = asyncio.get_running_loop()
-            _task = loop.create_task(coro)
-            _task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-        except RuntimeError:
-            # No running event loop (test/CLI context): close the coroutine
-            # we created above so Python doesn't emit "coroutine was never
-            # awaited" and fall back to the synchronous board-level assign.
-            try:
-                coro.close()
-            except Exception:
-                pass
-            d.task_board.assign(task.id, target)
+            dispatch = d.assign_task(task.id, target, actor=worker_name)
+        _schedule_synth_dispatch(d, task.id, target, worker_name, dispatch)
     suffix = " [HOLD — parked, not auto-dispatched]" if (tags and not target) else ""
     return [{"type": "text", "text": f"Task created: #{task.number} {title}{suffix}"}]
 

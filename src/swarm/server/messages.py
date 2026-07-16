@@ -87,6 +87,33 @@ data, file locks, missing env vars — and state which you ruled out.
 """
 
 
+def _enrichment_block(task: SwarmTask, *, claude_gated: bool) -> str:
+    """Build the dispatch-enrichment block (P2): the acceptance criteria as an
+    explicit, graded done-definition plus an advisory effort tier.
+
+    The criteria are the same rubric the verifier grades against, so surfacing
+    them here aligns what's asked with what's checked. The effort tier is
+    ADVISORY and only rendered for providers that support workflows/subagents
+    (``claude_gated``) — Swarm never enforces a worker's internal fan-out, and
+    non-Claude providers can't act on the hint. Empty string when the task has
+    neither criteria nor an actionable tier (context-engineering: no noise).
+    """
+    lines: list[str] = []
+    crits = [c for c in task.acceptance_criteria if c.strip()]
+    if crits:
+        lines.append("\n--- ACCEPTANCE CRITERIA (your completion is graded against these) ---")
+        lines.extend(f"- {c}" for c in crits)
+        lines.append("Ensure each is satisfied before calling swarm_complete_task.")
+    if claude_gated and task.effort_tier == "high":
+        lines.append(
+            "\nComplexity: high — this looks cross-cutting. Consider fanning out "
+            "subagents or a dynamic workflow to cover it thoroughly."
+        )
+    elif claude_gated and task.effort_tier == "medium":
+        lines.append("\nComplexity: medium — scope may span multiple files; plan before diving in.")
+    return "\n".join(lines)
+
+
 def requires_plan_approval(task: SwarmTask, *, enabled: bool = True) -> bool:
     """Tasks from user channels (no peer worker source) require a plan gate.
 
@@ -180,11 +207,40 @@ def attachment_lines(task: SwarmTask) -> str:
     return "\n".join(lines)
 
 
+def _build_inline_body(task: SwarmTask, completion: str) -> str:
+    """Inline workflow-instruction body for task types without a dedicated
+    skill (CHORE, unknown types, non-Claude providers)."""
+    from swarm.tasks.workflows import get_workflow_instructions
+
+    prefix = f"Task #{task.number}: " if task.number else "Task: "
+    parts = [f"{prefix}{task.title}"]
+    if task.description:
+        parts.append(f"\n{task.description}")
+    atts = attachment_lines(task)
+    if atts:
+        parts.append(atts)
+    if task.tags:
+        parts.append(f"\nTags: {', '.join(task.tags)}")
+    source_parts: list[str] = []
+    if task.jira_key:
+        source_parts.append(f"Jira: {task.jira_key}")
+    if task.source_email_id:
+        source_parts.append(f"Email: {task.source_email_id}")
+    if source_parts:
+        parts.append(f"\nSource: {', '.join(source_parts)}")
+    workflow = get_workflow_instructions(task.task_type)
+    if workflow:
+        parts.append(f"\n{workflow}")
+    parts.append(completion)
+    return "\n".join(parts)
+
+
 def build_task_message(
     task: SwarmTask,
     *,
     supports_slash_commands: bool = True,
     plan_mode_for_user_requests: bool = True,
+    enrich_dispatch: bool = True,
 ) -> str:
     """Build a message string describing a task for a worker.
 
@@ -205,7 +261,7 @@ def build_task_message(
     Attachments are always listed on separate lines (never squished into
     the skill command's quoted argument) so the worker can see and read them.
     """
-    from swarm.tasks.workflows import get_skill_command, get_workflow_instructions
+    from swarm.tasks.workflows import get_skill_command
 
     completion = _COMPLETION_INSTRUCTIONS.format(task_id=task.id)
 
@@ -218,29 +274,15 @@ def build_task_message(
             msg = f"{msg}{atts}"
         body = msg + completion
     else:
-        # Fallback: inline workflow instructions (CHORE, unknown types).
-        prefix = f"Task #{task.number}: " if task.number else "Task: "
-        parts = [f"{prefix}{task.title}"]
-        if task.description:
-            parts.append(f"\n{task.description}")
-        atts = attachment_lines(task)
-        if atts:
-            parts.append(atts)
-        if task.tags:
-            parts.append(f"\nTags: {', '.join(task.tags)}")
-        # Source metadata (inline path)
-        source_parts: list[str] = []
-        if task.jira_key:
-            source_parts.append(f"Jira: {task.jira_key}")
-        if task.source_email_id:
-            source_parts.append(f"Email: {task.source_email_id}")
-        if source_parts:
-            parts.append(f"\nSource: {', '.join(source_parts)}")
-        workflow = get_workflow_instructions(task.task_type)
-        if workflow:
-            parts.append(f"\n{workflow}")
-        parts.append(completion)
-        body = "\n".join(parts)
+        body = _build_inline_body(task, completion)
+
+    # Dispatch enrichment (P2): append the acceptance-criteria done-definition
+    # + advisory effort tier. Sits inside the preambles below (which stay
+    # outermost) so plan-mode/bug guidance is still read first.
+    if enrich_dispatch:
+        block = _enrichment_block(task, claude_gated=supports_slash_commands)
+        if block:
+            body = f"{body}\n{block}"
 
     # Bug-fix nudge sits inside the plan-mode preamble (which stays outermost).
     if task.task_type == TaskType.BUG:

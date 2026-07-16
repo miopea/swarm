@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from swarm.config.models import HiveConfig
 from swarm.drones.log import DroneLog, LogCategory, SystemAction
 from swarm.drones.pilot import DronePilot
 from swarm.server.daemon import TaskOperationError
@@ -21,7 +22,12 @@ def mgr():
     history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
     drone_log = DroneLog()
     pilot = MagicMock(spec=DronePilot)
-    return TaskManager(board, history, drone_log, pilot)
+    config = HiveConfig()
+    # Disable LLM criteria synthesis by default so create_task_smart tests
+    # don't spawn a real headless subprocess. The synthesis wiring has its
+    # own dedicated mocked tests below.
+    config.drones.verifier_criteria_synthesis = False
+    return TaskManager(board, history, drone_log, pilot, config=config)
 
 
 def test_require_task_found(mgr):
@@ -123,6 +129,102 @@ async def test_create_task_smart_auto_classify_type(mgr):
         )
         assert task.task_type == TaskType.BUG
         mock_classify.assert_called_once_with("Fix something broken", "It's broken")
+
+
+# --- Acceptance-criteria synthesis (Outcomes rubric) ---------------------
+
+
+def _synth_mgr(enabled: bool) -> TaskManager:
+    board = TaskBoard()
+    history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
+    config = HiveConfig()
+    config.drones.verifier_criteria_synthesis = enabled
+    return TaskManager(board, history, DroneLog(), MagicMock(spec=DronePilot), config=config)
+
+
+@pytest.mark.asyncio
+async def test_synthesis_disabled_skips_llm():
+    mgr = _synth_mgr(enabled=False)
+    task = mgr.create_task("Do a thing", description="details")
+    with patch("swarm.tasks.task.synthesize_acceptance_criteria") as synth:
+        await mgr.apply_synthesized_criteria(task)
+        synth.assert_not_called()
+    assert task.acceptance_criteria == []
+    assert task.effort_tier == ""
+
+
+@pytest.mark.asyncio
+async def test_synthesis_populates_criteria_and_tier():
+    mgr = _synth_mgr(enabled=True)
+    task = mgr.create_task("Add endpoint", description="add GET /widgets")
+    with patch(
+        "swarm.tasks.task.synthesize_acceptance_criteria",
+        return_value=(["Returns 200 for valid id", "Test added"], "medium"),
+    ):
+        await mgr.apply_synthesized_criteria(task)
+    reloaded = mgr.task_board.get(task.id)
+    assert reloaded.acceptance_criteria == ["Returns 200 for valid id", "Test added"]
+    assert reloaded.effort_tier == "medium"
+
+
+@pytest.mark.asyncio
+async def test_synthesis_skips_standing_loop_tasks():
+    from swarm.drones.standing_loop import STANDING_LOOP_TAG
+
+    mgr = _synth_mgr(enabled=True)
+    task = mgr.create_task("Idle filler", description="x", tags=[STANDING_LOOP_TAG])
+    with patch("swarm.tasks.task.synthesize_acceptance_criteria") as synth:
+        await mgr.apply_synthesized_criteria(task)
+        synth.assert_not_called()
+    assert task.acceptance_criteria == []
+
+
+@pytest.mark.asyncio
+async def test_synthesis_skips_when_criteria_already_present():
+    mgr = _synth_mgr(enabled=True)
+    task = mgr.create_task("Has criteria", description="x")
+    mgr.edit_task(task.id, acceptance_criteria=["worker-supplied"])
+    with patch("swarm.tasks.task.synthesize_acceptance_criteria") as synth:
+        await mgr.apply_synthesized_criteria(mgr.task_board.get(task.id))
+        synth.assert_not_called()
+    assert mgr.task_board.get(task.id).acceptance_criteria == ["worker-supplied"]
+
+
+@pytest.mark.asyncio
+async def test_synthesis_empty_result_leaves_task_untouched():
+    mgr = _synth_mgr(enabled=True)
+    task = mgr.create_task("Open-ended", description="investigate the flakiness")
+    with patch("swarm.tasks.task.synthesize_acceptance_criteria", return_value=([], "")):
+        await mgr.apply_synthesized_criteria(task)
+    assert mgr.task_board.get(task.id).acceptance_criteria == []
+    assert mgr.task_board.get(task.id).effort_tier == ""
+
+
+def test_coerce_criteria_caps_and_cleans():
+    from swarm.tasks.task import _coerce_criteria
+
+    assert _coerce_criteria(["a", " b ", "", None, "c", "d", "e"]) == ["a", "b", "c", "d"]
+    assert _coerce_criteria("not a list") == []
+    assert _coerce_criteria(None) == []
+    # long strings are truncated to 300 chars
+    assert len(_coerce_criteria(["x" * 500])[0]) == 300
+
+
+def test_coerce_tier_validates():
+    from swarm.tasks.task import _coerce_tier
+
+    assert _coerce_tier("HIGH") == "high"
+    assert _coerce_tier("medium") == "medium"
+    assert _coerce_tier("bogus") == ""
+    assert _coerce_tier(None) == ""
+
+
+@pytest.mark.asyncio
+async def test_synthesize_blank_description_returns_empty():
+    from swarm.tasks.task import synthesize_acceptance_criteria
+
+    # No subprocess should be spawned for a blank description.
+    assert await synthesize_acceptance_criteria("title", "   ") == ([], "")
 
 
 def test_unassign_task_success(mgr):

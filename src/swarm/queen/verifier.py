@@ -301,10 +301,19 @@ def _build_prompt(
             "```diff",
             diff.strip() or "(empty)",
             "```",
-            "",
-            "Return ONLY the JSON envelope. No commentary.",
         ]
     )
+    if not diff.strip():
+        parts.extend(
+            [
+                "",
+                "There is no git diff — this task produces no code change (e.g. "
+                "research, content, an external-system or operator action). Grade "
+                "the acceptance criteria against the worker's resolution above, "
+                "not against a diff. Do NOT fail it merely for lacking a diff.",
+            ]
+        )
+    parts.extend(["", "Return ONLY the JSON envelope. No commentary."])
     return "\n".join(parts)
 
 

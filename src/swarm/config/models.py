@@ -258,6 +258,31 @@ class DroneConfig:
     dreamer_interval_seconds: float = 14400.0  # 4h
     dreamer_lookback_hours: float = 24.0
     dreamer_min_pattern_count: int = 3
+    # --- Criteria-graded verification (Outcomes pattern) ---
+    # At task creation the headless Queen synthesizes best-effort acceptance
+    # criteria (+ an advisory effort tier) so the verifier has a rubric to
+    # grade against and the worker gets an explicit done-definition. Empty
+    # for open-ended/exploratory tasks; skipped for standing-loop filler.
+    verifier_criteria_synthesis: bool = True
+    # Whether the LLM verifier RUNS at all on task completion. When True it
+    # judges completions (tier-1 deterministic /check gate, then tier-2
+    # criteria grading) and records verdicts for the Harness digest.
+    verifier_enabled: bool = True
+    # Whether the verifier ENFORCES its verdict by reopening/escalating a
+    # FAILED task. Default False = shadow mode: verdicts are recorded but no
+    # task is reopened. Flip to True from the dashboard once the verdict
+    # stream looks trustworthy (mirrors the token-ceiling ship-disabled
+    # rollout). Has no effect when verifier_enabled is False.
+    verifier_enforce: bool = False
+    # Self-loop guard: after this many verifier reopens on one task, escalate
+    # to the operator instead of reopening again. Was the VERIFIER_MAX_REOPENS
+    # module constant; promoted to config so operators can tune it.
+    verify_reopen_cap: int = 2
+    # Inject the objective/done-definition/scope/effort block (P2) into the
+    # dispatch message, and preload the top relevant learnings (P3). Both are
+    # additive dispatch context; disable to revert to the lean dispatch.
+    dispatch_enrichment: bool = True
+    learning_preload: bool = True
 
 
 @dataclass

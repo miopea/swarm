@@ -89,6 +89,8 @@ def _make_drone(
     check_evidence: bool = True,
     peer_warnings: str = "",
     raising_client: bool = False,
+    enforce: bool = True,
+    max_reopens: int = VERIFIER_MAX_REOPENS,
 ) -> tuple[VerifierDrone, _Recorder, DroneLog, TaskBoard, _FakeVerifierClient]:
     log = DroneLog()
     board = TaskBoard()
@@ -108,6 +110,8 @@ def _make_drone(
         peer_warnings_provider=lambda _tid: peer_warnings,
         send_warning=rec.send_warning,
         escalate_to_operator=rec.escalate,
+        enforce=enforce,
+        max_reopens=max_reopens,
     )
     return drone, rec, log, board, client  # type: ignore[return-value]
 
@@ -144,6 +148,121 @@ async def test_tier1_empty_diff_reopens_without_llm():
     assert len(rec.warnings) == 1
     assert rec.warnings[0]["to"] == "api"
     assert rec.warnings[0]["msg_type"] == "warning"
+
+
+# ---------------------------------------------------------------------------
+# Shadow mode (enforce=False) — record verdicts, reopen nothing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_failed_verdict_does_not_reopen():
+    drone, rec, log, board, _client = _make_drone(
+        verdict="FAILED", reason="missing X", enforce=False
+    )
+    task = _make_task()
+    board.add(task)
+
+    status = await drone.verify_completion(task)
+
+    # Task lifecycle untouched — still DONE, no reopen, no counter bump.
+    assert task.status == TaskStatus.DONE
+    assert task.verification_reopen_count == 0
+    assert status == VerificationStatus.NOT_RUN
+    assert rec.warnings == []
+    # But the would-be reopen IS recorded for the Harness metrics.
+    assert SystemAction.VERIFIER_SHADOW_WOULD_REOPEN in _actions(log)
+    assert "[shadow] would reopen" in task.verification_reason
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_tier1_empty_diff_does_not_reopen():
+    drone, rec, log, board, _client = _make_drone(diff="", enforce=False)
+    task = _make_task()
+    board.add(task)
+
+    await drone.verify_completion(task)
+
+    assert task.status == TaskStatus.DONE
+    assert task.verification_reopen_count == 0
+    assert rec.warnings == []
+    assert SystemAction.VERIFIER_SHADOW_WOULD_REOPEN in _actions(log)
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_verified_still_records_pass():
+    drone, rec, log, board, _client = _make_drone(verdict="VERIFIED", enforce=False)
+    task = _make_task()
+    board.add(task)
+
+    status = await drone.verify_completion(task)
+
+    assert status == VerificationStatus.VERIFIED
+    assert SystemAction.VERIFIER_TIER2_VERIFIED in _actions(log)
+    assert rec.warnings == []
+
+
+# ---------------------------------------------------------------------------
+# No-diff task types — tier-1 empty-diff gate does not apply
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_no_diff_task_type_skips_empty_diff_reopen():
+    from swarm.tasks.task import TaskType
+
+    # A CONTENT task with an empty diff must NOT tier-1 reopen; it goes to
+    # tier-2 which grades the resolution. Here tier-2 returns VERIFIED.
+    drone, rec, log, board, client = _make_drone(diff="", verdict="VERIFIED")
+    task = _make_task()
+    task.task_type = TaskType.CONTENT
+    board.add(task)
+
+    status = await drone.verify_completion(task)
+
+    assert status == VerificationStatus.VERIFIED
+    assert task.status == TaskStatus.DONE
+    # Tier-2 WAS consulted (no tier-1 short-circuit on empty diff).
+    assert len(client.calls) == 1
+    assert SystemAction.VERIFIER_TIER1_REOPENED not in _actions(log)
+
+
+@pytest.mark.asyncio
+async def test_no_diff_task_type_skips_check_evidence_gate():
+    from swarm.tasks.task import TaskType
+
+    # A CONTENT task with no /check evidence must not reopen for that either.
+    drone, _rec, log, board, client = _make_drone(diff="", verdict="VERIFIED", check_evidence=False)
+    task = _make_task()
+    task.task_type = TaskType.PUBLISH
+    board.add(task)
+
+    status = await drone.verify_completion(task)
+
+    assert status == VerificationStatus.VERIFIED
+    assert len(client.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Configurable reopen cap
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_configurable_reopen_cap_escalates_at_one():
+    # max_reopens=1 → a task already reopened once escalates instead of
+    # reopening again.
+    drone, rec, log, board, _client = _make_drone(
+        verdict="FAILED", reason="still broken", max_reopens=1
+    )
+    task = _make_task(reopen_count=1)
+    board.add(task)
+
+    status = await drone.verify_completion(task)
+
+    assert status == VerificationStatus.ESCALATED
+    assert SystemAction.VERIFIER_ESCALATED in _actions(log)
+    assert len(rec.escalations) == 1
 
 
 @pytest.mark.asyncio

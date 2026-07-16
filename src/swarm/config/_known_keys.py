@@ -90,6 +90,12 @@ _KNOWN_DRONE_KEYS = {
     "dreamer_interval_seconds",
     "dreamer_lookback_hours",
     "dreamer_min_pattern_count",
+    "verifier_criteria_synthesis",
+    "verifier_enabled",
+    "verifier_enforce",
+    "verify_reopen_cap",
+    "dispatch_enrichment",
+    "learning_preload",
 }
 
 _KNOWN_QUEEN_KEYS = {

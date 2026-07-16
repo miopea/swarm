@@ -177,6 +177,11 @@ class SystemAction(Enum):
     VERIFIER_TIER2_REOPENED = "VERIFIER_TIER2_REOPENED"
     VERIFIER_ESCALATED = "VERIFIER_ESCALATED"
     VERIFIER_SKIPPED = "VERIFIER_SKIPPED"
+    # Shadow mode: the verifier ran and WOULD have reopened this task, but
+    # enforcement is off (DroneConfig.verifier_enforce=False) so the task's
+    # lifecycle was left untouched. Recorded for the Harness metrics so the
+    # operator can judge the verdict stream before enabling enforcement.
+    VERIFIER_SHADOW_WOULD_REOPEN = "VERIFIER_SHADOW_WOULD_REOPEN"
     # Dreamer drone events: emitted when the periodic pattern-mining sweep
     # turns a recurring failure/oversight cluster into a queen_learnings
     # row tagged ``discovered_by_dreamer:{key}``. One entry per learning

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from swarm.config.models import HiveConfig
 from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
 from swarm.tasks.history import TaskAction
@@ -40,12 +41,14 @@ class TaskManager:
         drone_log: DroneLog,
         pilot: DronePilot | None = None,
         notification_bus: NotificationBus | None = None,
+        config: HiveConfig | None = None,
     ) -> None:
         self.task_board = task_board
         self.task_history = task_history
         self.drone_log = drone_log
         self._pilot = pilot
         self._notification_bus = notification_bus
+        self.config = config or HiveConfig()
 
     def require_task(
         self, task_id: str, allowed_statuses: set[TaskStatus] | None = None
@@ -125,7 +128,7 @@ class TaskManager:
             raise ValueError("title or description required")
         if task_type is None:
             task_type = auto_classify_type(title, description)
-        return self.create_task(
+        task = self.create_task(
             title=title,
             description=description,
             priority=priority,
@@ -136,6 +139,10 @@ class TaskManager:
             source_email_id=source_email_id,
             actor=actor,
         )
+        # Populate the Outcomes rubric at creation so it's visible when the
+        # operator later dispatches this task. Best-effort; never blocks.
+        await self.apply_synthesized_criteria(task, actor=actor)
+        return task
 
     async def resolve_title(self, title_raw: str, desc_hint: str, task_id: str) -> str:
         """Resolve a title: return as-is if non-empty, generate from description if empty."""
@@ -217,6 +224,7 @@ class TaskManager:
         dependency_type: str | None = None,
         acceptance_criteria: list[str] | None = None,
         context_refs: list[str] | None = None,
+        effort_tier: str | None = None,
         actor: str = "user",
     ) -> bool:
         """Edit a task. Raises if not found."""
@@ -235,10 +243,41 @@ class TaskManager:
             dependency_type=dependency_type,
             acceptance_criteria=acceptance_criteria,
             context_refs=context_refs,
+            effort_tier=effort_tier,
         )
         if result:
             self.task_history.append(task_id, TaskAction.EDITED, actor=actor)
         return result
+
+    async def apply_synthesized_criteria(self, task: SwarmTask, actor: str = "system") -> None:
+        """Best-effort populate a task's acceptance criteria + effort tier at
+        creation via the headless Queen (the Outcomes rubric).
+
+        Gated on ``DroneConfig.verifier_criteria_synthesis``. Skips standing-loop
+        filler (cost gate) and any task that already carries criteria (a worker
+        supplied them, or it's a re-run). Never raises — synthesis is advisory
+        and must not block or fail task creation. Callers should invoke this
+        BEFORE dispatch so the criteria are visible to the worker in the task
+        message and available to the verifier.
+        """
+        from swarm.drones.standing_loop import STANDING_LOOP_TAG
+        from swarm.tasks.task import synthesize_acceptance_criteria
+
+        if not self.config.drones.verifier_criteria_synthesis:
+            return
+        if STANDING_LOOP_TAG in task.tags:
+            return
+        if task.acceptance_criteria:
+            return
+        criteria, tier = await synthesize_acceptance_criteria(task.title, task.description)
+        if not criteria and not tier:
+            return
+        self.edit_task(
+            task.id,
+            acceptance_criteria=criteria or None,
+            effort_tier=tier or None,
+            actor=actor,
+        )
 
     def create_cross_task(
         self,

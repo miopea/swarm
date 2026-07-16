@@ -48,7 +48,7 @@ from typing import TYPE_CHECKING
 
 from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
-from swarm.tasks.task import VerificationStatus
+from swarm.tasks.task import TaskType, VerificationStatus
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -61,12 +61,22 @@ if TYPE_CHECKING:
 
 _log = get_logger("drones.verifier")
 
-# Self-loop guard. After the verifier reopens a task this many times in
-# a row and the resulting completion still fails verification, the drone
-# escalates to the operator instead of reopening a third time. Per the
-# plan: "by reopen 3, either the verifier is wrong or the worker can't
-# fix it without human input — either way, human."
+# Default self-loop guard. After the verifier reopens a task this many times
+# in a row and the resulting completion still fails verification, the drone
+# escalates to the operator instead of reopening again. Per the plan: "by
+# reopen 3, either the verifier is wrong or the worker can't fix it without
+# human input — either way, human." Now overridable per-deployment via
+# ``DroneConfig.verify_reopen_cap`` (this constant is the fallback default).
 VERIFIER_MAX_REOPENS = 2
+
+# Task types that legitimately produce NO git diff (research write-ups,
+# content, external-system changes, operator actions). For these the tier-1
+# empty-diff / no-/check-evidence gates don't apply — the verifier grades the
+# resolution text instead of a diff. Everything else is treated as
+# code-producing and must show a diff + validation evidence.
+_NO_DIFF_TASK_TYPES: frozenset[TaskType] = frozenset(
+    {TaskType.CONTENT, TaskType.REVIEW, TaskType.PUBLISH, TaskType.INGEST, TaskType.OPERATOR}
+)
 
 # How many recent buzz-log entries to inspect when looking for ``/check``
 # evidence. Workers typically run /check immediately before completing,
@@ -157,6 +167,8 @@ class VerifierDrone:
         send_warning: Callable[..., Awaitable[None]] | None = None,
         escalate_to_operator: Callable[..., Awaitable[None]] | None = None,
         on_verdict: Callable[..., Awaitable[None]] | None = None,
+        enforce: bool = True,
+        max_reopens: int = VERIFIER_MAX_REOPENS,
     ) -> None:
         self._drone_log = drone_log
         self._task_board = task_board
@@ -170,6 +182,13 @@ class VerifierDrone:
         # verification with the terminal status. Decoupled — the verifier
         # knows nothing about playbooks; the daemon wires this.
         self._on_verdict = on_verdict
+        # Shadow mode (enforce=False): compute + record verdicts but NEVER
+        # reopen or escalate. The default-off rollout for a gate that has
+        # never run in production — the operator flips
+        # ``DroneConfig.verifier_enforce`` on from the dashboard once the
+        # recorded verdict stream looks trustworthy.
+        self._enforce = enforce
+        self._max_reopens = max_reopens
 
     async def verify_completion(self, task: SwarmTask) -> VerificationStatus:
         """Run tier-1 then tier-2 verification on ``task``.
@@ -184,7 +203,7 @@ class VerifierDrone:
         # Tier 1 — deterministic short-circuits
         tier1 = await self._tier1(task)
         if tier1 is not None:
-            await self._reopen_or_escalate(task, reason=tier1, source="tier1")
+            await self._handle_negative(task, reason=tier1, source="tier1")
             return task.verification_status
         self._log(
             SystemAction.VERIFIER_TIER1_PASSED,
@@ -221,7 +240,7 @@ class VerifierDrone:
                 prose=verdict.reason,
                 criteria_results=verdict.criteria_results,
             )
-            await self._reopen_or_escalate(
+            await self._handle_negative(
                 task,
                 reason=f"tier-2 FAILED: {failed_reason}",
                 source="tier2",
@@ -245,6 +264,33 @@ class VerifierDrone:
         )
         return VerificationStatus.VERIFIED
 
+    @staticmethod
+    def _expects_diff(task: SwarmTask) -> bool:
+        """Whether this task type is expected to produce a git diff.
+
+        Research/content/external-system/operator tasks legitimately produce
+        none — for those the empty-diff and /check-evidence tier-1 gates don't
+        apply and tier-2 grades the resolution text instead.
+        """
+        return task.task_type not in _NO_DIFF_TASK_TYPES
+
+    async def _handle_negative(self, task: SwarmTask, *, reason: str, source: str) -> None:
+        """Act on a failing verdict — reopen/escalate when enforcing, else shadow-record.
+
+        In shadow mode (``enforce=False``) the would-be reopen is logged for
+        the Harness metrics and the reason is stamped for the dashboard, but the
+        task's lifecycle is left untouched — nothing is reopened or escalated.
+        """
+        if self._enforce:
+            await self._reopen_or_escalate(task, reason=reason, source=source)
+            return
+        task.verification_reason = f"[shadow] would reopen: {reason}"
+        self._log(
+            SystemAction.VERIFIER_SHADOW_WOULD_REOPEN,
+            task,
+            f"#{task.number}: [shadow] would reopen ({source}) — {reason}",
+        )
+
     async def _tier1(self, task: SwarmTask) -> str | None:
         """Run all tier-1 deterministic checks. Returns reason on first fail.
 
@@ -252,21 +298,25 @@ class VerifierDrone:
         circuits the rest — once we've decided to reopen, we don't need
         to keep collecting reasons. If all checks pass, returns None.
         """
-        # 1. Empty diff
-        try:
-            diff = await self._diff_provider(task)
-        except Exception:
-            _log.warning("diff provider raised for task #%d", task.number, exc_info=True)
-            diff = ""
-        if not diff.strip():
-            return "tier-1: no diff produced — completion has no code change"
+        # Checks 1 & 2 only apply to code-producing tasks. A no-diff task
+        # (research, content, operator action) is handed straight to tier-2,
+        # which grades its resolution text against the acceptance criteria.
+        if self._expects_diff(task):
+            # 1. Empty diff
+            try:
+                diff = await self._diff_provider(task)
+            except Exception:
+                _log.warning("diff provider raised for task #%d", task.number, exc_info=True)
+                diff = ""
+            if not diff.strip():
+                return "tier-1: no diff produced — completion has no code change"
 
-        # 2. /check evidence
-        worker = task.assigned_worker or ""
-        if worker and not self._check_evidence(worker):
-            return "tier-1: no /check evidence in recent buzz log"
+            # 2. /check evidence
+            worker = task.assigned_worker or ""
+            if worker and not self._check_evidence(worker):
+                return "tier-1: no /check evidence in recent buzz log"
 
-        # 3. Unresolved peer warning
+        # 3. Unresolved peer warning (applies to every task)
         peer = self._peer_warnings(task.id).strip()
         if peer:
             return f"tier-1: unresolved peer warning — {peer[:200]}"
@@ -284,7 +334,7 @@ class VerifierDrone:
         # Self-loop guard fires BEFORE the reopen counter is incremented.
         # Counter is the number of *previous* verifier reopens; we
         # escalate when the next reopen would push it past the limit.
-        if task.verification_reopen_count >= VERIFIER_MAX_REOPENS:
+        if task.verification_reopen_count >= self._max_reopens:
             await self._escalate_now(task, reason=reason, source=source)
             return
         task.reopen_for_verifier(reason=reason)
@@ -317,9 +367,10 @@ class VerifierDrone:
             SystemAction.VERIFIER_ESCALATED,
             task,
             (
-                f"#{task.number}: escalated after {VERIFIER_MAX_REOPENS} reopens "
+                f"#{task.number}: escalated after {self._max_reopens} reopens "
                 f"(source={source}) — {reason}"
             ),
+            is_notification=True,
         )
         if self._escalate is None:
             return
@@ -357,13 +408,21 @@ class VerifierDrone:
         except Exception:
             _log.warning("verifier warning send failed for task #%d", task.number, exc_info=True)
 
-    def _log(self, action: SystemAction, task: SwarmTask, detail: str) -> None:
+    def _log(
+        self,
+        action: SystemAction,
+        task: SwarmTask,
+        detail: str,
+        *,
+        is_notification: bool = False,
+    ) -> None:
         """Append an entry under ``LogCategory.VERIFIER``."""
         self._drone_log.add(
             action,
             task.assigned_worker or "verifier",
             detail,
             category=LogCategory.VERIFIER,
+            is_notification=is_notification,
             metadata={
                 "task_id": task.id,
                 "task_number": task.number,

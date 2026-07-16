@@ -332,6 +332,12 @@ def _serialize_drones(config: HiveConfig) -> dict[str, Any]:
         "dreamer_interval_seconds": d.dreamer_interval_seconds,
         "dreamer_lookback_hours": d.dreamer_lookback_hours,
         "dreamer_min_pattern_count": d.dreamer_min_pattern_count,
+        "verifier_criteria_synthesis": d.verifier_criteria_synthesis,
+        "verifier_enabled": d.verifier_enabled,
+        "verifier_enforce": d.verifier_enforce,
+        "verify_reopen_cap": d.verify_reopen_cap,
+        "dispatch_enrichment": d.dispatch_enrichment,
+        "learning_preload": d.learning_preload,
         "approval_rules": [{"pattern": r.pattern, "action": r.action} for r in d.approval_rules],
     }
     if d.allowed_read_paths:

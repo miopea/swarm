@@ -48,6 +48,39 @@ _log = get_logger("server.playbook_ops")
 # breadth without a deeper config knob.
 _PLAYBOOK_RECALL_LIMIT = 3
 
+# P3 learning preload: max prior-task learnings injected into a dispatch, and
+# the minimum keyword overlap for a learning to count as relevant. Kept small
+# per the context-engineering token budget ("just-in-time + some upfront").
+_LEARNING_RECALL_LIMIT = 3
+_LEARNING_MIN_OVERLAP = 2
+# Common >=4-char words that carry no topical signal — excluded from the
+# keyword-overlap relevance so learnings aren't matched on boilerplate.
+_LEARNING_STOPWORDS = frozenset(
+    {
+        "this",
+        "that",
+        "with",
+        "from",
+        "have",
+        "will",
+        "when",
+        "then",
+        "task",
+        "code",
+        "test",
+        "tests",
+        "into",
+        "your",
+        "should",
+        "which",
+        "there",
+        "their",
+        "using",
+        "make",
+        "need",
+    }
+)
+
 
 class PlaybookOps:
     """Recall + attribution + synthesis glue around :class:`PlaybookStore`.
@@ -152,6 +185,52 @@ class PlaybookOps:
             return "\n".join(lines)
         except Exception:
             _log.warning("playbook recall failed — dispatching without", exc_info=True)
+            return ""
+
+    @staticmethod
+    def _keywords(text: str) -> set[str]:
+        """Significant (>=4-char, non-stopword) lowercase tokens for overlap."""
+        return {
+            w
+            for w in re.findall(r"[a-z0-9_]+", text.lower())
+            if len(w) >= 4 and w not in _LEARNING_STOPWORDS
+        }
+
+    def recall_learnings_for_task(self, task: SwarmTask) -> str:
+        """P3 preload: a delimited block of the most relevant prior-task
+        learnings for this task ('' if none). Server-side equivalent of what a
+        worker would get from ``swarm_get_learnings``, but pushed into the
+        dispatch so the worker starts with it. Relevance = keyword overlap
+        between this task's title/description and each candidate's title +
+        learnings. Best-effort — never raises into the dispatch path.
+        """
+        if self._task_board is None:
+            return ""
+        try:
+            wanted = self._keywords(f"{task.title} {task.description or ''}")
+            if not wanted:
+                return ""
+            scored: list[tuple[int, SwarmTask]] = []
+            for other in self._task_board.all_tasks:
+                if other.id == task.id or not (other.learnings or "").strip():
+                    continue
+                overlap = len(wanted & self._keywords(f"{other.title} {other.learnings}"))
+                if overlap >= _LEARNING_MIN_OVERLAP:
+                    scored.append((overlap, other))
+            scored.sort(key=lambda pair: pair[0], reverse=True)
+            chosen = [t for _score, t in scored[:_LEARNING_RECALL_LIMIT]]
+            if not chosen:
+                return ""
+            lines = [
+                "",
+                "--- Relevant learnings from past tasks (apply if they fit) ---",
+            ]
+            for t in chosen:
+                lines.append(f"\n[#{t.number} {t.title}]\n{t.learnings.strip()}")
+            lines.append("--- end learnings ---")
+            return "\n".join(lines)
+        except Exception:
+            _log.warning("learning recall failed — dispatching without", exc_info=True)
             return ""
 
     async def attribute_outcome(self, task: SwarmTask, status: object) -> None:

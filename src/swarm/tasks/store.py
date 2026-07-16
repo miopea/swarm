@@ -121,6 +121,7 @@ def _task_to_dict(task: SwarmTask) -> dict[str, Any]:
         "verification_status": task.verification_status.value,
         "verification_reason": task.verification_reason,
         "verification_reopen_count": task.verification_reopen_count,
+        "effort_tier": task.effort_tier,
     }
 
 
@@ -157,4 +158,5 @@ def _dict_to_task(d: dict[str, Any]) -> SwarmTask:
         verification_status=VerificationStatus(d.get("verification_status", "not_run")),
         verification_reason=d.get("verification_reason", ""),
         verification_reopen_count=d.get("verification_reopen_count", 0),
+        effort_tier=d.get("effort_tier", ""),
     )

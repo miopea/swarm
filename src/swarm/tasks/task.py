@@ -169,6 +169,11 @@ class SwarmTask:
     verification_status: VerificationStatus = VerificationStatus.NOT_RUN
     verification_reason: str = ""
     verification_reopen_count: int = 0
+    # Advisory complexity tier (``low|medium|high`` or '') synthesized by the
+    # headless Queen at creation alongside ``acceptance_criteria``. Rendered as
+    # dispatch guidance only for providers that support workflows/subagents;
+    # never enforced (Swarm can't control a worker's internal fan-out).
+    effort_tier: str = ""
 
     def assign(self, worker_name: str) -> None:
         self.assigned_worker = worker_name
@@ -624,6 +629,111 @@ async def smart_title(description: str, max_len: int = 80) -> str:
     except OSError as e:
         _log.warning("smart_title: OS error spawning LLM: %s", e)
     return auto_title(description, max_len)
+
+
+_VALID_EFFORT_TIERS = ("low", "medium", "high")
+
+_CRITERIA_SYNTH_PROMPT = """\
+Read this task and produce acceptance criteria the completed work can be graded \
+against, plus a complexity estimate.
+
+Return ONLY a JSON object, no prose:
+{{"acceptance_criteria": ["<short checkable outcome>", ...], "effort_tier": "low|medium|high"}}
+
+Rules:
+- acceptance_criteria: 0 to 4 short, objective, checkable statements of what \
+"done" means for THIS task. Each is a concrete outcome a reviewer could verify \
+against a diff or a result (e.g. "New endpoint returns 200 for a valid id", \
+"Regression test added and passing").
+- If the task is open-ended, exploratory, or a vague chore with no objective \
+checkable outcome ("investigate X", "research Y", "clean up Z"), return an EMPTY \
+array. Do NOT invent criteria just to fill the list — a wrong criterion causes a \
+false failure. Empty is the correct, safe answer when there's nothing objective \
+to check.
+- effort_tier: your estimate of the task's complexity — "low" (a small, \
+localized change), "medium" (multiple files or moderate design), or "high" \
+(cross-cutting, many files, or significant design/uncertainty).
+
+Task title: {title}
+
+Task description:
+{description}
+"""
+
+
+async def synthesize_acceptance_criteria(title: str, description: str) -> tuple[list[str], str]:
+    """Best-effort headless synthesis of acceptance criteria + an effort tier.
+
+    Mirrors :func:`smart_title`: a stateless headless LLM call in a NEUTRAL cwd
+    (so it never absorbs the swarm project's CLAUDE.md context), JSON output,
+    graceful fallback. Returns ``([], "")`` on ANY failure or when the task is
+    open-ended — synthesis must never block or fail task creation. Callers gate
+    the call on ``DroneConfig.verifier_criteria_synthesis`` and skip
+    standing-loop filler; this function itself is unconditional.
+    """
+    if not description or not description.strip():
+        return [], ""
+    prompt = _CRITERIA_SYNTH_PROMPT.format(
+        title=(title or "").strip()[:200],
+        description=description.strip()[:4000],
+    )
+    try:
+        import tempfile
+
+        from swarm.providers import get_provider
+        from swarm.queen.json_extract import extract_json
+
+        provider = get_provider()
+        args = provider.headless_command(prompt, output_format="json", max_turns=1)
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=tempfile.gettempdir(),
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        if proc.returncode != 0:
+            err_msg = stderr.decode(errors="replace").strip()[:200]
+            _log.warning("synthesize_criteria: LLM exited %d: %s", proc.returncode, err_msg)
+            return [], ""
+        # Unwrap the provider's CLI envelope (returns (text, session_id)), then
+        # extract the inner JSON object the model produced.
+        inner, _sid = provider.parse_headless_response(stdout)
+        data = extract_json(inner) or extract_json(stdout.decode(errors="replace"))
+        if not isinstance(data, dict):
+            _log.warning("synthesize_criteria: no JSON object in output")
+            return [], ""
+        return _coerce_criteria(data.get("acceptance_criteria")), _coerce_tier(
+            data.get("effort_tier")
+        )
+    except TimeoutError:
+        _log.warning("synthesize_criteria: LLM timed out after 30s")
+    except FileNotFoundError:
+        _log.warning("synthesize_criteria: LLM binary not found")
+    except (OSError, ValueError) as e:
+        _log.warning("synthesize_criteria: error: %s", e)
+    return [], ""
+
+
+def _coerce_criteria(raw: object) -> list[str]:
+    """Normalize the LLM's acceptance_criteria into ``list[str]`` (max 4)."""
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        text = str(item).strip() if item is not None else ""
+        if text:
+            out.append(text[:300])
+        if len(out) >= 4:
+            break
+    return out
+
+
+def _coerce_tier(raw: object) -> str:
+    """Normalize the LLM's effort_tier to one of low/medium/high, else ''."""
+    tier = str(raw).strip().lower() if raw is not None else ""
+    return tier if tier in _VALID_EFFORT_TIERS else ""
 
 
 def auto_title(description: str, max_len: int = 80) -> str:

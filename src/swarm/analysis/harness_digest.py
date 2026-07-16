@@ -28,7 +28,25 @@ if TYPE_CHECKING:
     from swarm.playbooks.models import Playbook
 
 # Suggestion types whose changes are code/judgment edits — NEVER auto-applied.
-DISPLAY_ONLY_TYPES = frozenset({"tool_description", "dreamer_pattern", "tuning"})
+# ``verifier_metrics`` and ``stale_learning`` are display-only: the former is a
+# read-out (nothing to apply), the latter surfaces stale learnings for the
+# operator to retire by hand (never auto-deleted — the #331 principle).
+DISPLAY_ONLY_TYPES = frozenset(
+    {"tool_description", "dreamer_pattern", "tuning", "verifier_metrics", "stale_learning"}
+)
+
+# Verifier buzz actions counted for the metrics read-out, mapped to UI labels.
+_VERIFIER_ACTION_LABELS = {
+    "VERIFIER_TIER2_VERIFIED": "verified",
+    "VERIFIER_TIER2_UNCERTAIN": "uncertain",
+    "VERIFIER_TIER1_REOPENED": "reopened (tier-1)",
+    "VERIFIER_TIER2_REOPENED": "reopened (tier-2)",
+    "VERIFIER_SHADOW_WOULD_REOPEN": "shadow would-reopen",
+    "VERIFIER_ESCALATED": "escalated",
+}
+
+# Dreamer learnings older than this (days) are surfaced for operator review.
+_STALE_LEARNING_AGE_DAYS = 60
 
 # The only endpoints an apply_action may target — all pre-existing, already
 # validated server-side. Keeping this a closed set is what makes "no novel
@@ -275,6 +293,81 @@ def build_tuning_suggestions(tuning: list[TuningSuggestion]) -> list[Improvement
     return out
 
 
+def build_verifier_metrics_suggestions(
+    buzz_rows: list[Any], *, criteria_coverage: tuple[int, int] | None = None
+) -> list[ImprovementSuggestion]:
+    """Display-only read-out of the verifier's recent verdict mix + criteria
+    coverage. This is the surface that makes SHADOW mode useful: the operator
+    watches the recorded verdicts here before enabling ``verifier_enforce``.
+    """
+    counts: dict[str, int] = {}
+    for row in buzz_rows:
+        action = row.get("action") or "" if isinstance(row, dict) else getattr(row, "action", "")
+        if action in _VERIFIER_ACTION_LABELS:
+            counts[action] = counts.get(action, 0) + 1
+    if not counts and not criteria_coverage:
+        return []
+    parts: list[str] = []
+    if counts:
+        mix = ", ".join(f"{_VERIFIER_ACTION_LABELS[a]}: {n}" for a, n in sorted(counts.items()))
+        parts.append(f"Recent verifier verdicts — {mix}.")
+    if criteria_coverage is not None:
+        have, total = criteria_coverage
+        pct = (100.0 * have / total) if total else 0.0
+        parts.append(f"Acceptance-criteria coverage: {have}/{total} tasks ({pct:.0f}%).")
+    shadow = counts.get("VERIFIER_SHADOW_WOULD_REOPEN", 0)
+    if shadow:
+        parts.append(
+            f"{shadow} would-be reopen(s) recorded in SHADOW mode (enforcement off) — "
+            "review these before enabling verifier_enforce."
+        )
+    return [
+        ImprovementSuggestion(
+            type="verifier_metrics",
+            title="Verifier verdict metrics",
+            detail=" ".join(parts),
+            confidence=1.0,
+            evidence={"counts": counts, "coverage": list(criteria_coverage or ())},
+            apply_action=None,
+        )
+    ]
+
+
+def build_stale_learning_suggestions(
+    dreamer_learnings: list[Any], *, now: float, max_age_days: int = _STALE_LEARNING_AGE_DAYS
+) -> list[ImprovementSuggestion]:
+    """Display-only: surface dreamer learnings older than ``max_age_days`` for
+    the operator to retire by hand. NEVER auto-deleted (the #331 principle) —
+    this only flags candidates."""
+    cutoff = now - max_age_days * 86_400.0
+    stale = []
+    for lrn in dreamer_learnings:
+        tag = getattr(lrn, "applied_to", "") or ""
+        if not tag.startswith(_DREAMER_TAG_PREFIX):
+            continue
+        created = float(getattr(lrn, "created_at", 0.0) or 0.0)
+        if created and created < cutoff:
+            stale.append(lrn)
+    if not stale:
+        return []
+    return [
+        ImprovementSuggestion(
+            type="stale_learning",
+            title=f"{len(stale)} dreamer learning(s) older than {max_age_days}d — review",
+            detail=(
+                "These auto-mined learnings haven't refreshed in a while and may be stale. "
+                "Retire any that are no longer relevant (operator action — never auto-deleted)."
+            ),
+            confidence=0.5,
+            evidence={
+                "ids": [getattr(lrn, "id", "") for lrn in stale][:20],
+                "count": len(stale),
+            },
+            apply_action=None,
+        )
+    ]
+
+
 def build_digest(
     *,
     tool_stats: list[ToolStats],
@@ -287,6 +380,8 @@ def build_digest(
     prune_uses: int,
     prune_winrate: float,
     now: float,
+    verifier_buzz_rows: list[Any] | None = None,
+    criteria_coverage: tuple[int, int] | None = None,
 ) -> HarnessDigest:
     """Compose all builders into one digest, actionable items sorted first."""
     suggestions: list[ImprovementSuggestion] = []
@@ -301,6 +396,10 @@ def build_digest(
     suggestions += build_tool_description_suggestions(tool_stats)
     suggestions += build_dreamer_pattern_suggestions(dreamer_learnings)
     suggestions += build_tuning_suggestions(tuning_suggestions)
+    suggestions += build_verifier_metrics_suggestions(
+        verifier_buzz_rows or [], criteria_coverage=criteria_coverage
+    )
+    suggestions += build_stale_learning_suggestions(dreamer_learnings, now=now)
     # Actionable (apply_action present) first, then by confidence desc.
     suggestions.sort(key=lambda s: (s.apply_action is None, -s.confidence))
     return HarnessDigest(generated_at=now, suggestions=suggestions)
@@ -309,6 +408,21 @@ def build_digest(
 # --------------------------------------------------------------------------- #
 # Impure collector — route-only; tolerant of every missing store.
 # --------------------------------------------------------------------------- #
+def _criteria_coverage(daemon: Any) -> tuple[int, int] | None:
+    """(#tasks-with-criteria, #tasks) over the board, or None if unavailable."""
+    board = getattr(daemon, "task_board", None)
+    if board is None:
+        return None
+    try:
+        tasks = list(board.all_tasks)
+    except Exception:
+        return None
+    if not tasks:
+        return None
+    have = sum(1 for t in tasks if getattr(t, "acceptance_criteria", None))
+    return (have, len(tasks))
+
+
 def collect_digest(daemon: Any, *, window_days: int = 14) -> HarnessDigest:
     """Gather the live signals off ``daemon`` and build the digest.
 
@@ -325,13 +439,17 @@ def collect_digest(daemon: Any, *, window_days: int = 14) -> HarnessDigest:
 
     buzz = getattr(getattr(daemon, "drone_log", None), "_buzz_store", None)
 
-    # 1. Tool stats from the buzz log.
+    # 1. Tool stats from the buzz log. Fetch the window's rows once and reuse
+    #    them for both tool aggregation and the verifier-metrics read-out.
     tool_stats: list[ToolStats] = []
+    buzz_rows: list[Any] = []
     if buzz is not None:
         try:
-            tool_stats = aggregate(buzz.query(since=since, limit=2000))
+            buzz_rows = list(buzz.query(since=since, limit=2000))
+            tool_stats = aggregate(buzz_rows)
         except Exception:
             tool_stats = []
+            buzz_rows = []
 
     # 2. Approval-rule suggestion from overridden auto-approvals (operator
     #    rejected a CONTINUE → suggest an escalate rule for that pattern).
@@ -375,6 +493,9 @@ def collect_digest(daemon: Any, *, window_days: int = 14) -> HarnessDigest:
         except Exception:
             tuning_suggestions = []
 
+    # 6. Acceptance-criteria coverage over current tasks (verifier metrics).
+    criteria_coverage = _criteria_coverage(daemon)
+
     # Playbook lifecycle thresholds — reuse PlaybookConfig (single source).
     pb_cfg = getattr(getattr(daemon, "config", None), "playbooks", None)
     return build_digest(
@@ -388,4 +509,6 @@ def collect_digest(daemon: Any, *, window_days: int = 14) -> HarnessDigest:
         prune_uses=getattr(pb_cfg, "prune_min_uses", 5),
         prune_winrate=getattr(pb_cfg, "prune_max_winrate", 0.3),
         now=now,
+        verifier_buzz_rows=buzz_rows,
+        criteria_coverage=criteria_coverage,
     )

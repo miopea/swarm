@@ -362,6 +362,12 @@ def _parse_config(path: Path) -> HiveConfig:
         dreamer_interval_seconds=drones_data.get("dreamer_interval_seconds", 14400.0),
         dreamer_lookback_hours=drones_data.get("dreamer_lookback_hours", 24.0),
         dreamer_min_pattern_count=drones_data.get("dreamer_min_pattern_count", 3),
+        verifier_criteria_synthesis=bool(drones_data.get("verifier_criteria_synthesis", True)),
+        verifier_enabled=bool(drones_data.get("verifier_enabled", True)),
+        verifier_enforce=bool(drones_data.get("verifier_enforce", False)),
+        verify_reopen_cap=int(drones_data.get("verify_reopen_cap", 2)),
+        dispatch_enrichment=bool(drones_data.get("dispatch_enrichment", True)),
+        learning_preload=bool(drones_data.get("learning_preload", True)),
     )
 
     # Parse queen section
