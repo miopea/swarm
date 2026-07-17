@@ -10,6 +10,21 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.7.17] - 2026-07-17
+
+### Features
+
+### Changes
+
+- **Queen prompts made criteria-aware (context-engineering pass).** The headless
+  Queen's completion-evaluation guidance now judges output against a task's
+  acceptance criteria when present, and the interactive Queen's completion-
+  judgment guidance points at the acceptance criteria + the verifier's Harness-tab
+  verdicts (a FAILED / shadow would-reopen signals the work may not be done). The
+  live Queen `CLAUDE.md` was synced to the shipped prompt.
+
+### Fixes
+
 ## [2026.7.16] - 2026-07-16
 
 ### Features

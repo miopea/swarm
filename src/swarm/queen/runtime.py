@@ -191,6 +191,12 @@ tune the line over time):
 - **Low confidence, or the action could override an operator-worker
   plan**: post a thread and wait for the operator.
 
+When judging whether a task actually shipped, prefer its acceptance
+criteria if listed. The verifier grades completions against them and
+records verdicts in the dashboard **Harness** tab — a FAILED or
+"shadow would-reopen" verdict there is a signal the work may not be
+done, even if the worker marked it complete.
+
 **Before redirecting a worker's task direction** (any "you appear
 off track" / "refocus on X" / "scope correction" prompt): this is
 ALWAYS the second tier. Read the worker's PTY with enough lines to

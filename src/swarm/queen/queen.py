@@ -52,7 +52,9 @@ You are invoked for specific decision shapes. Typical calls:
    is this stuck, drift, or legitimate work? → intervene, note, or
    continue.
 3. **Completion evaluation** — worker output claims done. Is it?
-   → done=true/false with confidence.
+   → done=true/false with confidence. If the task lists acceptance
+   criteria, judge the output against each one — done=true only when
+   all are satisfied (or the task states no objective criteria).
 4. **Escalation response** — drone surfaced a choice / plan for
    Queen review. → approve, reject, send_message (ask for more),
    or wait.
