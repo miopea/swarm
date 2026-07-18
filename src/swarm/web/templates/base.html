@@ -930,17 +930,18 @@
            ACTIVE pulses to read as the running thing; DONE is intentionally
            muted so the dominant tail of completed tasks doesn't shout. */
         .status-badge { font-size: 0.6rem; padding: 0.05rem 0.4rem; border-radius: 8px; font-weight: bold; letter-spacing: 0.04em; color: #fff; }
-        .status-active { background: var(--leaf); animation: status-pulse 1.6s ease-in-out infinite; }
+        .status-active { background: var(--leaf); position: relative; }
+        .status-active::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: 0 0 0 3px rgba(140,179,105,0.55); opacity: 0; animation: status-pulse 1.6s ease-in-out infinite; pointer-events: none; }
         .status-assigned { background: var(--lavender); }
         .status-unassigned { background: var(--honey); color: var(--hive-bg); }
         .status-backlog { background: var(--muted); color: var(--hive-bg); }
         .status-failed { background: var(--poppy); }
         .status-done { background: var(--muted); color: var(--hive-bg); opacity: 0.55; }
         @keyframes status-pulse {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(140,179,105,0.55); }
-            50% { box-shadow: 0 0 0 4px rgba(140,179,105,0); }
+            0% { transform: scale(1); opacity: 0.55; }
+            100% { transform: scale(1.7); opacity: 0; }
         }
-        @media (prefers-reduced-motion: reduce) { .status-active { animation: none; } }
+        @media (prefers-reduced-motion: reduce) { .status-active::after { animation: none; } }
         .type-chore { background: var(--muted); }
         .type-tag { background: var(--panel); color: var(--beeswax); border: 1px solid var(--border); }
         /* --- Helper text --- */
@@ -1099,10 +1100,13 @@
             border-radius: 50%;
             display: inline-block;
             flex-shrink: 0;
+            position: relative;  /* host for the composited glow ::after */
         }
         .state-dot-sm { width: 8px; height: 8px; }
-        .state-BUZZING { background: var(--leaf); animation: pulse-glow 2s ease-in-out infinite; }
-        .state-WAITING { background: var(--honey); animation: pulse-glow-waiting 3s ease-in-out infinite; }
+        .state-BUZZING { background: var(--leaf); }
+        .state-BUZZING::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: 0 0 6px 3px rgba(140,179,105,0.3); opacity: 0; animation: glow-pulse-o 2s ease-in-out infinite; pointer-events: none; }
+        .state-WAITING { background: var(--honey); }
+        .state-WAITING::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: 0 0 5px 2px rgba(216,160,61,0.28); opacity: 0; animation: glow-pulse-o 3s ease-in-out infinite; pointer-events: none; }
         .state-RESTING { background: var(--lavender); }
         .state-SLEEPING { background: var(--muted); }
         .worker-item.dragging { opacity: 0.4; }
@@ -1110,7 +1114,8 @@
         .worker-item.drag-over-bottom { box-shadow: inset 0 -3px 0 var(--honey); }
         .worker-item[data-state="SLEEPING"] { opacity: 0.45; }
         .worker-item[data-state="SLEEPING"].selected { opacity: 1; }
-        .state-STUNG { background: var(--poppy); animation: pulse-glow-stung 1.5s ease-in-out infinite; }
+        .state-STUNG { background: var(--poppy); }
+        .state-STUNG::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: 0 0 6px 3px rgba(209,93,76,0.32); opacity: 0; animation: glow-pulse-o 1.5s ease-in-out infinite; pointer-events: none; }
         .worker-name { font-weight: bold; }
         .worker-provider-tag { font-weight: normal; font-size: 0.7rem; color: var(--muted); }
         .worker-meta { font-size: 0.75rem; color: var(--muted); }
@@ -1170,7 +1175,8 @@
             opacity: 0.55;
         }
         .queen-card.queen-state-buzzing { border-color: var(--leaf); }
-        .queen-card.queen-state-waiting { border-color: var(--honey); animation: pulse-glow-waiting 3s ease-in-out infinite; }
+        .queen-card.queen-state-waiting { border-color: var(--honey); position: relative; }
+        .queen-card.queen-state-waiting::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: 0 0 5px 2px rgba(216,160,61,0.2); opacity: 0; animation: glow-pulse-o 3s ease-in-out infinite; pointer-events: none; }
         .queen-card.queen-state-stung { border-color: var(--poppy); }
         .queen-bee {
             width: 32px;
@@ -1216,9 +1222,10 @@
             background: var(--honey);
             border-radius: 10px;
             letter-spacing: 0.2px;
-            animation: pulse-glow-waiting 1.8s ease-in-out infinite;
+            position: relative;
             cursor: help;
         }
+        .needs-input-pill::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: 0 0 5px 2px rgba(216,160,61,0.28); opacity: 0; animation: glow-pulse-o 1.8s ease-in-out infinite; pointer-events: none; }
         .needs-input-dot {
             display: inline-block;
             width: 6px; height: 6px;
@@ -2056,17 +2063,19 @@
 
         /* Spinner animation */
         @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes pulse-glow {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(140,179,105,0.4); }
-            50% { box-shadow: 0 0 6px 3px rgba(140,179,105,0.25); }
+        /* Composited pulse: a static box-shadow lives on an ::after overlay and
+           only its opacity animates (GPU-composited → no per-frame repaint,
+           unlike animating box-shadow directly). One keyframe serves every
+           glow; per-element ::after rules carry the colour + duration. */
+        @keyframes glow-pulse-o {
+            0%, 100% { opacity: 0; }
+            50% { opacity: 1; }
         }
-        @keyframes pulse-glow-stung {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(209,93,76,0.4); }
-            50% { box-shadow: 0 0 6px 3px rgba(209,93,76,0.3); }
-        }
-        @keyframes pulse-glow-waiting {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(216,160,61,0.4); }
-            50% { box-shadow: 0 0 5px 2px rgba(216,160,61,0.2); }
+        @media (prefers-reduced-motion: reduce) {
+            .state-BUZZING::after, .state-WAITING::after, .state-STUNG::after,
+            .queen-card.queen-state-waiting::after, .needs-input-pill::after {
+                animation: none;
+            }
         }
         @keyframes gentle-bob {
             0%, 100% { transform: translateY(0); }

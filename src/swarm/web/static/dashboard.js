@@ -3652,7 +3652,11 @@
         container.style.height = '100%';
 
         var term = new Terminal({
-            cursorBlink: true,
+            // Solid (non-blinking) cursor. A blinking cursor forces xterm to
+            // repaint the cursor cell ~2x/sec continuously while a terminal is
+            // on screen — real idle CPU for zero functional gain. The cursor is
+            // still clearly visible (solid block when focused, hollow when not).
+            cursorBlink: false,
             scrollback: 5000,
             fontSize: 14,
             fontFamily: "'JetBrains Mono', 'Fira Code', monospace",

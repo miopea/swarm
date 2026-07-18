@@ -10,6 +10,24 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.7.18] - 2026-07-18
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Idle dashboard CPU: eliminate continuous repaints.** The pulsing status
+  indicators (BUZZING/WAITING/STUNG worker dots, WAITING Queen card, needs-input
+  pill, ACTIVE task badge) animated `box-shadow`, which forces a main-thread
+  repaint every frame for the life of the infinite animation. Moved the glow/ring
+  onto a static-box-shadow `::after` overlay that animates only `opacity`/
+  `transform` (GPU-composited → no per-frame repaint); visuals unchanged. Also
+  disabled the xterm cursor blink (`cursorBlink: false`), which was repainting the
+  cursor cell ~2×/sec whenever a terminal was on screen. Both are pure idle-CPU
+  wins with no functional change.
+
 ## [2026.7.17] - 2026-07-17
 
 ### Features
