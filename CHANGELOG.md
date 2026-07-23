@@ -10,6 +10,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.7.23.2] - 2026-07-23
+
+### Security
+
+- **Authenticate the `/mcp` endpoint.** The MCP HTTP surface was exempt from the session-auth middleware under a localhost-only assumption, but once the daemon runs behind a public tunnel that made it an anonymous remote-code-execution hole — any unauthenticated caller could `swarm_create_task` a prompt straight into a worker's Claude Code PTY. `/mcp`, `/mcp/sse`, and `/mcp/message` are now gated by a dedicated bearer token (`swarm.auth.mcp_token`, persisted in the `secrets` table, separate from the dashboard password so external MCP connectors never hold the dashboard credential). Local workers authenticate transparently via an `Authorization` header injected into their `.mcp.json`. The gate follows the existing password regime — a password-less (local, unexposed) install is unchanged. Token accepted as a `Bearer` header or `?token=` query param; the 401 carries no `WWW-Authenticate` header to avoid tripping Claude Code's OAuth discovery.
+
 ## [2026.7.23] - 2026-07-23
 
 ### Fixes

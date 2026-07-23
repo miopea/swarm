@@ -322,10 +322,16 @@ _SESSION_AUTH_EXEMPT: set[str] = {
     "/api/hooks/event",  # lifecycle event hooks — local Claude Code process
     "/ws",  # WebSocket — has its own first-message auth
     "/ws/terminal",  # terminal WS — has its own first-message auth
-    "/mcp",  # MCP Streamable HTTP — JSON-RPC endpoint
-    "/mcp/sse",  # MCP SSE (legacy) — managed workers only (SWARM_MANAGED env)
-    "/mcp/message",  # MCP JSON-RPC (legacy) — session-authenticated via SSE
+    # NOTE: /mcp is intentionally NOT exempt — it can dispatch tasks into
+    # worker PTYs (RCE-capable), so it is gated by a dedicated MCP bearer
+    # token (see the /mcp branch in _session_auth_middleware). It was exempt
+    # under a localhost-only assumption that broke once the daemon went on a
+    # public tunnel.
 }
+
+# MCP HTTP endpoints — gated by a dedicated bearer token instead of the
+# dashboard session (they can trigger code execution in worker PTYs).
+_MCP_PATHS: tuple[str, ...] = ("/mcp", "/mcp/sse", "/mcp/message")
 _SESSION_AUTH_EXEMPT_PREFIXES: tuple[str, ...] = (
     "/static/",
     "/auth/graph/callback",
@@ -379,7 +385,26 @@ async def _session_auth_middleware(
     if auth_header.startswith("Bearer ") and verify_password(auth_header[7:], password):
         return await handler(request)
 
-    # Not authenticated — redirect browsers, 401 for API
+    # MCP endpoints additionally accept a dedicated MCP bearer token (separate
+    # from the dashboard credential) so external MCP clients — and local
+    # workers via their injected .mcp.json header — authenticate without ever
+    # holding the dashboard password. Token may arrive as a Bearer header or a
+    # ?token= query param (the latter for SSE GETs that can't set headers).
+    if path in _MCP_PATHS:
+        from swarm.auth.mcp_token import verify_mcp_token
+
+        mcp_tok = (
+            auth_header[7:]
+            if auth_header.startswith("Bearer ")
+            else request.rel_url.query.get("token", "")
+        )
+        if verify_mcp_token(mcp_tok):
+            return await handler(request)
+
+    # Not authenticated — redirect browsers, 401 for API.
+    # NOTE: no WWW-Authenticate header on the 401 — Claude Code's MCP client
+    # starts an OAuth discovery dance when the server advertises auth, and we
+    # want a plain, quiet 401 that simply blocks the caller.
     accept = request.headers.get("Accept", "")
     if "text/html" in accept:
         raise web.HTTPFound("/login")

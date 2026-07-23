@@ -495,14 +495,19 @@ def _install_mcp_server(settings: dict[str, Any]) -> None:
             # churn failure mode) — log it rather than swallow silently.
             _log.debug("could not preserve ?worker= from existing .mcp.json: %s", exc)
 
-    mcp_config = {
-        "mcpServers": {
-            "swarm": {
-                "type": "http",
-                "url": url,
-            }
-        }
-    }
+    # The /mcp endpoint is token-gated (it can dispatch tasks into worker
+    # PTYs). Inject the dedicated MCP bearer so local workers authenticate
+    # transparently. Best-effort: if the token store is unavailable, fall back
+    # to a header-less config rather than corrupting .mcp.json.
+    swarm_server: dict[str, Any] = {"type": "http", "url": url}
+    try:
+        from swarm.auth.mcp_token import get_or_create_mcp_token
+
+        swarm_server["headers"] = {"Authorization": f"Bearer {get_or_create_mcp_token()}"}
+    except Exception as exc:  # pragma: no cover - defensive
+        _log.debug("could not inject MCP token into .mcp.json: %s", exc)
+
+    mcp_config = {"mcpServers": {"swarm": swarm_server}}
     _atomic_write_text(mcp_path, json.dumps(mcp_config, indent=2) + "\n")
 
 

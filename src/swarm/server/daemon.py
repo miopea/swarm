@@ -1480,7 +1480,13 @@ class SwarmDaemon(EventEmitter):
         """
         import json as _json
 
+        from swarm.auth.mcp_token import get_or_create_mcp_token
+
         port = self.config.port
+        # Local workers authenticate to the (now token-gated) /mcp endpoint via
+        # an injected Authorization header. This is transparent to the worker —
+        # Claude Code reads headers from .mcp.json on connect.
+        token = get_or_create_mcp_token()
         for w in self.workers:
             worker_dir = Path(w.path)
             if not worker_dir.is_dir():
@@ -1491,6 +1497,7 @@ class SwarmDaemon(EventEmitter):
                     "swarm": {
                         "type": "http",
                         "url": f"http://localhost:{port}/mcp?worker={w.name}",
+                        "headers": {"Authorization": f"Bearer {token}"},
                     }
                 }
             }
