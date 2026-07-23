@@ -1481,6 +1481,7 @@ class SwarmDaemon(EventEmitter):
         import json as _json
 
         from swarm.auth.mcp_token import get_or_create_mcp_token
+        from swarm.providers import get_provider
 
         port = self.config.port
         # Local workers authenticate to the (now token-gated) /mcp endpoint via
@@ -1490,6 +1491,12 @@ class SwarmDaemon(EventEmitter):
         for w in self.workers:
             worker_dir = Path(w.path)
             if not worker_dir.is_dir():
+                continue
+            # ``.mcp.json`` is Claude Code's config format. Non-hooks providers
+            # don't read it — Codex reaches the same MCP server via
+            # ``~/.codex/config.toml`` (codex-team-config) — so don't drop an
+            # inert file into their worktrees.
+            if not get_provider(w.provider_name).supports_hooks:
                 continue
             mcp_path = worker_dir / ".mcp.json"
             mcp_config = {
@@ -1527,6 +1534,13 @@ class SwarmDaemon(EventEmitter):
             worker_dir = Path(w.path)
             if not worker_dir.is_dir():
                 continue
+            # ``.claude/commands`` + ``.claude/skills`` are Claude Code paths.
+            # Non-hooks providers (Codex, Gemini, OpenCode) don't read them —
+            # Codex's skills live globally in ``~/.agents/skills`` via
+            # codex-team-config — so skip the writes rather than litter their
+            # worktrees with inert dirs.
+            if not get_provider(w.provider_name).supports_hooks:
+                continue
             try:
                 install_worker_commands(worker_dir)
             except Exception:
@@ -1536,15 +1550,13 @@ class SwarmDaemon(EventEmitter):
             except Exception:
                 _log.debug("failed to install skills for %s", w.name, exc_info=True)
             # Phase 3: render ACTIVE in-scope playbooks as native Skills —
-            # Claude workers only (.claude/skills/ is Claude-specific;
-            # other providers reach playbooks via swarm_get_playbooks).
+            # other providers reach playbooks via swarm_get_playbooks.
             if store is None:
                 continue
             try:
-                if get_provider(w.provider_name).supports_hooks:
-                    from swarm.playbooks.installer import install_worker_playbooks
+                from swarm.playbooks.installer import install_worker_playbooks
 
-                    install_worker_playbooks(worker_dir, store, worker_name=w.name)
+                install_worker_playbooks(worker_dir, store, worker_name=w.name)
             except Exception:
                 _log.debug("failed to install playbooks for %s", w.name, exc_info=True)
 

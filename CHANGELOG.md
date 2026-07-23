@@ -10,6 +10,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.7.23.5] - 2026-07-23
+
+### Changes
+
+- **Better Codex support (Stage 0): provider-aware dispatch text + state correctness.** Drones were injecting Claude-specific formatting into Codex workers. Fixed by making two things provider-owned: (1) `LLMProvider.plan_mode_preamble()` — the user-request plan-mode preamble no longer hardcodes Claude's `ExitPlanMode` tool; Claude keeps its exact wording (dispatch stays byte-identical), Codex gets its present-plan-and-wait / `AskUserQuestion` convention (and keeps `swarm_complete_task`, which Codex has via `~/.codex/config.toml`), and the base default is provider-neutral. (2) `LLMProvider.has_active_turn_signal()` — the stuck-BUZZING safety net and nudge guards now delegate the "is this worker mid-turn?" check to the worker's provider instead of applying Claude's private regexes to every provider, so a genuinely-busy Codex worker (`[▶▷]`) is no longer flipped to RESTING after 10 min. Also gated the inert `.claude/commands` / `.claude/skills` / `.mcp.json` writes off non-hooks providers (Codex reaches MCP via `~/.codex/config.toml`, not a per-worker `.mcp.json`). Codex state-detection parity (reaching WAITING, detecting approval prompts) is a documented Stage 1 follow-up requiring live-PTY validation.
+
 ## [2026.7.23.4] - 2026-07-23
 
 ### Changes

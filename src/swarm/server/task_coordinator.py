@@ -221,6 +221,7 @@ class TaskCoordinator:
             supports_slash_commands=worker_prov.supports_slash_commands,
             plan_mode_for_user_requests=d.config.drones.user_request_plan_mode,
             enrich_dispatch=d.config.drones.dispatch_enrichment,
+            plan_preamble=worker_prov.plan_mode_preamble(),
         )
         if message:
             msg = f"{msg}\n\nQueen context: {message}"

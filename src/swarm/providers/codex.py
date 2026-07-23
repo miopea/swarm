@@ -10,12 +10,44 @@ from __future__ import annotations
 import json
 import re
 
-from swarm.providers.base import SHELL_STYLE_SAFE_PATTERNS, TAIL_WIDE, LLMProvider
+from swarm.providers.base import (
+    SHELL_STYLE_SAFE_PATTERNS,
+    TAIL_NARROW,
+    TAIL_WIDE,
+    LLMProvider,
+)
 from swarm.worker.worker import WorkerState
 
 # Codex uses Ratatui icons — these may not survive ANSI stripping
 _RE_CODEX_IDLE = re.compile(r"[◇□]")
 _RE_CODEX_BUSY = re.compile(r"[▶▷]")
+
+# Codex has no ExitPlanMode tool. Its plan-mode convention (per the
+# ~/.codex/AGENTS.md mapping installed by codex-team-config) is to present the
+# plan in-conversation and wait for approval, surfaced via AskUserQuestion.
+# Codex DOES have the swarm_* MCP tools (wired through ~/.codex/config.toml),
+# so naming swarm_complete_task here is correct.
+_CODEX_PLAN_PREAMBLE = """\
+This task came from a user request (Jira ticket, email, or the operator dashboard). \
+Plan BEFORE making any changes:
+
+1. Read the task description below and any linked context.
+2. Investigate read-only — open relevant files, search the codebase, check git \
+history, verify assumptions against the real system if external (database, \
+third-party API, CRM, etc.).
+3. Present a concrete plan — what you'll change, which files, what tests you'll \
+add, what the failure modes are, and what you've ruled out — and surface it with \
+AskUserQuestion so the operator can approve it.
+4. WAIT for explicit operator approval before editing files or running mutating \
+commands.
+5. After approval, execute the plan as agreed.
+
+Do not edit files, run mutating shell commands, or call swarm_complete_task before \
+approval. Worker-to-worker handoffs skip this gate; this preamble appears because \
+the task came from a user channel.
+
+--- TASK ---
+"""
 
 
 _log = __import__("logging").getLogger("swarm.providers.codex")
@@ -82,6 +114,19 @@ class CodexProvider(LLMProvider):
             return WorkerState.RESTING
 
         return WorkerState.BUZZING
+
+    def plan_mode_preamble(self) -> str | None:
+        return _CODEX_PLAN_PREAMBLE
+
+    def has_active_turn_signal(self, content: str) -> bool:
+        """Narrow-tail busy check — the `[▶▷]` run/think glyphs at the bottom
+        of Codex's TUI. Lets the stuck-BUZZING net and nudge guards recognise a
+        genuinely-working Codex worker instead of misjudging it via Claude's
+        signals."""
+        if not content:
+            return False
+        tail = "\n".join(content.strip().splitlines()[-TAIL_NARROW:])
+        return bool(_RE_CODEX_BUSY.search(tail))
 
     def has_choice_prompt(self, content: str) -> bool:
         # Codex uses Ratatui widgets for approval — TBD how they render in raw PTY

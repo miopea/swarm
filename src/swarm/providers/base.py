@@ -35,6 +35,30 @@ TAIL_NARROW = 5  # Narrow: accept-edits, idle prompt, hints
 TAIL_MEDIUM = 15  # Medium: user rules, user question detection
 TAIL_WIDE = 30  # Wide: safe patterns, choice menus, plan markers
 
+# Provider-neutral plan-mode preamble (the default returned by
+# ``LLMProvider.plan_mode_preamble``). Deliberately names NO provider-specific
+# mechanism — no ExitPlanMode tool, no slash commands, no MCP tool names — so a
+# provider without a bespoke plan-mode UX still gets coherent instructions.
+# Claude / Codex override with wording that names their real mechanism.
+_GENERIC_PLAN_PREAMBLE = """\
+This task came from a user request (Jira ticket, email, or the operator dashboard). \
+Plan BEFORE making any changes:
+
+1. Read the task description below and any linked context.
+2. Investigate read-only — open relevant files, search the codebase, check git \
+history, verify assumptions against the real system if external (database, \
+third-party API, CRM, etc.).
+3. Present a concrete plan: what you'll change, which files, what tests you'll \
+add, what the failure modes are, and what you've ruled out.
+4. WAIT for the operator to approve the plan before making changes.
+5. After approval, execute the plan as agreed.
+
+Do not edit files or run mutating shell commands before approval. Worker-to-worker \
+handoffs skip this gate; this preamble appears because the task came from a user channel.
+
+--- TASK ---
+"""
+
 
 class LLMProvider(ABC):
     """Abstract base for LLM CLI provider implementations.
@@ -141,6 +165,26 @@ class LLMProvider(ABC):
 
     def has_empty_prompt(self, content: str) -> bool:
         """Check if output shows an empty input prompt ready for continuation."""
+        return False
+
+    def plan_mode_preamble(self) -> str | None:
+        """Preamble prepended to user-request tasks that need a plan-approval gate.
+
+        Returns provider-neutral plan-then-approve wording by default. Providers
+        whose CLI has a specific plan-mode mechanism (Claude's ``ExitPlanMode``
+        tool) override this so the injected text names the right mechanism. A
+        provider with no plan concept may return ``None`` to skip the preamble.
+        """
+        return _GENERIC_PLAN_PREAMBLE
+
+    def has_active_turn_signal(self, content: str) -> bool:
+        """True when the narrow PTY tail proves the worker is mid-turn.
+
+        Used by the idle-watcher / task-lifecycle nudge guards and the stuck-
+        BUZZING safety net to avoid poking a worker that is actually working.
+        Default ``False`` — a provider with no cheap live-turn signal opts out
+        (the safety net may then flip it to RESTING after the threshold).
+        """
         return False
 
     @property

@@ -43,37 +43,16 @@ If the task originated from another worker, send them a swarm_send_message with 
 # email import, operator dashboard) and get a plan-approval gate prepended.
 # Tasks created by another worker (cross-project handoff, MCP
 # ``swarm_create_task`` with ``source_worker`` set, or the auto-handoff drone)
-# bypass — that peer already reasoned about the work, so a second plan-mode
-# round would just slow the swarm down.
+# bypass — that peer already reasoned about the work.
 #
-# Workers cooperate with this by calling Claude Code's ``ExitPlanMode`` tool,
-# which surfaces the plan in the PTY and parks the worker in WAITING until
-# the operator approves from the dashboard. The mechanism is already wired:
-# ``server/routes/workers.py`` detects "plan mode on" prompts, and the
-# interactive Queen has plan-presentation handling at
-# ``queen/queen.py``. No new approval UI is required.
-_PLAN_MODE_PREAMBLE = """\
-This task came from a user request (Jira ticket, email, or the operator dashboard). \
-Use plan mode BEFORE making any changes:
-
-1. Read the task description below and any linked context.
-2. Investigate read-only — open relevant files, search the codebase, check git \
-history, verify assumptions against the real system if external (database, \
-third-party API, CRM, etc.).
-3. Call the ExitPlanMode tool with a concrete proposed approach: what you'll \
-change, which files, what tests you'll add, what the failure modes are, and \
-what you've ruled out.
-4. WAIT for the operator to approve the plan from the dashboard.
-5. After approval, execute the plan as agreed.
-
-DO NOT edit files, run mutating shell commands, invoke skills, or call \
-swarm_complete_task before plan approval. If the task body below invokes a \
-skill like /feature or /fix-and-ship, wrap the plan around the skill \
-invocation — don't run the skill yet. Worker-to-worker handoffs skip this \
-gate; this preamble appears because the task came from a user channel.
-
---- TASK ---
-"""
+# The preamble TEXT is provider-owned (``LLMProvider.plan_mode_preamble``):
+# Claude names its ``ExitPlanMode`` tool + dashboard approval; Codex names its
+# present-plan-and-wait / ``AskUserQuestion`` convention; the base default is
+# provider-neutral. ``build_task_message`` receives it via ``plan_preamble``;
+# callers that don't supply one fall back to Claude's (preserving the
+# historical byte-for-byte message). For Claude the mechanism is wired end to
+# end: ``server/routes/workers.py`` detects "plan mode on" prompts and the
+# interactive Queen has plan-presentation handling.
 
 
 # Environmental-causes nudge for bug-fix tasks. Debugging cycles get burned on
@@ -241,6 +220,7 @@ def build_task_message(
     supports_slash_commands: bool = True,
     plan_mode_for_user_requests: bool = True,
     enrich_dispatch: bool = True,
+    plan_preamble: str | None = None,
 ) -> str:
     """Build a message string describing a task for a worker.
 
@@ -288,7 +268,15 @@ def build_task_message(
     if task.task_type == TaskType.BUG:
         body = _ENV_CAUSES_PREAMBLE + body
     if requires_plan_approval(task, enabled=plan_mode_for_user_requests):
-        body = _PLAN_MODE_PREAMBLE + body
+        # The preamble is provider-owned. Callers that don't supply one (tests,
+        # non-provider paths) fall back to Claude's, keeping the emitted message
+        # byte-identical to the pre-refactor behaviour.
+        preamble = plan_preamble
+        if preamble is None:
+            from swarm.providers.claude import CLAUDE_PLAN_PREAMBLE
+
+            preamble = CLAUDE_PLAN_PREAMBLE
+        body = preamble + body
     return body
 
 

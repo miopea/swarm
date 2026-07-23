@@ -9,7 +9,12 @@ from __future__ import annotations
 
 import re
 
-from swarm.providers.base import SHELL_STYLE_SAFE_PATTERNS, TAIL_WIDE, LLMProvider
+from swarm.providers.base import (
+    SHELL_STYLE_SAFE_PATTERNS,
+    TAIL_NARROW,
+    TAIL_WIDE,
+    LLMProvider,
+)
 from swarm.worker.worker import WorkerState
 
 # Busy: tool-specific status messages shown while working
@@ -96,6 +101,15 @@ class OpenCodeProvider(LLMProvider):
 
     def approval_response(self, approve: bool = True) -> str:
         return "a" if approve else "d"
+
+    def has_active_turn_signal(self, content: str) -> bool:
+        """Narrow-tail busy check. Preserves OpenCode's mid-turn recognition
+        now that the state tracker delegates this to the provider instead of
+        applying Claude's regexes to every provider."""
+        if not content:
+            return False
+        tail = "\n".join(content.strip().splitlines()[-TAIL_NARROW:])
+        return bool(_RE_OPENCODE_BUSY.search(tail))
 
     def get_choice_summary(self, content: str) -> str:
         return ""

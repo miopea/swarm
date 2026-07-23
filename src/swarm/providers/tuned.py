@@ -133,6 +133,16 @@ class TunedProvider(LLMProvider):
         # mid-workflow.
         return self._inner.is_long_running_tool_active(content)
 
+    def plan_mode_preamble(self) -> str | None:
+        # Delegate: base default is generic, so a tuned Claude would otherwise
+        # lose its ExitPlanMode-specific preamble.
+        return self._inner.plan_mode_preamble()
+
+    def has_active_turn_signal(self, content: str) -> bool:
+        # Delegate: base default is False, so a tuned provider would otherwise
+        # lose its mid-turn signal (stuck-BUZZING net would misjudge it).
+        return self._inner.has_active_turn_signal(content)
+
     @property
     def supports_slash_commands(self) -> bool:
         return self._inner.supports_slash_commands

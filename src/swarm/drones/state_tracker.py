@@ -495,42 +495,29 @@ class WorkerStateTracker:
             content = proc.get_content(_STATE_DETECT_LINES)
         except Exception:
             return False
-        return self._has_active_turn_signal(content)
+        return self._has_active_turn_signal(content, worker)
 
-    def _has_active_turn_signal(self, content: str) -> bool:
-        """Narrow check: does the PTY tail prove the worker is mid-turn?
+    def _has_active_turn_signal(self, content: str, worker: Worker | None = None) -> bool:
+        """Does the PTY tail prove the worker is mid-turn? Delegates to the
+        worker's provider.
 
-        Only inspects the last ``TAIL_NARROW`` lines — the active-turn
-        indicators are always on the bottom of Claude Code's TUI,
-        whereas stale subagent / background-work patterns tend to drift
-        higher in the scrollback once their turn completes. Checking the
-        narrow tail intentionally rejects those stale matches.
+        The provider owns the narrow-tail signal (Claude: the ``esc to
+        interrupt`` / background-shell / subagent / workflow footers; Codex:
+        the ``[▶▷]`` glyphs; etc.). ``worker`` is optional only for legacy /
+        test call sites that pass content alone — production always supplies
+        it. With no worker we fall back to the Claude provider (the dominant
+        provider and this method's historical behaviour), so content-only
+        callers are unaffected.
         """
-        from swarm.providers.base import TAIL_NARROW
-        from swarm.providers.claude import (
-            _RE_BACKGROUND_RUNNING,
-            _RE_INTERRUPT_HINT,
-            _RE_SUBAGENT_ACTIVE,
-            _RE_WORKFLOW_ACTIVE,
-        )
-
         if not content:
             return False
-        tail = "\n".join(content.strip().splitlines()[-TAIL_NARROW:])
-        # Interruptible-turn footer — possibly truncated to "esc to…" at narrow
-        # PTY widths, so match the hint rather than the full literal.
-        if _RE_INTERRUPT_HINT.search(tail):
-            return True
-        if _RE_BACKGROUND_RUNNING.search(tail):
-            return True
-        if _RE_SUBAGENT_ACTIVE.search(tail):
-            return True
-        # In-flight dynamic workflow (footer tray) — keeps the worker
-        # BUZZING; without this the stuck-BUZZING safety net would flip a
-        # long workflow run to RESTING after the threshold.
-        if _RE_WORKFLOW_ACTIVE.search(tail):
-            return True
-        return False
+        if worker is not None:
+            provider = self._get_provider(worker)
+        else:
+            from swarm.providers import get_provider
+
+            provider = get_provider("claude")
+        return provider.has_active_turn_signal(content)
 
     def _poll_sleeping_throttled(self, worker: Worker, cmd: str) -> tuple[bool, bool] | None:
         """Lightweight poll for throttled sleeping workers.
@@ -636,7 +623,7 @@ class WorkerStateTracker:
             new_state == WorkerState.BUZZING
             and worker.state == WorkerState.BUZZING
             and worker.state_duration >= self._STUCK_BUZZING_THRESHOLD
-            and not self._has_active_turn_signal(content)
+            and not self._has_active_turn_signal(content, worker)
         ):
             _log.info(
                 "stuck-BUZZING safety net fired for %s after %.0fs — forcing RESTING",

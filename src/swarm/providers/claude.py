@@ -202,6 +202,35 @@ _RE_RATE_LIMIT = re.compile(
 )
 
 
+# Claude-specific plan-mode preamble — names the ``ExitPlanMode`` tool and the
+# dashboard-approval UX that only Claude Code has. Relocated here (from
+# ``server/messages.py``) so the Claude-specific tool name lives with the Claude
+# provider; ``server/messages.py`` falls back to this string for callers that
+# don't supply a provider preamble, so the emitted message stays byte-identical.
+CLAUDE_PLAN_PREAMBLE = """\
+This task came from a user request (Jira ticket, email, or the operator dashboard). \
+Use plan mode BEFORE making any changes:
+
+1. Read the task description below and any linked context.
+2. Investigate read-only — open relevant files, search the codebase, check git \
+history, verify assumptions against the real system if external (database, \
+third-party API, CRM, etc.).
+3. Call the ExitPlanMode tool with a concrete proposed approach: what you'll \
+change, which files, what tests you'll add, what the failure modes are, and \
+what you've ruled out.
+4. WAIT for the operator to approve the plan from the dashboard.
+5. After approval, execute the plan as agreed.
+
+DO NOT edit files, run mutating shell commands, invoke skills, or call \
+swarm_complete_task before plan approval. If the task body below invokes a \
+skill like /feature or /fix-and-ship, wrap the plan around the skill \
+invocation — don't run the skill yet. Worker-to-worker handoffs skip this \
+gate; this preamble appears because the task came from a user channel.
+
+--- TASK ---
+"""
+
+
 class ClaudeProvider(LLMProvider):
     """Claude Code CLI provider."""
 
@@ -398,6 +427,37 @@ class ClaudeProvider(LLMProvider):
         if not tail:
             return False
         return bool(_RE_EMPTY_PROMPT.match(tail.strip()))
+
+    def plan_mode_preamble(self) -> str | None:
+        return CLAUDE_PLAN_PREAMBLE
+
+    def has_active_turn_signal(self, content: str) -> bool:
+        """Narrow-tail check that the worker is mid-turn.
+
+        Only inspects the last ``TAIL_NARROW`` lines — the active-turn
+        indicators are always at the bottom of Claude Code's TUI, whereas
+        stale subagent / background-work patterns drift higher in the
+        scrollback once their turn completes, so the narrow tail rejects them.
+        Relocated from ``drones/state_tracker._has_active_turn_signal`` so the
+        Claude-specific regexes live with the Claude provider.
+        """
+        if not content:
+            return False
+        tail = "\n".join(content.strip().splitlines()[-TAIL_NARROW:])
+        # Interruptible-turn footer — possibly truncated to "esc to…" at narrow
+        # PTY widths, so match the hint rather than the full literal.
+        if _RE_INTERRUPT_HINT.search(tail):
+            return True
+        if _RE_BACKGROUND_RUNNING.search(tail):
+            return True
+        if _RE_SUBAGENT_ACTIVE.search(tail):
+            return True
+        # In-flight dynamic workflow (footer tray) — keeps the worker BUZZING;
+        # without this the stuck-BUZZING safety net would flip a long workflow
+        # run to RESTING after the threshold.
+        if _RE_WORKFLOW_ACTIVE.search(tail):
+            return True
+        return False
 
     @property
     def supports_slash_commands(self) -> bool:

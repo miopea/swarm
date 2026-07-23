@@ -53,6 +53,10 @@ def _make_tracker(
     decision_executor = MagicMock()
     decision_executor._deferred_actions = []
 
+    from swarm.providers.claude import ClaudeProvider
+
+    _claude = ClaudeProvider()
+
     def _get_provider(_w: Worker) -> Any:
         prov = MagicMock()
         prov.classify_with_events.return_value = (WorkerState.RESTING, None)
@@ -63,6 +67,10 @@ def _make_tracker(
         prov.has_choice_prompt.return_value = False
         prov.has_accept_edits_prompt.return_value = False
         prov.get_choice_summary.return_value = ""
+        # Delegate the active-turn signal to the real Claude logic — the state
+        # tracker now resolves this through the provider, and these fixtures
+        # model a Claude worker.
+        prov.has_active_turn_signal.side_effect = _claude.has_active_turn_signal
         return prov
 
     detectors = WorkerHealthDetectors(
