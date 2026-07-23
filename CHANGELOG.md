@@ -10,6 +10,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.7.23] - 2026-07-23
+
+### Fixes
+
+- Dashboard: task reassignment now updates both the old and new worker cards live. The `tasks_changed` WS handler (and sibling task-lifecycle events) only refreshed the central task panel, not the per-worker `worker-task` labels — so a reassignment stayed stale on the worker cards until a manual page reload. Both handlers now also call `refreshWorkers()`.
+
 ## [2026.7.18] - 2026-07-18
 
 ### Features

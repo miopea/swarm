@@ -698,18 +698,29 @@
             case 'task_completed':
                 if (data.task) showToast('Task "' + data.task.title + '" ' + data.type.replace('task_', ''), false, data.type === 'task_completed' ? BEE.honeyJar : BEE.flower);
                 refreshTasks();
+                // Worker cards render the current-task label; keep them in sync
+                // when a task is assigned/completed without a worker state change.
+                refreshWorkers();
                 break;
             case 'task_removed':
                 showToast('Task removed');
                 refreshTasks();
+                refreshWorkers();
                 break;
             case 'task_failed':
                 showToast('Task marked as failed', true, BEE.angry);
                 notifyBrowser('Task Failed', data.task ? data.task.title : 'A task was marked as failed');
                 refreshTasks();
+                refreshWorkers();
                 break;
             case 'tasks_changed':
                 refreshTasks();
+                // The per-worker cards render each worker's current task label
+                // (partials/workers → worker-task). A reassignment mutates the
+                // board (fires tasks_changed) but produces no worker STATE
+                // change, so without this the old/new worker cards stay stale
+                // until an unrelated state event or a manual reload.
+                refreshWorkers();
                 break;
             case 'pipelines_changed':
                 refreshPipelines();
