@@ -103,6 +103,42 @@ def test_base_default_active_turn_is_false():
 
 
 # ---------------------------------------------------------------------------
+# Drone auto-approve fires for a Codex approval despite base UNKNOWN events
+# (regression: _decide_idle_state used to switch to the event path whenever
+# events was non-None, silently disabling non-Claude providers' regex prompt
+# detection — so a "git status" approval never auto-approved).
+# ---------------------------------------------------------------------------
+def test_codex_git_status_approval_auto_approves_with_unknown_events():
+    from swarm.drones.rules import Decision, decide
+    from swarm.worker.worker import Worker, WorkerState
+    from tests.fakes.process import FakeWorkerProcess
+
+    approval = (
+        "$ git status --short --branch\n"
+        "› 1. Yes, proceed (y)\n"
+        "  3. No, and tell Codex what to do differently (esc)\n"
+        "  Press enter to confirm or esc to cancel\n"
+    )
+    p = get_provider("codex")
+    w = Worker(name="c", path="/tmp", process=FakeWorkerProcess(name="c"))
+    w.state = WorkerState.WAITING
+    # The base provider yields a single UNKNOWN event — must NOT suppress the
+    # regex-based choice detection / auto-approve.
+    _state, events = p.classify_with_events("codex", approval)
+    assert decide(w, approval, provider=p, events=events).decision == Decision.CONTINUE
+
+
+def test_structured_events_helper():
+    from swarm.drones.rules import _has_structured_events
+    from swarm.providers.events import EventType, TerminalEvent
+
+    assert _has_structured_events(None) is False
+    assert _has_structured_events([]) is False
+    assert _has_structured_events([TerminalEvent(EventType.UNKNOWN, "x")]) is False
+    assert _has_structured_events([TerminalEvent(EventType.CHOICE, "x")]) is True
+
+
+# ---------------------------------------------------------------------------
 # State-tracker delegation
 # ---------------------------------------------------------------------------
 def test_state_tracker_delegates_active_turn_to_provider():

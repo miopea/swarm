@@ -137,6 +137,25 @@ def _has_event_type(events: list[TerminalEvent] | None, type_value: str) -> bool
     return any(e.event_type.value == type_value for e in events)
 
 
+def _has_structured_events(events: list[TerminalEvent] | None) -> bool:
+    """True when events carry real structured typing, not just the base
+    ``UNKNOWN`` wrapper.
+
+    Only Claude overrides ``parse_events`` to emit typed events; every other
+    provider inherits the base default, which returns a single UNKNOWN event.
+    That non-None list must NOT switch prompt detection to the event path —
+    doing so silently disables the provider's regex ``has_*_prompt`` methods
+    (a Codex/OpenCode/Gemini approval prompt would then never be seen, so the
+    drone can't auto-approve it). Gate event-routing on this instead of a bare
+    ``events is not None``.
+    """
+    if not events:
+        return False
+    from swarm.providers.events import EventType
+
+    return any(e.event_type is not EventType.UNKNOWN for e in events)
+
+
 def _get_event(events: list[TerminalEvent] | None, type_value: str) -> TerminalEvent | None:
     """Return the first event of the given type, or None."""
     if events is None:
@@ -166,7 +185,7 @@ def _check_user_question(
     is_user_question_fn: Callable[[str], bool],
 ) -> DroneDecision | None:
     """Escalate if prompt is a user question. Returns None if not a question."""
-    if events is not None:
+    if _has_structured_events(events):
         is_question = _has_event_type(events, "user_question")
     else:
         is_question = is_user_question_fn(content)
@@ -351,11 +370,12 @@ def _decide_idle_state(
     _has_accept_edits_prompt = provider.has_accept_edits_prompt
     _has_idle_prompt = provider.has_idle_prompt
 
-    # Event-based routing when available, with regex fallback
-    has_plan = _has_event_type(events, "plan") if events is not None else _has_plan_prompt(content)
-    has_choice = (
-        _has_event_type(events, "choice") if events is not None else _has_choice_prompt(content)
-    )
+    # Event-based routing only when the provider emits structured events
+    # (Claude); otherwise fall back to the provider's regex detectors so
+    # non-Claude approval/plan prompts aren't silently missed.
+    _use_events = _has_structured_events(events)
+    has_plan = _has_event_type(events, "plan") if _use_events else _has_plan_prompt(content)
+    has_choice = _has_event_type(events, "choice") if _use_events else _has_choice_prompt(content)
 
     # Plan approval prompts always escalate — never auto-approve plans
     if has_plan:
@@ -397,7 +417,7 @@ def _decide_idle_state(
 
     has_ae = (
         _has_event_type(events, "accept_edits")
-        if events is not None
+        if _use_events
         else _has_accept_edits_prompt(content)
     )
     if has_ae:

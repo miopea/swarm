@@ -10,12 +10,24 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.7.23.7] - 2026-07-23
+
+### Fixes
+
+- **Drone auto-approve now works for non-Claude providers (Codex/OpenCode/Gemini).** `_decide_idle_state` switched to event-based prompt routing whenever `events is not None`, but every non-Claude provider inherits the base `parse_events` that returns a single `UNKNOWN` event — a non-None list that has no `choice`/`plan`/`accept_edits`/`user_question` type. That silently **disabled the provider's regex `has_*_prompt` detectors**, so a Codex `git status` approval was classified WAITING but never auto-approved (it stalled indefinitely where a Claude worker sails through). Added `_has_structured_events()` and gated event-routing on it, so providers without typed events fall back to their regex detectors. Verified live: an injected `git status` on a Codex worker is now auto-approved end to end (WAITING → `✔ You approved` → RESTING). Follows the Stage 1 Codex detection work (2026.7.23.6).
+
+
+### Features
+
+### Changes
+
+### Fixes
+
 ## [2026.7.23.6] - 2026-07-23
 
 ### Changes
 
 - **Codex support Stage 1: real state detection (the glyph stub is gone).** `providers/codex.py` was detecting Ratatui glyphs `[◇□]`/`[▶▷]` that never appear in the PTY under `--no-alt-screen`, so a Codex worker was **permanently BUZZING** — never RESTING, never WAITING — and its command-approval prompts were invisible to the drone (a `git status` approval stalled where a Claude worker auto-approves instantly). Rewrote detection from **empirically-captured raw Codex PTY output** (scraped live 2026-07-23; see the `reference_codex_pty_patterns` note): `classify_output` now reaches **WAITING** on the approval widget (`Press enter to confirm or esc to cancel`), **BUZZING** on the live turn timer (`Working (Ns · esc to interrupt)`), and **RESTING** on the idle composer footer; `has_choice_prompt` / `get_choice_summary` detect the approval and extract the `$ <command>` awaiting it; `safe_tool_patterns` matches Codex's `$ git status` / `$ ls` format so the drone auto-approves read-only commands; `approval_response` is Enter/Esc (not the base `y`/`n`). Verified live: the daemon now reports RESTING for an idle Codex worker (was stuck BUZZING). Codex tests rewritten around the captured fixtures.
-
 
 ### Fixes
 
