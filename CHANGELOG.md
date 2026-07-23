@@ -10,6 +10,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.7.23.4] - 2026-07-23
+
+### Changes
+
+- **OAuth `/authorize` now shows an explicit consent screen instead of auto-approving.** Previously a logged-in operator's session silently issued the code, which felt like a rubber stamp. `/authorize` now renders an Approve/Deny page; approving POSTs to a new `/oauth/consent` endpoint that issues the code. The pending request is carried in a signed consent token (`mint_consent_token`/`verify_consent_token`) so the POST can't be forged or tampered with, and `/oauth/consent` is session-gated **and** origin-checked (removed from the CSRF origin bypass — only `/oauth/token` and `/oauth/register`, which are cross-origin from the connector, stay exempt). Denying redirects back with `error=access_denied`. This adds a genuine second gate on top of the session + redirect-URI allowlist.
+
 ## [2026.7.23.3] - 2026-07-23
 
 ### Features

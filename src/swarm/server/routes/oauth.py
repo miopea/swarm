@@ -176,18 +176,108 @@ async def handle_authorize(request: web.Request) -> web.Response:
     if not code_challenge or code_challenge_method != "S256":
         return _error_redirect(redirect_uri, "invalid_request", state, "S256 PKCE required")
 
-    # Operator gate — auto-approve when logged into the dashboard, else login.
+    # Operator gate — must be logged into the dashboard, else login first.
     if not _operator_authenticated(request):
         next_url = f"/oauth/authorize?{urlencode(dict(q))}"
         raise web.HTTPFound(f"/login?next={quote(next_url, safe='')}")
 
-    code = oauth.issue_code(client_id, redirect_uri, code_challenge, scope)
-    _log.info("OAuth code issued for client=%s", client_id)
+    # Explicit consent — render an Approve/Deny page rather than silently
+    # issuing a code. The pending request is carried in a signed consent token
+    # so the POST can't be forged or tampered with.
+    consent_token = oauth.mint_consent_token(client_id, redirect_uri, code_challenge, scope, state)
+    return _render_consent_page(request, client_id, scope, consent_token)
+
+
+def _redirect_with(redirect_uri: str, params: dict[str, str]) -> web.Response:
+    sep = "&" if "?" in redirect_uri else "?"
+    raise web.HTTPFound(f"{redirect_uri}{sep}{urlencode(params)}")
+
+
+def _render_consent_page(
+    request: web.Request, client_id: str, scope: str, consent_token: str
+) -> web.Response:
+    import html
+
+    daemon = get_daemon(request)
+    origin = public_base_url(daemon, request).split("://", 1)[-1]
+    cid = html.escape(client_id)
+    scp = html.escape(scope)
+    tok = html.escape(consent_token)
+    body = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Authorize access — Swarm</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  body {{ font-family: system-ui, -apple-system, sans-serif; background: #0f1115;
+         color: #e6e6e6; margin: 0; display: flex; min-height: 100vh;
+         align-items: center; justify-content: center; }}
+  .card {{ background: #191c22; border: 1px solid #2a2f3a; border-radius: 12px;
+          padding: 2rem; max-width: 420px; width: calc(100% - 2rem); }}
+  h1 {{ font-size: 1.25rem; margin: 0 0 0.5rem; }}
+  p {{ color: #a9b1bd; line-height: 1.5; }}
+  dl {{ background: #12151b; border-radius: 8px; padding: 0.75rem 1rem; margin: 1rem 0; }}
+  dt {{ color: #7d8694; font-size: 0.75rem; text-transform: uppercase; letter-spacing: .04em; }}
+  dd {{ margin: 0 0 0.6rem; font-family: ui-monospace, monospace; word-break: break-all; }}
+  dd:last-child {{ margin-bottom: 0; }}
+  .actions {{ display: flex; gap: 0.75rem; margin-top: 1.25rem; }}
+  button {{ flex: 1; padding: 0.7rem; border-radius: 8px; border: 1px solid #2a2f3a;
+           font-size: 0.95rem; font-weight: 600; cursor: pointer; }}
+  .approve {{ background: #f0b429; color: #1a1300; border-color: #f0b429; }}
+  .deny {{ background: transparent; color: #e6e6e6; }}
+  button:focus-visible {{ outline: 2px solid #6ea8fe; outline-offset: 2px; }}
+</style></head>
+<body>
+  <main class="card">
+    <h1>Authorize access to your Swarm</h1>
+    <p>An application is requesting access to <strong>{html.escape(origin)}</strong>’s
+       MCP tools — this includes creating and completing tasks and messaging workers.</p>
+    <dl>
+      <dt>Application (client ID)</dt><dd>{cid}</dd>
+      <dt>Scope</dt><dd>{scp} — full MCP tool access</dd>
+    </dl>
+    <form method="post" action="/oauth/consent">
+      <input type="hidden" name="consent_token" value="{tok}">
+      <div class="actions">
+        <button type="submit" name="decision" value="approve" class="approve">Approve</button>
+        <button type="submit" name="decision" value="deny" class="deny">Deny</button>
+      </div>
+    </form>
+  </main>
+</body></html>"""
+    return web.Response(text=body, content_type="text/html")
+
+
+@handle_errors
+async def handle_consent(request: web.Request) -> web.Response:
+    """Approve/Deny submission from the consent page.
+
+    Session-gated (operator only) and origin-checked (same-site) by the
+    middleware; the signed consent token guarantees the request parameters
+    are exactly what was shown on the consent page.
+    """
+    form = dict(await request.post())
+    payload = oauth.verify_consent_token(str(form.get("consent_token", "")))
+    if payload is None:
+        return web.Response(status=400, text="Consent request expired or invalid. Reconnect.")
+
+    redirect_uri = str(payload["ru"])
+    state = str(payload.get("st", ""))
+    if str(form.get("decision", "")) != "approve":
+        _log.info("OAuth consent denied for client=%s", payload["cid"])
+        params = {"error": "access_denied"}
+        if state:
+            params["state"] = state
+        return _redirect_with(redirect_uri, params)
+
+    code = oauth.issue_code(
+        str(payload["cid"]), redirect_uri, str(payload["cc"]), str(payload["sc"])
+    )
+    _log.info("OAuth consent approved; code issued for client=%s", payload["cid"])
     params = {"code": code}
     if state:
         params["state"] = state
-    sep = "&" if "?" in redirect_uri else "?"
-    raise web.HTTPFound(f"{redirect_uri}{sep}{urlencode(params)}")
+    return _redirect_with(redirect_uri, params)
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +417,7 @@ def register(app: web.Application) -> None:
     )
     app.router.add_post("/oauth/register", handle_register)
     app.router.add_get("/oauth/authorize", handle_authorize)
+    app.router.add_post("/oauth/consent", handle_consent)
     app.router.add_post("/oauth/token", handle_token)
     # Operator-only management (settings page)
     app.router.add_get("/api/mcp/connection", handle_connection_info)

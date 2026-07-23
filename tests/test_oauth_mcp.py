@@ -178,7 +178,9 @@ async def test_authorize_rejects_bad_redirect(daemon):
 
 
 @pytest.mark.asyncio
-async def test_authorize_issues_code_when_logged_in(daemon):
+async def test_authorize_renders_consent_when_logged_in(daemon):
+    """A logged-in operator gets an explicit Approve/Deny page — not a silent
+    auto-issued code."""
     _, challenge = _pkce()
     c = await _client(daemon)
     try:
@@ -188,10 +190,10 @@ async def test_authorize_issues_code_when_logged_in(daemon):
             headers=_session_headers(),
             allow_redirects=False,
         )
-        assert r.status == 302
-        loc = r.headers["Location"]
-        assert loc.startswith(_REDIRECT)
-        assert "code=" in loc and "state=xyz" in loc
+        assert r.status == 200
+        html = await r.text()
+        assert "Approve" in html and "Deny" in html
+        assert 'name="consent_token"' in html
     finally:
         await c.close()
 
@@ -201,8 +203,8 @@ async def test_authorize_issues_code_when_logged_in(daemon):
 # ---------------------------------------------------------------------------
 
 
-async def _obtain_code(c: TestClient, challenge: str) -> str:
-    from urllib.parse import parse_qs, urlparse
+async def _consent_token(c: TestClient, challenge: str) -> str:
+    import re
 
     r = await c.get(
         "/oauth/authorize",
@@ -210,7 +212,58 @@ async def _obtain_code(c: TestClient, challenge: str) -> str:
         headers=_session_headers(),
         allow_redirects=False,
     )
+    html = await r.text()
+    return re.search(r'name="consent_token" value="([^"]+)"', html).group(1)
+
+
+async def _obtain_code(c: TestClient, challenge: str) -> str:
+    from urllib.parse import parse_qs, urlparse
+
+    token = await _consent_token(c, challenge)
+    r = await c.post(
+        "/oauth/consent",
+        data={"consent_token": token, "decision": "approve"},
+        headers=_session_headers(),
+        allow_redirects=False,
+    )
     return parse_qs(urlparse(r.headers["Location"]).query)["code"][0]
+
+
+@pytest.mark.asyncio
+async def test_consent_deny_redirects_with_error(daemon):
+    _, challenge = _pkce()
+    c = await _client(daemon)
+    try:
+        token = await _consent_token(c, challenge)
+        r = await c.post(
+            "/oauth/consent",
+            data={"consent_token": token, "decision": "deny"},
+            headers=_session_headers(),
+            allow_redirects=False,
+        )
+        assert r.status == 302
+        loc = r.headers["Location"]
+        assert loc.startswith(_REDIRECT)
+        assert "error=access_denied" in loc and "code=" not in loc
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
+async def test_consent_rejects_forged_token(daemon):
+    """A consent POST with a bogus (unsigned) token is refused — the signed
+    token is what makes the Approve trustworthy."""
+    c = await _client(daemon)
+    try:
+        r = await c.post(
+            "/oauth/consent",
+            data={"consent_token": "forged.token", "decision": "approve"},
+            headers=_session_headers(),
+            allow_redirects=False,
+        )
+        assert r.status == 400
+    finally:
+        await c.close()
 
 
 @pytest.mark.asyncio

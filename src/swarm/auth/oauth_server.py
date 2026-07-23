@@ -55,6 +55,7 @@ STATIC_CLIENT_ID = "swarm-mcp"
 ACCESS_TOKEN_TTL = 3600  # 1 hour
 REFRESH_TOKEN_TTL = 30 * 24 * 3600  # 30 days
 AUTH_CODE_TTL = 300  # 5 minutes
+CONSENT_TTL = 600  # 10 minutes — how long a rendered consent page stays valid
 SCOPE = "mcp"
 
 # Redirect hosts we auto-approve to. Suffix entries (leading dot) match
@@ -165,6 +166,33 @@ def verify_access_token(token: str) -> dict[str, Any] | None:
 def verify_refresh_token(token: str) -> dict[str, Any] | None:
     payload = _unsign(token)
     if payload and payload.get("t") == "rt":
+        return payload
+    return None
+
+
+def mint_consent_token(
+    client_id: str, redirect_uri: str, code_challenge: str, scope: str, state: str
+) -> str:
+    """Sign the pending authorization so the consent POST can't be forged or
+    tampered with — the operator's Approve returns this token, and the code is
+    issued from its (signed) params rather than re-submitted form fields."""
+    now = int(time.time())
+    return _sign(
+        {
+            "t": "cns",
+            "cid": client_id,
+            "ru": redirect_uri,
+            "cc": code_challenge,
+            "sc": scope,
+            "st": state,
+            "exp": now + CONSENT_TTL,
+        }
+    )
+
+
+def verify_consent_token(token: str) -> dict[str, Any] | None:
+    payload = _unsign(token)
+    if payload and payload.get("t") == "cns":
         return payload
     return None
 

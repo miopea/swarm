@@ -160,11 +160,13 @@ async def _csrf_middleware(
     access; we trust the cookie as the auth signal.
     """
     if request.method in ("POST", "PUT", "DELETE"):
-        # /share-receive (OS share sheet) and /oauth/* (cross-origin OAuth
-        # token/registration POSTs from the MCP connector) legitimately arrive
-        # with a foreign or null Origin — the OAuth paths carry their own
-        # client/PKCE auth, so the origin check would only break them.
-        if request.path != "/share-receive" and not request.path.startswith("/oauth/"):
+        # /share-receive (OS share sheet) and the cross-origin OAuth token /
+        # registration POSTs from the MCP connector legitimately arrive with a
+        # foreign or null Origin — they carry their own client/PKCE auth, so the
+        # origin check would only break them. /oauth/consent is deliberately NOT
+        # exempt: it's a same-origin form POST from our own consent page, so the
+        # origin check IS its CSRF protection.
+        if request.path not in ("/share-receive", "/oauth/token", "/oauth/register"):
             if (resp := check_origin_or_error(request)) is not None:
                 return resp
         if (
