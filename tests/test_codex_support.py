@@ -92,8 +92,8 @@ def test_claude_active_turn_signal():
 
 def test_codex_active_turn_signal():
     x = get_provider("codex")
-    assert x.has_active_turn_signal("running ▶ tool\n") is True
-    assert x.has_active_turn_signal("idle ◇\n") is False
+    assert x.has_active_turn_signal("• Working (4s • esc to interrupt)\n") is True
+    assert x.has_active_turn_signal("done\n  gpt-5.6-sol default · ~/proj\n") is False
     assert x.has_active_turn_signal("") is False
 
 

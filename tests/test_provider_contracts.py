@@ -38,9 +38,13 @@ def non_claude_provider(request: pytest.FixtureRequest) -> LLMProvider:
     return _get_provider(request.param)
 
 
-@pytest.fixture(params=["gemini", "codex", "generic", "tuned-generic"])
+@pytest.fixture(params=["gemini", "generic", "tuned-generic"])
 def yn_provider(request: pytest.FixtureRequest) -> LLMProvider:
-    """Non-Claude providers that use y\\r / n\\r approval keys (excludes OpenCode)."""
+    """Non-Claude providers that use y\\r / n\\r approval keys.
+
+    Excludes OpenCode (a/d) and Codex (Enter/Esc — its approval widget says
+    "Press enter to confirm or esc to cancel").
+    """
     return _get_provider(request.param)
 
 
@@ -123,6 +127,13 @@ class TestApprovalResponseUniversal:
     def test_opencode_reject(self) -> None:
         p = get_provider("opencode")
         assert p.approval_response(approve=False) == "d"
+
+    def test_codex_approve(self) -> None:
+        # Codex approval widget: "Press enter to confirm or esc to cancel".
+        assert get_provider("codex").approval_response(approve=True) == "\r"
+
+    def test_codex_reject(self) -> None:
+        assert get_provider("codex").approval_response(approve=False) == "\x1b"
 
 
 # --- Universal session_dir contract ---

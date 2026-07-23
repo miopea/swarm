@@ -266,12 +266,17 @@ class TestCodexProvider:
         assert "test prompt" in cmd
 
     def test_classify_idle(self):
-        state = self.p.classify_output("codex", "◇ ready")
+        # Idle = composer footer, no live-turn timer.
+        state = self.p.classify_output("codex", "done\n\n  gpt-5.6-sol default · ~/proj\n")
         assert state == WorkerState.RESTING
 
     def test_classify_busy(self):
-        state = self.p.classify_output("codex", "▶ working")
+        state = self.p.classify_output("codex", "• Working (2s • esc to interrupt)\n")
         assert state == WorkerState.BUZZING
+
+    def test_classify_waiting(self):
+        content = "$ ls\n\n  Press enter to confirm or esc to cancel\n"
+        assert self.p.classify_output("codex", content) == WorkerState.WAITING
 
     def test_display_name(self):
         assert self.p.display_name == "Codex"

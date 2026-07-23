@@ -10,6 +10,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.7.23.6] - 2026-07-23
+
+### Changes
+
+- **Codex support Stage 1: real state detection (the glyph stub is gone).** `providers/codex.py` was detecting Ratatui glyphs `[◇□]`/`[▶▷]` that never appear in the PTY under `--no-alt-screen`, so a Codex worker was **permanently BUZZING** — never RESTING, never WAITING — and its command-approval prompts were invisible to the drone (a `git status` approval stalled where a Claude worker auto-approves instantly). Rewrote detection from **empirically-captured raw Codex PTY output** (scraped live 2026-07-23; see the `reference_codex_pty_patterns` note): `classify_output` now reaches **WAITING** on the approval widget (`Press enter to confirm or esc to cancel`), **BUZZING** on the live turn timer (`Working (Ns · esc to interrupt)`), and **RESTING** on the idle composer footer; `has_choice_prompt` / `get_choice_summary` detect the approval and extract the `$ <command>` awaiting it; `safe_tool_patterns` matches Codex's `$ git status` / `$ ls` format so the drone auto-approves read-only commands; `approval_response` is Enter/Esc (not the base `y`/`n`). Verified live: the daemon now reports RESTING for an idle Codex worker (was stuck BUZZING). Codex tests rewritten around the captured fixtures.
+
+
+### Fixes
+
 ## [2026.7.23.5] - 2026-07-23
 
 ### Changes

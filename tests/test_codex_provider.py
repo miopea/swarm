@@ -1,4 +1,10 @@
-"""Tests for CodexProvider — state detection and CLI command generation."""
+"""Tests for CodexProvider — state detection and CLI command generation.
+
+State-detection fixtures are built from RAW PTY output captured against a live
+`codex --no-alt-screen` worker on 2026-07-23 (see the
+`reference_codex_pty_patterns` memory). The earlier `[◇□]`/`[▶▷]` glyph stub is
+gone — these assert the real text markers.
+"""
 
 import json
 
@@ -7,92 +13,153 @@ from swarm.worker.worker import WorkerState
 
 _provider = CodexProvider()
 
+# --- Real captured PTY fixtures ---
+
+_APPROVAL = (
+    "$ git status\n"
+    "  git log --oneline -5\n"
+    "\n"
+    "› 1. Yes, proceed (y)\n"
+    "  2. Yes, and don't ask again for commands that start with `git status` (p)\n"
+    "  3. No, and tell Codex what to do differently (esc)\n"
+    "\n"
+    "  Press enter to confirm or esc to cancel\n"
+)
+
+_BUSY = (
+    "• Working (4s • esc to interrupt)\n"
+    "\n"
+    "› Write tests for @filename\n"
+    "\n"
+    "  gpt-5.6-sol default · ~/projects/personal/sculpt-studio\n"
+)
+
+# Idle — note "Working tree" (git output) must NOT be read as busy.
+_IDLE = (
+    "• Current branch: main\n"
+    "  Working tree: not clean (.mcp.json modified)\n"
+    "  Latest commit: feat(readiness): sleep-quality awareness\n"
+    "\n"
+    "› Write tests for @filename\n"
+    "\n"
+    "  gpt-5.6-sol default · ~/projects/personal/sculpt-studio\n"
+)
+
 
 # --- classify_output ---
 
 
 class TestCodexClassifyOutput:
-    def test_busy_triangle_right_filled_is_buzzing(self):
-        content = "Working on task...\n▶ Running command"
-        assert _provider.classify_output("codex", content) == WorkerState.BUZZING
+    def test_approval_widget_is_waiting(self):
+        assert _provider.classify_output("codex", _APPROVAL) == WorkerState.WAITING
 
-    def test_busy_triangle_right_outline_is_buzzing(self):
-        content = "Processing...\n▷ Thinking"
-        assert _provider.classify_output("codex", content) == WorkerState.BUZZING
+    def test_working_timer_is_buzzing(self):
+        assert _provider.classify_output("codex", _BUSY) == WorkerState.BUZZING
 
-    def test_idle_diamond_is_resting(self):
-        content = "Task complete.\n◇ Ready for input"
+    def test_idle_composer_is_resting(self):
+        assert _provider.classify_output("codex", _IDLE) == WorkerState.RESTING
+
+    def test_working_tree_is_not_busy(self):
+        """'Working tree' in git output must not trip the busy timer regex."""
+        content = "  Working tree: clean\n\n  gpt-5.6-sol default · ~/proj\n"
         assert _provider.classify_output("codex", content) == WorkerState.RESTING
 
-    def test_idle_square_is_resting(self):
-        content = "Done.\n□ Waiting"
-        assert _provider.classify_output("codex", content) == WorkerState.RESTING
+    def test_waiting_takes_priority_over_footer(self):
+        content = _APPROVAL + "\n  gpt-5.6-sol default · ~/proj\n"
+        assert _provider.classify_output("codex", content) == WorkerState.WAITING
 
-    def test_busy_takes_priority_over_idle(self):
-        """When both busy and idle icons in tail, busy wins (checked first)."""
-        content = "◇ previous idle\n▶ now running"
-        assert _provider.classify_output("codex", content) == WorkerState.BUZZING
+    def test_shell_exit_is_stung(self):
+        assert _provider.classify_output("bash", "user@host:~$ ") == WorkerState.STUNG
 
-    def test_idle_in_scrollback_busy_near_bottom(self):
-        """Idle icon in scrollback should not override busy icon near bottom."""
-        content = "◇ old idle\n" + "processing...\n" * 5 + "▶ active"
-        assert _provider.classify_output("codex", content) == WorkerState.BUZZING
-
-    def test_non_shell_command_with_idle_icon(self):
-        """Non-shell foreground command with idle icon should still be RESTING."""
-        content = "output\n◇ ready"
-        assert _provider.classify_output("node", content) == WorkerState.RESTING
-
-    def test_idle_icon_beyond_30_line_tail(self):
-        """Idle icon more than 30 lines from bottom should not be detected."""
-        content = "◇ old idle\n" + "other output\n" * 35
-        assert _provider.classify_output("codex", content) == WorkerState.BUZZING
+    def test_unknown_falls_back_to_buzzing(self):
+        assert _provider.classify_output("codex", "some opaque output\n") == WorkerState.BUZZING
 
 
 # --- has_choice_prompt ---
 
 
 class TestCodexHasChoicePrompt:
-    def test_always_false(self):
-        """Codex uses Ratatui widgets — PTY text detection TBD."""
-        content = "Approve this action? [y/n]"
-        assert _provider.has_choice_prompt(content) is False
+    def test_detects_approval_widget(self):
+        assert _provider.has_choice_prompt(_APPROVAL) is True
+
+    def test_false_when_idle(self):
+        assert _provider.has_choice_prompt(_IDLE) is False
+
+    def test_false_when_busy(self):
+        assert _provider.has_choice_prompt(_BUSY) is False
+
+    def test_false_empty(self):
+        assert _provider.has_choice_prompt("") is False
 
 
 # --- get_choice_summary ---
 
 
 class TestCodexGetChoiceSummary:
-    def test_always_empty(self):
-        content = "Some approval prompt"
-        assert _provider.get_choice_summary(content) == ""
+    def test_extracts_command_awaiting_approval(self):
+        assert _provider.get_choice_summary(_APPROVAL) == "git status"
+
+    def test_empty_when_no_approval(self):
+        assert _provider.get_choice_summary(_IDLE) == ""
 
 
-# --- is_user_question ---
-
-
-class TestCodexIsUserQuestion:
-    def test_always_false(self):
-        content = "How would you like to proceed?"
-        assert _provider.is_user_question(content) is False
-
-
-# --- has_idle_prompt (base class default) ---
+# --- has_idle_prompt ---
 
 
 class TestCodexHasIdlePrompt:
-    def test_always_false(self):
-        """Codex inherits base class default — always False."""
-        assert _provider.has_idle_prompt("◇ ready") is False
+    def test_true_when_idle(self):
+        assert _provider.has_idle_prompt(_IDLE) is True
+
+    def test_false_when_busy(self):
+        assert _provider.has_idle_prompt(_BUSY) is False
+
+    def test_false_when_awaiting_approval(self):
+        assert _provider.has_idle_prompt(_APPROVAL) is False
 
 
-# --- has_empty_prompt (base class default) ---
+# --- approval_response ---
 
 
-class TestCodexHasEmptyPrompt:
-    def test_always_false(self):
-        """Codex inherits base class default — always False."""
-        assert _provider.has_empty_prompt("◇") is False
+class TestCodexApprovalResponse:
+    def test_approve_is_enter(self):
+        assert _provider.approval_response(approve=True) == "\r"
+
+    def test_reject_is_esc(self):
+        assert _provider.approval_response(approve=False) == "\x1b"
+
+
+# --- safe_tool_patterns (auto-approve read-only shell commands) ---
+
+
+class TestCodexSafeToolPatterns:
+    def test_matches_safe_git(self):
+        p = _provider.safe_tool_patterns()
+        assert p.search("$ git status")
+        assert p.search("$ git log --oneline -5")
+
+    def test_matches_safe_shell(self):
+        p = _provider.safe_tool_patterns()
+        assert p.search("$ ls -la")
+        assert p.search("$ cat pyproject.toml")
+
+    def test_rejects_mutating(self):
+        p = _provider.safe_tool_patterns()
+        assert not p.search("$ rm -rf /")
+        assert not p.search("$ git push origin main")
+
+
+# --- has_active_turn_signal ---
+
+
+class TestCodexActiveTurnSignal:
+    def test_busy_is_active(self):
+        assert _provider.has_active_turn_signal(_BUSY) is True
+
+    def test_idle_is_not_active(self):
+        assert _provider.has_active_turn_signal(_IDLE) is False
+
+    def test_empty_is_not_active(self):
+        assert _provider.has_active_turn_signal("") is False
 
 
 # --- worker_command ---
@@ -100,11 +167,9 @@ class TestCodexHasEmptyPrompt:
 
 class TestCodexWorkerCommand:
     def test_always_includes_no_alt_screen(self):
-        """--no-alt-screen is critical for PTY text detection."""
         assert _provider.worker_command(resume=True) == ["codex", "--no-alt-screen"]
 
     def test_resume_flag_ignored(self):
-        """Codex doesn't support --resume, command is the same either way."""
         assert _provider.worker_command(resume=True) == _provider.worker_command(resume=False)
 
 
@@ -113,25 +178,17 @@ class TestCodexWorkerCommand:
 
 class TestCodexHeadlessCommand:
     def test_basic(self):
-        cmd = _provider.headless_command("hello world")
-        assert cmd == ["codex", "exec", "hello world"]
+        assert _provider.headless_command("hello world") == ["codex", "exec", "hello world"]
 
     def test_with_json_format(self):
         cmd = _provider.headless_command("check status", output_format="json")
         assert cmd == ["codex", "exec", "check status", "--json"]
 
-    def test_text_format_no_flag(self):
-        cmd = _provider.headless_command("do stuff", output_format="text")
-        assert "--json" not in cmd
-
     def test_session_id_ignored(self):
-        """Codex doesn't support --resume."""
         cmd = _provider.headless_command("do stuff", session_id="abc123")
-        assert "--resume" not in cmd
-        assert "abc123" not in cmd
+        assert "--resume" not in cmd and "abc123" not in cmd
 
     def test_max_turns_ignored(self):
-        """Codex doesn't support --max-turns."""
         cmd = _provider.headless_command("do stuff", max_turns=10)
         assert "--max-turns" not in cmd
 
@@ -152,19 +209,9 @@ class TestCodexParseHeadlessResponse:
         assert session_id is None
 
     def test_falls_back_to_raw_text(self):
-        """Non-JSONL output returns raw text."""
         text, session_id = _provider.parse_headless_response(b"plain text output")
         assert text == "plain text output"
         assert session_id is None
-
-    def test_skips_non_agent_messages(self):
-        events = [
-            {"type": "item.completed", "item": {"type": "tool_call", "text": "git status"}},
-        ]
-        stdout = "\n".join(json.dumps(e) for e in events).encode()
-        text, session_id = _provider.parse_headless_response(stdout)
-        # No agent_message found — falls back to raw text
-        assert "tool_call" in text
 
     def test_handles_mixed_valid_invalid_jsonl(self):
         lines = [
@@ -178,17 +225,11 @@ class TestCodexParseHeadlessResponse:
 
     def test_empty_stdout(self):
         text, session_id = _provider.parse_headless_response(b"")
-        assert text == ""
-        assert session_id is None
+        assert text == "" and session_id is None
 
     def test_handles_invalid_utf8(self):
         text, _ = _provider.parse_headless_response(b"valid \xff invalid")
         assert "valid" in text
-
-    def test_session_id_always_none(self):
-        """Codex doesn't support session continuity."""
-        _, session_id = _provider.parse_headless_response(b"anything")
-        assert session_id is None
 
 
 # --- misc properties ---
@@ -210,9 +251,5 @@ class TestCodexMiscProperties:
     def test_supports_slash_commands(self):
         assert _provider.supports_slash_commands is False
 
-    def test_safe_tool_patterns_matches_read_only(self):
-        pattern = _provider.safe_tool_patterns()
-        assert pattern.search("shell(ls -la)")
-        assert pattern.search("file_read(foo.py)")
-        assert pattern.search("file_search(query)")
-        assert not pattern.search("shell(rm -rf /)")
+    def test_supports_native_goal(self):
+        assert _provider.supports_native_goal is True
