@@ -25,8 +25,11 @@ async def handle_config_page(request: web.Request) -> dict[str, Any]:
 
     po = {pname: _serialize_tuning(t) for pname, t in d.config.provider_overrides.items()}
 
+    from swarm.server.routes.oauth import _connection_info
+
     return {
         "config": serialize_config(d.config),
+        "mcp": _connection_info(d, request),
         "providers": list_providers(),
         "builtin_providers": list_builtin_providers(),
         "provider_overrides": po,

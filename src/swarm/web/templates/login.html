@@ -166,6 +166,7 @@
         <!-- Password login -->
         <div id="password-section">
             <form method="POST" action="/login">
+                <input type="hidden" name="next" value="{{ next|default('') }}">
                 <div class="form-group">
                     <label for="password">Password</label>
                     <input type="password" id="password" name="password" autocomplete="current-password" autofocus required>
@@ -254,7 +255,7 @@
                 var verifyResp = await fetch('/auth/webauthn/login/verify', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'login' },
-                    body: JSON.stringify({ token: token, credential: credentialJSON })
+                    body: JSON.stringify({ token: token, credential: credentialJSON, next: {{ next|default('')|tojson }} })
                 });
                 if (!verifyResp.ok) {
                     var verifyErr = await verifyResp.json();

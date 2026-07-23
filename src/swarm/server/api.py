@@ -160,7 +160,11 @@ async def _csrf_middleware(
     access; we trust the cookie as the auth signal.
     """
     if request.method in ("POST", "PUT", "DELETE"):
-        if request.path != "/share-receive":
+        # /share-receive (OS share sheet) and /oauth/* (cross-origin OAuth
+        # token/registration POSTs from the MCP connector) legitimately arrive
+        # with a foreign or null Origin — the OAuth paths carry their own
+        # client/PKCE auth, so the origin check would only break them.
+        if request.path != "/share-receive" and not request.path.startswith("/oauth/"):
             if (resp := check_origin_or_error(request)) is not None:
                 return resp
         if (
@@ -322,6 +326,12 @@ _SESSION_AUTH_EXEMPT: set[str] = {
     "/api/hooks/event",  # lifecycle event hooks — local Claude Code process
     "/ws",  # WebSocket — has its own first-message auth
     "/ws/terminal",  # terminal WS — has its own first-message auth
+    # OAuth authorization-server endpoints (MCP connector). /authorize does its
+    # own operator (session) check and bounces to /login; /token and /register
+    # are public with client/PKCE auth. Discovery is under /.well-known/ (prefix).
+    "/oauth/authorize",
+    "/oauth/token",
+    "/oauth/register",
     # NOTE: /mcp is intentionally NOT exempt — it can dispatch tasks into
     # worker PTYs (RCE-capable), so it is gated by a dedicated MCP bearer
     # token (see the /mcp branch in _session_auth_middleware). It was exempt
@@ -392,19 +402,28 @@ async def _session_auth_middleware(
     # ?token= query param (the latter for SSE GETs that can't set headers).
     if path in _MCP_PATHS:
         from swarm.auth.mcp_token import verify_mcp_token
+        from swarm.auth.oauth_server import verify_access_token
 
-        mcp_tok = (
-            auth_header[7:]
-            if auth_header.startswith("Bearer ")
-            else request.rel_url.query.get("token", "")
-        )
-        if verify_mcp_token(mcp_tok):
+        bearer = auth_header[7:] if auth_header.startswith("Bearer ") else ""
+        # Static MCP token (local workers, ChatGPT header, curl) — header or
+        # ?token= query — OR an OAuth 2.0 access token (Claude Desktop connector).
+        mcp_tok = bearer or request.rel_url.query.get("token", "")
+        if verify_mcp_token(mcp_tok) or (bearer and verify_access_token(bearer) is not None):
             return await handler(request)
 
+        # 401 that advertises the OAuth resource metadata so the MCP connector
+        # can discover the authorization server and start the auth-code flow.
+        # Only unauthenticated callers see this — authenticated workers/clients
+        # never reach here — so it doesn't perturb the static-token paths.
+        from swarm.server.routes.oauth import public_base_url
+
+        base = public_base_url(daemon, request)
+        www_auth = f'Bearer resource_metadata="{base}/.well-known/oauth-protected-resource"'
+        return web.json_response(
+            {"error": "Unauthorized"}, status=401, headers={"WWW-Authenticate": www_auth}
+        )
+
     # Not authenticated — redirect browsers, 401 for API.
-    # NOTE: no WWW-Authenticate header on the 401 — Claude Code's MCP client
-    # starts an OAuth discovery dance when the server advertises auth, and we
-    # want a plain, quiet 401 that simply blocks the caller.
     accept = request.headers.get("Accept", "")
     if "text/html" in accept:
         raise web.HTTPFound("/login")

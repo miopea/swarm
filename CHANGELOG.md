@@ -10,6 +10,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.7.23.3] - 2026-07-23
+
+### Features
+
+- **OAuth 2.0 for the MCP endpoint + a "MCP / Connectors" settings card.** Claude Desktop's remote-MCP connector authenticates via OAuth (auth-code + PKCE, optionally preceded by Dynamic Client Registration), so the static bearer token alone couldn't drive its "Connect" button. Added a minimal authorization server (`swarm.auth.oauth_server`, `routes/oauth.py`): RFC 8414/9728 discovery (`/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`), DCR (`/oauth/register`), `/oauth/authorize` (auto-approves on a valid dashboard session, else bounces through `/login?next=`), and `/oauth/token` (PKCE code exchange + refresh). Tokens and client secrets are stateless HMAC-signed blobs keyed by a persisted signing secret — no DB migration. `/mcp` now accepts an OAuth access token alongside the static token and advertises the resource metadata via `WWW-Authenticate` on 401 so discovery kicks in. `/authorize` auto-approve is guarded by a redirect-URI host allowlist (Claude/Anthropic/localhost, extensible via the `oauth_allowed_redirect_hosts` secret) to prevent an open-redirect code exfiltration. The dashboard settings page (Security tab) gained an "MCP / Connectors" card showing the MCP URL, the static token (copy + rotate), and the OAuth Client ID/Secret (copy + rotate the signing key), with connect instructions for Claude Desktop and ChatGPT.
+
 ## [2026.7.23.2] - 2026-07-23
 
 ### Security

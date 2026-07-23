@@ -129,14 +129,18 @@ async def test_mcp_blocked_with_wrong_token(daemon):
 
 
 @pytest.mark.asyncio
-async def test_401_has_no_www_authenticate(daemon):
-    """A plain 401 avoids tripping Claude Code's OAuth discovery dance."""
+async def test_401_advertises_oauth_resource_metadata(daemon):
+    """The 401 carries a WWW-Authenticate pointing at the OAuth resource
+    metadata so the MCP connector can discover the authorization server and
+    start the auth-code flow."""
     daemon.config.api_password = "dashboard-pw"
     c = await _client(daemon)
     try:
         resp = await c.post("/mcp", json=_TOOLS_LIST, headers=_ACCEPT)
         assert resp.status == 401
-        assert "WWW-Authenticate" not in resp.headers
+        www = resp.headers.get("WWW-Authenticate", "")
+        assert www.startswith("Bearer ")
+        assert "/.well-known/oauth-protected-resource" in www
     finally:
         await c.close()
 

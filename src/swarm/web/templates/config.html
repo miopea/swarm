@@ -1040,6 +1040,44 @@
             </div>
         </div>
         <div class="config-section">
+            <h3>MCP / Connectors <span class="hint">Connect ChatGPT, Claude Desktop, or scripts to this Swarm's MCP tools</span></h3>
+            <div class="config-field">
+                <label>MCP server URL</label>
+                <div style="display:flex; gap:0.5rem; align-items:center;">
+                    <input class="config-input text-left w-input-lg" id="mcp-url" value="{{ mcp.url }}" readonly>
+                    <button class="btn btn-sm" data-action="copyMcp" data-target="mcp-url">Copy</button>
+                </div>
+            </div>
+            <div class="config-field">
+                <label>Static token <span class="hint">ChatGPT (Authorization: Bearer …) and curl / scripts. Rotating revokes the old token and updates local workers.</span></label>
+                <div style="display:flex; gap:0.5rem; align-items:center;">
+                    <input class="config-input text-left w-input-lg" id="mcp-token" value="{{ mcp.token }}" type="password" readonly>
+                    <button class="btn btn-sm" data-action="copyMcp" data-target="mcp-token">Copy</button>
+                    <button class="btn btn-sm" data-action="rotateMcpToken">Rotate</button>
+                </div>
+            </div>
+            <div class="config-field">
+                <label>OAuth Client ID <span class="hint">Claude Desktop → Add custom connector → Advanced settings</span></label>
+                <div style="display:flex; gap:0.5rem; align-items:center;">
+                    <input class="config-input text-left w-input-lg" id="mcp-client-id" value="{{ mcp.client_id }}" readonly>
+                    <button class="btn btn-sm" data-action="copyMcp" data-target="mcp-client-id">Copy</button>
+                </div>
+            </div>
+            <div class="config-field">
+                <label>OAuth Client Secret</label>
+                <div style="display:flex; gap:0.5rem; align-items:center;">
+                    <input class="config-input text-left w-input-lg" id="mcp-client-secret" value="{{ mcp.client_secret }}" type="password" readonly>
+                    <button class="btn btn-sm" data-action="copyMcp" data-target="mcp-client-secret">Copy</button>
+                    <button class="btn btn-sm btn-danger" data-action="rotateOauth">Rotate</button>
+                </div>
+            </div>
+            <p class="text-muted text-sm" style="margin-top:0.5rem">
+                <strong>Claude Desktop:</strong> Add custom connector → paste the MCP server URL → open Advanced settings → paste the Client ID &amp; Secret → Connect (you approve once via your dashboard login).
+                <strong>ChatGPT (Developer Mode):</strong> add the URL and set header <code>Authorization: Bearer &lt;static token&gt;</code>.
+            </p>
+            <div id="mcp-conn-status" style="margin-top:0.5rem; font-size:0.85rem;"></div>
+        </div>
+        <div class="config-section">
             <h3>Change Password</h3>
             <div class="config-field">
                 <label>Current password</label>
@@ -3404,6 +3442,9 @@
             registerPasskey: function() { registerPasskey(); },
             deletePasskey: function() { deletePasskey(el.dataset.credId); },
             changePassword: function() { changePassword(); },
+            copyMcp: function() { copyMcpField(el.dataset.target); },
+            rotateMcpToken: function() { rotateMcpToken(); },
+            rotateOauth: function() { rotateOauthClient(); },
         };
         if (_actions[action]) _actions[action]();
     });
@@ -3470,6 +3511,52 @@
         ws.onclose = function() { setTimeout(connectWs, 3000); };
     }
     connectWs();
+
+    // --- MCP / Connectors ---
+    function mcpStatus(msg, ok) {
+        var el = document.getElementById('mcp-conn-status');
+        if (!el) return;
+        el.textContent = msg;
+        el.style.color = ok ? 'var(--leaf)' : 'var(--error)';
+    }
+    window.copyMcpField = async function(targetId) {
+        var input = document.getElementById(targetId);
+        if (!input) return;
+        try {
+            await navigator.clipboard.writeText(input.value);
+            mcpStatus('Copied ' + targetId.replace('mcp-', '').replace('-', ' '), true);
+        } catch (e) {
+            input.type = 'text'; input.select();
+            mcpStatus('Copy failed — value revealed, copy manually', false);
+        }
+    };
+    window.rotateMcpToken = async function() {
+        if (!confirm('Rotate the static MCP token? Existing ChatGPT/script connections using the old token will stop working until updated. Local workers update automatically.')) return;
+        mcpStatus('Rotating…', true);
+        try {
+            var resp = await authFetch('/api/mcp/token/rotate', { method: 'POST', body: '{}' });
+            if (!resp) return;
+            var data = await resp.json();
+            if (resp.ok && data.token) {
+                document.getElementById('mcp-token').value = data.token;
+                mcpStatus('Static token rotated. Copy the new value into your clients.', true);
+            } else { mcpStatus(data.error || 'Rotate failed', false); }
+        } catch (e) { mcpStatus('Rotate failed: ' + e.message, false); }
+    };
+    window.rotateOauthClient = async function() {
+        if (!confirm('Rotate the OAuth signing key? This revokes ALL existing OAuth connections (Claude Desktop) and changes the Client Secret — you will need to reconnect. Continue?')) return;
+        mcpStatus('Rotating…', true);
+        try {
+            var resp = await authFetch('/api/mcp/oauth/rotate', { method: 'POST', body: '{}' });
+            if (!resp) return;
+            var data = await resp.json();
+            if (resp.ok && data.client_secret) {
+                document.getElementById('mcp-client-secret').value = data.client_secret;
+                if (data.client_id) document.getElementById('mcp-client-id').value = data.client_id;
+                mcpStatus('OAuth key rotated. Reconnect Claude Desktop with the new Client Secret.', true);
+            } else { mcpStatus(data.error || 'Rotate failed', false); }
+        } catch (e) { mcpStatus('Rotate failed: ' + e.message, false); }
+    };
 
     // --- Password change ---
     window.changePassword = async function() {

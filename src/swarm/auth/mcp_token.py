@@ -51,6 +51,19 @@ def get_or_create_mcp_token() -> str:
     return token
 
 
+def rotate_mcp_token() -> str:
+    """Generate, persist, and return a fresh MCP token (revokes the old one).
+
+    Callers must re-run ``daemon._write_worker_mcp_configs()`` afterward so
+    local workers pick up the new token in their ``.mcp.json`` header.
+    """
+    global _cached
+    token = _secrets.token_urlsafe(32)
+    save_secret(_SECRET_KEY, {"token": token})
+    _cached = token
+    return token
+
+
 def verify_mcp_token(provided: str) -> bool:
     """Constant-time check of *provided* against the stored MCP token."""
     if not provided:

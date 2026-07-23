@@ -26,6 +26,19 @@ from swarm.server.helpers import get_daemon, json_error
 _LOGIN_MAX_FAILURES = 5
 _LOGIN_LOCKOUT_SECONDS = 900  # 15 minutes
 
+
+def _safe_next(raw: str) -> str:
+    """Sanitize a post-login redirect target to a same-site path.
+
+    Only local absolute paths are honoured (``/oauth/authorize?...`` for the
+    MCP OAuth flow). Anything protocol-relative or absolute-URL is dropped to
+    prevent an open redirect.
+    """
+    if raw.startswith("/") and not raw.startswith("//"):
+        return raw
+    return ""
+
+
 # IP -> deque of failure timestamps
 _login_failures: dict[str, deque[float]] = {}
 
@@ -130,11 +143,12 @@ async def handle_login_page(request: web.Request) -> dict[str, Any]:
     nonce = secrets.token_urlsafe(16)
     request["csp_nonce"] = nonce
     password = _get_password(request)
+    next_url = _safe_next(request.query.get("next", ""))
 
-    # If already authenticated, redirect to dashboard
+    # If already authenticated, redirect to the requested target (or dashboard)
     cookie = request.cookies.get(_COOKIE_NAME, "")
     if verify_session_cookie(cookie, password):
-        raise web.HTTPFound("/")
+        raise web.HTTPFound(next_url or "/")
 
     store = _passkey_store(request)
     has_passkeys = store.has_any()
@@ -144,6 +158,7 @@ async def handle_login_page(request: web.Request) -> dict[str, Any]:
         "error": error,
         "csp_nonce": nonce,
         "rp_id": _get_rp_id(request),
+        "next": next_url,
     }
 
 
@@ -156,13 +171,19 @@ async def handle_login_post(request: web.Request) -> web.Response:
     data = await request.post()
     submitted = str(data.get("password", ""))
     password = _get_password(request)
+    next_url = _safe_next(str(data.get("next", "")))
 
     if not verify_password(submitted, password):
         _record_login_failure(ip)
-        raise web.HTTPFound("/login?error=Invalid+password")
+        err = "/login?error=Invalid+password"
+        if next_url:
+            from urllib.parse import quote
+
+            err += f"&next={quote(next_url, safe='')}"
+        raise web.HTTPFound(err)
 
     _clear_login_failures(ip)
-    response = web.HTTPFound("/")
+    response = web.HTTPFound(next_url or "/")
     _set_session_cookie(response, password, request.secure)
     raise response
 
@@ -288,7 +309,8 @@ async def handle_webauthn_login_verify(request: web.Request) -> web.Response:
     _clear_login_failures(ip)
 
     password = _get_password(request)
-    resp = web.json_response({"status": "ok", "redirect": "/"})
+    next_url = _safe_next(str(body.get("next", "")))
+    resp = web.json_response({"status": "ok", "redirect": next_url or "/"})
     _set_session_cookie(resp, password, request.secure)
     return resp
 

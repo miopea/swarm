@@ -19,6 +19,7 @@ def register_all(app: web.Application) -> None:
         hooks,
         jira,
         messages,
+        oauth,
         pipelines,
         playbooks,
         proposals,
@@ -47,6 +48,7 @@ def register_all(app: web.Application) -> None:
     system.register(app)
     config.register(app)
     feedback.register(app)
+    oauth.register(app)
     websocket.register(app)
     # Command Center
     events.register(app)
