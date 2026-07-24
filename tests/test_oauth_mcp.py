@@ -97,21 +97,43 @@ def test_redirect_allowlist():
 # ---------------------------------------------------------------------------
 
 
+# OAuth is a public-tunnel feature; discovery is served to remote clients only.
+# Simulate a tunnel-forwarded request (cloudflared stamps X-Forwarded-For) —
+# a genuine local request gets 404 (see test_discovery_404_for_local_clients).
+_REMOTE = {"X-Forwarded-For": "203.0.113.9"}
+
+
 @pytest.mark.asyncio
 async def test_discovery_metadata(daemon):
     c = await _client(daemon)
     try:
-        r1 = await c.get("/.well-known/oauth-protected-resource")
+        r1 = await c.get("/.well-known/oauth-protected-resource", headers=_REMOTE)
         assert r1.status == 200
         pr = await r1.json()
         assert pr["authorization_servers"] and pr["resource"]
 
-        r2 = await c.get("/.well-known/oauth-authorization-server")
+        r2 = await c.get("/.well-known/oauth-authorization-server", headers=_REMOTE)
         assert r2.status == 200
         md = await r2.json()
         assert md["authorization_endpoint"].endswith("/oauth/authorize")
         assert md["token_endpoint"].endswith("/oauth/token")
         assert "S256" in md["code_challenge_methods_supported"]
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
+async def test_discovery_404_for_local_clients(daemon):
+    """Local (loopback, no forwarding header) MCP clients must NOT discover
+    OAuth — they use the bearer token / trusted-local bypass instead. Advertising
+    OAuth to them breaks the transport on a localhost-vs-public resource
+    mismatch (the Queen-MCP-down regression)."""
+    c = await _client(daemon)
+    try:
+        r1 = await c.get("/.well-known/oauth-protected-resource")  # no X-Forwarded-For
+        assert r1.status == 404
+        r2 = await c.get("/.well-known/oauth-authorization-server")
+        assert r2.status == 404
     finally:
         await c.close()
 
@@ -291,7 +313,9 @@ async def test_token_exchange_and_mcp_access(daemon):
         mcp = await c.post(
             "/mcp",
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
-            headers={"Authorization": f"Bearer {access}", "Accept": "application/json"},
+            # Remote header so this exercises the OAuth access-token path, not
+            # the trusted-local loopback bypass.
+            headers={**_REMOTE, "Authorization": f"Bearer {access}", "Accept": "application/json"},
         )
         assert mcp.status == 200
 

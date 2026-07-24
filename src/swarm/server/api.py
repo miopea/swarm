@@ -59,6 +59,38 @@ def get_client_ip(request: web.Request) -> str:
     return request.remote or "unknown"
 
 
+# Headers that a reverse proxy / the Cloudflare tunnel stamp onto forwarded
+# requests. A genuine same-machine caller sets none of them.
+_FORWARDING_HEADERS: tuple[str, ...] = (
+    "X-Forwarded-For",
+    "X-Forwarded-Host",
+    "X-Forwarded-Proto",
+    "Forwarded",
+    "CF-Connecting-IP",
+    "CF-Ray",
+)
+
+
+def is_loopback_request(request: web.Request) -> bool:
+    """True for a genuine on-this-machine request (never proxied from outside).
+
+    The daemon binds ``0.0.0.0:9090``, so a remote client reaches it either
+    through the Cloudflare tunnel — cloudflared connects from loopback but
+    Cloudflare/cloudflared stamp ``X-Forwarded-For`` / ``CF-*`` headers a local
+    caller never has — or directly on a LAN interface (a non-loopback peer).
+    A loopback peer with NONE of those forwarding headers is therefore only
+    producible by a process running on this host (loopback source IPs from off-
+    machine are dropped as martian packets). Used to exempt local swarm workers,
+    the Queen, and local hooks from the auth that exists solely to protect the
+    public tunnel surface — auth should gate public-facing communication, not
+    same-machine communication.
+    """
+    remote = (request.remote or "").split("%", 1)[0]
+    if remote not in ("127.0.0.1", "::1"):
+        return False
+    return not any(request.headers.get(h) for h in _FORWARDING_HEADERS)
+
+
 def get_api_password(daemon: SwarmDaemon) -> str:
     """Get API password from config, environment, or auto-generated token."""
     return os.environ.get("SWARM_API_PASSWORD") or daemon.config.api_password or _auto_token
@@ -324,6 +356,7 @@ _SESSION_AUTH_EXEMPT: set[str] = {
     "/auth/webauthn/login/verify",
     "/api/tasks/cross",  # local-only hook ingestion — CSRF middleware still applies
     "/api/hooks/approval",  # PreToolUse hook — local Claude Code process
+    "/api/hooks/session-start",  # SessionStart hook — local Claude Code process
     "/api/hooks/session-end",  # SessionEnd hook — local Claude Code process
     "/api/hooks/event",  # lifecycle event hooks — local Claude Code process
     "/ws",  # WebSocket — has its own first-message auth
@@ -403,6 +436,15 @@ async def _session_auth_middleware(
     # holding the dashboard password. Token may arrive as a Bearer header or a
     # ?token= query param (the latter for SSE GETs that can't set headers).
     if path in _MCP_PATHS:
+        # Genuine same-machine MCP callers (swarm workers, the Queen, local
+        # hooks/CLI) are trusted — this token gate exists only to protect the
+        # public tunnel surface, and forcing a local Claude Code client through
+        # it makes it discover OAuth and reject the transport on a localhost-vs-
+        # public resource mismatch. Tunnel traffic arrives on loopback too but
+        # carries X-Forwarded-For / CF-* headers, so it is NOT treated as local.
+        if is_loopback_request(request):
+            return await handler(request)
+
         from swarm.auth.mcp_token import verify_mcp_token
         from swarm.auth.oauth_server import verify_access_token
 

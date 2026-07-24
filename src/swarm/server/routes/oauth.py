@@ -54,8 +54,26 @@ def public_base_url(daemon: Any, request: web.Request) -> str:
 # ---------------------------------------------------------------------------
 # Discovery metadata
 # ---------------------------------------------------------------------------
+def _reject_local_oauth_discovery(request: web.Request) -> None:
+    """Local MCP clients must NOT discover OAuth.
+
+    OAuth is for the public tunnel (Claude Desktop). A same-machine Claude Code
+    worker/Queen connects over localhost with a bearer token; if it discovered
+    OAuth here it would (a) validate the advertised public resource against its
+    localhost URL and reject the transport as a mismatch, and (b) try a browser
+    auth-code flow it can't complete headless. Returning 404 to local probes
+    keeps them on the bearer-token path (the pre-OAuth behaviour). Tunnel probes
+    still get the metadata.
+    """
+    from swarm.server.api import is_loopback_request
+
+    if is_loopback_request(request):
+        raise web.HTTPNotFound()
+
+
 @handle_errors
 async def handle_protected_resource_metadata(request: web.Request) -> web.Response:
+    _reject_local_oauth_discovery(request)
     base = public_base_url(get_daemon(request), request)
     return web.json_response(
         {
@@ -70,6 +88,7 @@ async def handle_protected_resource_metadata(request: web.Request) -> web.Respon
 
 @handle_errors
 async def handle_authorization_server_metadata(request: web.Request) -> web.Response:
+    _reject_local_oauth_discovery(request)
     base = public_base_url(get_daemon(request), request)
     return web.json_response(
         {

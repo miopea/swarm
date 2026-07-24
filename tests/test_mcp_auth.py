@@ -23,6 +23,10 @@ from tests.conftest import make_daemon
 
 _TOOLS_LIST = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
 _ACCEPT = {"Accept": "application/json, text/event-stream"}
+# The test client connects on loopback, which is now a trusted-local bypass. To
+# exercise the PUBLIC auth gate, simulate a tunnel-forwarded request by adding a
+# forwarding header (cloudflared always stamps X-Forwarded-For).
+_REMOTE = {"Accept": "application/json, text/event-stream", "X-Forwarded-For": "203.0.113.9"}
 
 
 @pytest.fixture(autouse=True)
@@ -55,6 +59,25 @@ def test_verify_mcp_token_matches_and_rejects():
     assert mcp_token.verify_mcp_token("") is False
 
 
+def test_is_loopback_request():
+    from types import SimpleNamespace
+
+    from swarm.server.api import is_loopback_request
+
+    def req(remote, headers=None):
+        # is_loopback_request only reads .remote and .headers.
+        return SimpleNamespace(remote=remote, headers=headers or {})
+
+    # Genuine local: loopback peer, no forwarding headers.
+    assert is_loopback_request(req("127.0.0.1")) is True
+    assert is_loopback_request(req("::1")) is True
+    # Tunnel/proxy: loopback peer but forwarding headers present → NOT local.
+    assert is_loopback_request(req("127.0.0.1", {"X-Forwarded-For": "1.2.3.4"})) is False
+    assert is_loopback_request(req("127.0.0.1", {"CF-Ray": "abc123"})) is False
+    # LAN-direct: non-loopback peer → NOT local.
+    assert is_loopback_request(req("10.0.0.5")) is False
+
+
 # ---------------------------------------------------------------------------
 # Middleware enforcement
 # ---------------------------------------------------------------------------
@@ -74,11 +97,25 @@ async def test_mcp_open_when_no_password(daemon):
 
 
 @pytest.mark.asyncio
+async def test_mcp_local_loopback_bypasses_token(daemon):
+    """A genuine same-machine caller (no forwarding header) is trusted and
+    reaches /mcp without any token, even with a password set — the token gate
+    exists only for the public tunnel surface."""
+    daemon.config.api_password = "dashboard-pw"
+    c = await _client(daemon)
+    try:
+        resp = await c.post("/mcp", json=_TOOLS_LIST, headers=_ACCEPT)  # no X-Forwarded-For
+        assert resp.status == 200
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
 async def test_mcp_blocked_without_token_when_password_set(daemon):
     daemon.config.api_password = "dashboard-pw"
     c = await _client(daemon)
     try:
-        resp = await c.post("/mcp", json=_TOOLS_LIST, headers=_ACCEPT)
+        resp = await c.post("/mcp", json=_TOOLS_LIST, headers=_REMOTE)
         assert resp.status == 401
     finally:
         await c.close()
@@ -92,7 +129,7 @@ async def test_mcp_allowed_with_bearer_token(daemon):
         resp = await c.post(
             "/mcp",
             json=_TOOLS_LIST,
-            headers={**_ACCEPT, "Authorization": "Bearer test-mcp-token"},
+            headers={**_REMOTE, "Authorization": "Bearer test-mcp-token"},
         )
         assert resp.status == 200
         body = await resp.json()
@@ -107,7 +144,7 @@ async def test_mcp_allowed_with_query_token(daemon):
     daemon.config.api_password = "dashboard-pw"
     c = await _client(daemon)
     try:
-        resp = await c.post("/mcp?token=test-mcp-token", json=_TOOLS_LIST, headers=_ACCEPT)
+        resp = await c.post("/mcp?token=test-mcp-token", json=_TOOLS_LIST, headers=_REMOTE)
         assert resp.status == 200
     finally:
         await c.close()
@@ -121,7 +158,7 @@ async def test_mcp_blocked_with_wrong_token(daemon):
         resp = await c.post(
             "/mcp",
             json=_TOOLS_LIST,
-            headers={**_ACCEPT, "Authorization": "Bearer nope"},
+            headers={**_REMOTE, "Authorization": "Bearer nope"},
         )
         assert resp.status == 401
     finally:
@@ -136,7 +173,7 @@ async def test_401_advertises_oauth_resource_metadata(daemon):
     daemon.config.api_password = "dashboard-pw"
     c = await _client(daemon)
     try:
-        resp = await c.post("/mcp", json=_TOOLS_LIST, headers=_ACCEPT)
+        resp = await c.post("/mcp", json=_TOOLS_LIST, headers=_REMOTE)
         assert resp.status == 401
         www = resp.headers.get("WWW-Authenticate", "")
         assert www.startswith("Bearer ")
