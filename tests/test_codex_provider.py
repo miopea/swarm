@@ -142,10 +142,19 @@ class TestCodexSafeToolPatterns:
         assert p.search("$ ls -la")
         assert p.search("$ cat pyproject.toml")
 
+    def test_matches_read_only_search_tools(self):
+        p = _provider.safe_tool_patterns()
+        assert p.search("$ rg TODO src/")
+        assert p.search("$ grep -rn pattern .")
+        assert p.search("$ nl -ba file.py")
+
     def test_rejects_mutating(self):
         p = _provider.safe_tool_patterns()
         assert not p.search("$ rm -rf /")
         assert not p.search("$ git push origin main")
+        # sed/awk are dual-use (sed -i writes) — must NOT auto-approve.
+        assert not p.search("$ sed -i 's/a/b/' f")
+        assert not p.search("$ awk '{print}' f")
 
 
 # --- has_active_turn_signal ---

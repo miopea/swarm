@@ -14,8 +14,12 @@ from swarm.worker.worker import TokenUsage, WorkerState
 
 _SHELLS = frozenset(("bash", "zsh", "sh", "fish", "dash", "ksh", "csh", "tcsh"))
 
-# Shared safe command lists — referenced by each provider's safe_tool_patterns
-SAFE_SHELL_CMDS = r"ls|cat|head|tail|find|wc|stat|file|which|pwd|echo|date"
+# Shared safe command lists — referenced by each provider's safe_tool_patterns.
+# Read-only tools only (a drone auto-approves these). Excludes dual-use tools
+# like sed/awk that can write in-place (`sed -i`), so those still escalate.
+SAFE_SHELL_CMDS = (
+    r"ls|cat|head|tail|find|wc|stat|file|which|pwd|echo|date|rg|grep|nl|sort|uniq|cut|tr"
+)
 SAFE_GIT_SUBCMDS = r"status|log|diff|show|branch|remote|tag"
 
 # Shared safe-tool regex for the CLI-style providers (codex, opencode) that
