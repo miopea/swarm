@@ -10,12 +10,24 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.7.24] - 2026-07-24
+
+### Features
+
+### Changes
+
+- **The task board now stays mounted behind a focused worker.** Worker view used to `display:none` the bottom panel outright, so checking a task meant leaving the worker for the Queen dashboard. It now collapses to a header-only tab strip — click any tab or the collapse chevron (no longer phone-only) to pop it open in place. The Queen view always shows it expanded, and a worker-view expand/minimize choice persists across view switches without overwriting the other. The collapsed resize handle is hidden with `visibility`/`height:0` rather than `display:none`, because a `display:none` grid item drops out of auto-placement and slides the panel into the wrong track.
+
+### Fixes
+
+- **The Command Center has been dead on arrival since 2026.6.8.2.** Its `init()` called `setupMobileComposer()` bare, but that function is declared in the *other* top-level IIFE in `dashboard.js` — separate scopes, so the call threw `ReferenceError` on `init()`'s **first statement** and every statement after it never ran. Consequences: `attachCcResizeHandles()` never wired the Queen/Attention column splitter (dragging it did nothing — the reported symptom), `body.cc-active` was never applied so the dashboard landed on an empty "Select a worker" pane with the task panel dangling below it at the CSS 50/50 default, and the digest/attention pollers never started (the digest sat on "Loading today's summary…" while real escalations went uncounted). `setupMobileComposer` is now exported on `window` and called defensively. Added a static regression scan for bare cross-IIFE calls in `dashboard.js` — the same bug class previously hit `updateQueenHealthIndicator`.
+- **Dragging the horizontal split persisted a ratio the operator never chose.** `endDrag` re-measured the detail-area at mouseup instead of storing what `moveDrag` had applied, and that measurement caught a mid-relayout height (xterm refits and the action-bar reflow run during the drag) — observed storing `0.697` for a split actually applied at `0.575`, so the panel jumped on the next view switch or reload. It now persists the applied ratio.
+
 ## [2026.7.23.7] - 2026-07-23
 
 ### Fixes
 
 - **Drone auto-approve now works for non-Claude providers (Codex/OpenCode/Gemini).** `_decide_idle_state` switched to event-based prompt routing whenever `events is not None`, but every non-Claude provider inherits the base `parse_events` that returns a single `UNKNOWN` event — a non-None list that has no `choice`/`plan`/`accept_edits`/`user_question` type. That silently **disabled the provider's regex `has_*_prompt` detectors**, so a Codex `git status` approval was classified WAITING but never auto-approved (it stalled indefinitely where a Claude worker sails through). Added `_has_structured_events()` and gated event-routing on it, so providers without typed events fall back to their regex detectors. Verified live: an injected `git status` on a Codex worker is now auto-approved end to end (WAITING → `✔ You approved` → RESTING). Follows the Stage 1 Codex detection work (2026.7.23.6).
-
 
 ### Features
 
