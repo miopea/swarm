@@ -5033,6 +5033,11 @@
             }
         });
     }
+    // Exported because the Command Center IIFE's init() wires it. The two
+    // top-level IIFEs are separate scopes — a bare cross-scope call throws
+    // ReferenceError and, from init(), takes the whole Command Center down
+    // with it (regression: 2026.6.8.2).
+    window.setupMobileComposer = setupMobileComposer;
 
     // --- Fullscreen terminal (mobile scroll mode) ---
     // Moves the existing inline terminal into a fixed overlay so
@@ -6115,23 +6120,45 @@
         var area = document.querySelector('.detail-area');
         if (area) area.classList.toggle('bottom-collapsed', collapsed);
     }
+    // Single entry point for the bottom task panel's collapsed state.
+    // `persist` records an OPERATOR choice; layout-driven callers (worker
+    // focus, Queen dashboard) pass false so switching views never overwrites
+    // what the operator asked for.
+    function setBottomCollapsed(collapsed, persist) {
+        var panel = document.querySelector('.bottom-tabbed');
+        if (!panel) return;
+        collapsed = !!collapsed;
+        panel.classList.toggle('collapsed', collapsed);
+        var chevron = panel.querySelector('.btn-collapse');
+        if (chevron) {
+            // Arrow points where the click takes the panel \u2014 matches the
+            // mobile FAB, which uses \u25B2 for "show tasks & log".
+            chevron.textContent = collapsed ? '\u25B2' : '\u25BC';
+            chevron.title = collapsed ? 'Show tasks' : 'Minimize tasks';
+        }
+        updateBottomPanelState(collapsed);
+        var area = document.querySelector('.detail-area');
+        if (area) {
+            // Collapsed: drop the inline split so the header-only CSS row wins.
+            // Expanded: restore the operator's dragged split (the CSS default
+            // is an even 50/50, which isn't what they last chose).
+            area.style.gridTemplateRows = '';
+            if (!collapsed && window.__applySavedSplit) window.__applySavedSplit();
+        }
+        if (persist) {
+            try { sessionStorage.setItem('swarm_bottom_collapsed', collapsed ? '1' : ''); } catch(e) {}
+        }
+    }
+    window.setBottomCollapsed = setBottomCollapsed;
     function toggleBottomPanel() {
         var panel = document.querySelector('.bottom-tabbed');
         if (!panel) return;
-        var collapsed = panel.classList.toggle('collapsed');
-        var chevron = panel.querySelector('.btn-collapse');
-        if (chevron) chevron.textContent = collapsed ? '\u25BC' : '\u25B2';
-        updateBottomPanelState(collapsed);
-        try { sessionStorage.setItem('swarm_bottom_collapsed', collapsed ? '1' : ''); } catch(e) {}
+        setBottomCollapsed(!panel.classList.contains('collapsed'), true);
     }
     function expandBottomPanel() {
         var panel = document.querySelector('.bottom-tabbed');
         if (!panel || !panel.classList.contains('collapsed')) return;
-        panel.classList.remove('collapsed');
-        var chevron = panel.querySelector('.btn-collapse');
-        if (chevron) chevron.textContent = '\u25B2';
-        updateBottomPanelState(false);
-        try { sessionStorage.setItem('swarm_bottom_collapsed', ''); } catch(e) {}
+        setBottomCollapsed(false, true);
     }
     // Init: collapse on mobile by default (respect sessionStorage override)
     (function initBottomPanel() {
@@ -6141,12 +6168,7 @@
         var stored = null;
         try { stored = sessionStorage.getItem('swarm_bottom_collapsed'); } catch(e) {}
         var shouldCollapse = stored === '1' || (stored === null && isMobile);
-        if (shouldCollapse) {
-            panel.classList.add('collapsed');
-            var chevron = panel.querySelector('.btn-collapse');
-            if (chevron) chevron.textContent = '\u25BC';
-            updateBottomPanelState(true);
-        }
+        if (shouldCollapse) setBottomCollapsed(true, false);
     })();
 
     // Init: restore focus mode on mobile
@@ -10910,6 +10932,7 @@
         let dragging = false;
         let startY = 0;
         let startTopFr = 0.5;
+        let lastRatio = null;   // ratio applied by the most recent moveDrag
 
         // Restore the saved split. Exposed because show() clears the
         // detail-area gridTemplateRows on every return to the Command
@@ -10943,6 +10966,7 @@
             const dy = clientY - rect.top;
             let ratio = dy / rect.height;
             ratio = Math.max(0.15, Math.min(0.85, ratio));
+            lastRatio = ratio;
             area.style.gridTemplateRows = ratio + 'fr auto ' + (1 - ratio) + 'fr';
             // Fit inline terminal during drag (visual only, no WS resize flood)
             if (activeTermWorker) {
@@ -10959,10 +10983,14 @@
             handle.classList.remove('dragging');
             document.body.style.cursor = '';
             document.body.style.userSelect = '';
-            // Persist
-            const rect = area.getBoundingClientRect();
-            const topH = area.children[0].getBoundingClientRect().height;
-            localStorage.setItem('swarm-split', (topH / rect.height).toFixed(3));
+            // Persist the ratio we actually APPLIED, not a fresh measurement.
+            // Re-measuring here read a mid-relayout detail-area height (xterm
+            // refits and the action bar reflow during the drag), so the stored
+            // split didn't match where the operator dropped the handle — the
+            // panel jumped on the next view switch or reload.
+            if (lastRatio != null) {
+                localStorage.setItem('swarm-split', lastRatio.toFixed(3));
+            }
             // Send final resize to inline terminal after drag ends
             if (activeTermWorker) {
                 var endEntry = termCache.get(activeTermWorker);
@@ -11340,13 +11368,18 @@
         if (bottom) bottom.style.display = '';
         var rh = resizeHandle();
         if (rh) rh.style.display = '';
-        var da = detailArea();
-        if (da) {
-            // Clear first (drops any stale inline value a worker visit's
-            // hide() left behind), then re-apply the operator's persisted
-            // split from storage so the task panel keeps its position.
-            da.style.gridTemplateRows = '';
-            if (window.__applySavedSplit) window.__applySavedSplit();
+        // Queen view always shows the task board EXPANDED. persist=false so a
+        // worker-view "minimize" preference survives the round trip.
+        // setBottomCollapsed clears the inline rows and re-applies the
+        // operator's dragged split.
+        if (window.setBottomCollapsed) {
+            window.setBottomCollapsed(false, false);
+        } else {
+            var da = detailArea();
+            if (da) {
+                da.style.gridTemplateRows = '';
+                if (window.__applySavedSplit) window.__applySavedSplit();
+            }
         }
         // Re-apply saved CC panel sizes (defensive — survives any
         // intermediate CSS-var clear during a worker visit).
@@ -11406,20 +11439,28 @@
     }
 
     function hide() {
-        // Worker focused: terminal fills the detail-area. Collapse the
-        // bottom grid row (and the resize handle) so no whitespace
-        // remains where the bottom panel used to sit.
+        // Worker focused: the terminal takes the height, but the task board
+        // stays MOUNTED as a header-only strip rather than disappearing —
+        // checking a task shouldn't mean leaving the worker for the Queen
+        // dashboard. Collapsed by default; expanded if the operator explicitly
+        // opened it this session (sessionStorage '' = they expanded it).
         // Detach the Queen embed first so the shared terminal container
         // is free to move into #detail-body if SHE is the focused worker.
         try { if (window.unmountQueenEmbed) window.unmountQueenEmbed(); } catch (_) {}
         // Panel visibility is CSS-driven off body.cc-active (removed below) —
         // do NOT set inline display on #command-center / #detail-body here.
         var bottom = bottomPanel();
-        if (bottom) bottom.style.display = 'none';
+        if (bottom) bottom.style.display = '';
         var rh = resizeHandle();
-        if (rh) rh.style.display = 'none';
-        var da = detailArea();
-        if (da) da.style.gridTemplateRows = '1fr 0 0';
+        if (rh) rh.style.display = '';
+        var storedCollapse = null;
+        try { storedCollapse = sessionStorage.getItem('swarm_bottom_collapsed'); } catch (_) {}
+        if (window.setBottomCollapsed) {
+            window.setBottomCollapsed(storedCollapse !== '', false);
+        } else {
+            var da = detailArea();
+            if (da) da.style.gridTemplateRows = '1fr 0 0';
+        }
         // Restore worker-view chrome: title text visible, queen strip hidden.
         // (The existing selectWorker flow updates detail-title-text content.)
         var dtxt = el('detail-title-text');
@@ -12207,7 +12248,11 @@
 
     // ----- Boot -----------------------------------------------------------
     function init() {
-        setupMobileComposer();  // wire the touch composer (auto-grow, Enter=send)
+        // Wire the touch composer (auto-grow, Enter=send). Lives in the OTHER
+        // IIFE, so it must be reached via window and guarded — everything
+        // below (body.cc-active, the CC column splitter, the attention/digest
+        // pollers) is unreachable if this line throws.
+        try { if (window.setupMobileComposer) window.setupMobileComposer(); } catch (_) {}
         // If sessionStorage has a worker that the existing dashboard's
         // restoreWorker (line 7830) will mount into detail-body, START
         // in worker mode — otherwise show() would hide detail-body and

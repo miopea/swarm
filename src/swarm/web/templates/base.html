@@ -783,11 +783,10 @@
         .status-compact { display: none; }
         /* Mobile-only bottom panel controls (hidden on desktop) */
         .tab-utils-mobile-btn { display: none; }
-        .btn-collapse { display: none; }
         .collapsed-label { display: none; color: var(--muted); font-size: 0.8rem; }
-        @media (max-width: 768px) {
-            .btn-collapse { display: inline-flex; font-size: 0.75rem; padding: 0.2rem 0.5rem; background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; cursor: pointer; margin-left: auto; flex-shrink: 0; }
-        }
+        /* Collapse chevron is the desktop affordance too now that the task
+           board stays mounted (collapsed) behind a focused worker. */
+        .btn-collapse { display: inline-flex; font-size: 0.75rem; padding: 0.2rem 0.5rem; background: transparent; border: 1px solid var(--border); color: var(--muted); border-radius: 4px; cursor: pointer; margin-left: auto; flex-shrink: 0; }
         .btn-notif { font-size: 0.9rem; padding: 0.4rem 0.6rem; }
         /* --- Tab groups --- */
         .tab-group { display: flex; gap: 0; }
@@ -1293,6 +1292,24 @@
             overflow-y: auto;
             flex: 1;
             line-height: 1.5;
+        }
+        /* Collapsed = header-only strip. The task board stays MOUNTED in worker
+           view so the operator can pop it open (click any tab, or the chevron)
+           without leaving the terminal for the Queen dashboard. The Queen view
+           always shows it expanded. Phone keeps its own true-collapse rules in
+           the 768px block below — those carry !important and win there. */
+        .bottom-tabbed.collapsed > .tab-content.active { display: none; }
+        .detail-area:has(> .bottom-tabbed.collapsed),
+        .detail-area.bottom-collapsed {
+            grid-template-rows: 1fr auto auto;
+        }
+        /* visibility + height:0, NOT display:none — a display:none grid item
+           drops out of auto-placement entirely, which would slide the task
+           panel up into the handle's track and collapse it to nothing. */
+        .detail-area:has(> .bottom-tabbed.collapsed) > .resize-handle,
+        .detail-area.bottom-collapsed > .resize-handle {
+            visibility: hidden;
+            height: 0;
         }
         .tab-btn {
             background: transparent;
