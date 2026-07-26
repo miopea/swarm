@@ -42,8 +42,17 @@ Thumbs.db
 # uv
 uv.lock
 
-# Mobile QA Playwright screenshot runs — re-generate via
-# `uv run python scripts/mobile_qa.py`. Findings docs live under
-# `docs/qa-mobile-findings-<date>.md` and ARE committed; raw
-# screenshots are not (large PNG binaries, easily reproduced).
-docs/qa-mobile-*/
+# QA Playwright screenshot runs (mobile, desktop, playbook) — re-generate via
+# `uv run python scripts/mobile_qa.py`. Nothing inside a run directory is
+# committed: the PNGs are large and reproducible, and the per-run FINDINGS.md
+# is a generated manifest indexing those same PNGs, so on its own it would
+# point at files that aren't here.
+#
+# Curated write-ups are PROMOTED OUT of the run directory to
+# `docs/qa-<surface>-findings-<date>.md` (e.g. docs/qa-mobile-findings-2026-05-20.md,
+# which is tracked). That path sits outside every pattern below, so promotion
+# is what makes a finding survive — keep doing it for anything worth keeping.
+docs/qa-*/
+
+# Loose one-off QA captures (e.g. docs/qa-share-target.png)
+docs/qa-*.png

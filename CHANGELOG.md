@@ -10,6 +10,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.7.26] - 2026-07-26
+
+### Features
+
+### Changes
+
+- **QA screenshot runs are ignored for every surface, not just mobile.** `.gitignore` only listed `docs/qa-mobile-*/`, so the desktop and playbook runs (`docs/qa-desktop-*/`, `docs/qa-pb*/`) plus loose one-off captures (`docs/qa-share-*.png`) sat in `git status` indefinitely — 77 untracked files of noise that made it easy to miss real changes. Widened to `docs/qa-*/` and `docs/qa-*.png`. Deliberately **no** `!.../FINDINGS.md` negation: the per-run `FINDINGS.md` is a generated manifest indexing the very PNGs that stay ignored, and the one substantive write-up in the tree is already byte-identical to the tracked `docs/qa-mobile-findings-2026-05-20.md`. Curated findings survive by being *promoted out* of the run directory to `docs/qa-<surface>-findings-<date>.md`, which sits outside both patterns; the comment now says so, since the previous wording claimed findings were committed while the pattern was silently hiding them.
+
+### Fixes
+
 ## [2026.7.24] - 2026-07-24
 
 ### Features
