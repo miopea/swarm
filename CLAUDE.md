@@ -650,3 +650,48 @@ while true; do
 done
 ```
 Key rules: always set `--max-turns`, always define an exit signal, always log output, always sleep between cycles.
+
+## Secret Management
+
+Secrets live in **1Password**, vault **`BFG`** (Schleifer Family account). Azure Key
+Vault and the old `scripts/secrets.mjs` tooling are retired.
+
+Authenticate first — `op` prompts interactively without this, which reads as a
+broken setup but is only a missing auth step:
+
+```bash
+eval "$(op-login)"      # picks the right token for this repo
+op-login --check        # shows which vault this directory maps to
+```
+
+Do it at the start of every shell invocation that needs a secret; the
+environment does not persist between agent tool calls, and desktop-launched
+clients never source shell init files.
+
+```bash
+op read "op://BFG/<item>/<field>"       # quote it if the vault name has a space
+op inject -i .env.tpl -o .env               # regenerate a whole .env
+op run -- <command>                         # inject at runtime, never touching disk
+```
+
+### Rules
+
+- Never print a secret value to a terminal, log, commit, task update, or agent
+  output. Pipe directly between tools.
+- Never commit `.env` — it is a disposable local cache, not the source of truth.
+  A committed `.env.tpl` of `op://` references records which variables exist.
+- Presence checks report variable names and status only.
+- Do not create, update, or delete a 1Password item unless the operator asks.
+- A local read never means production was updated; propagation is explicit.
+
+### Verify, do not assume
+
+A dead credential fails **silently**. Check with
+`bfg-solutions/scripts/verify-credentials.mjs` (also on a daily cron). Two traps
+that produce confident wrong answers: V6's `/api/admin/*` returns `200` with a
+completely dead key via its IP allowlist — probe `/api/v1/*`. And Cloudflare
+**account-scoped** (`cfat_`) tokens verify at `/accounts/{id}/tokens/verify`,
+returning a misleading "Invalid API Token" from the user endpoint.
+
+Full design: `personal/bfg-solutions/docs/specs/secrets-architecture.md`.
+Rotation: `personal/bfg-solutions/docs/runbooks/credential-rotation.md`.
