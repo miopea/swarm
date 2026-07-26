@@ -8,6 +8,8 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Changes
 
+- **Coverage and hook-install artifacts are ignored.** `.coverage` / `coverage.json`, the six `.claude/commands/swarm-*.md` slash commands, the two `.claude/skills/swarm-{checkpoint,coordinate}/` directories, and `.claude/ux-audit.json` all sat untracked in `git status`. Every one is generated — `swarm install-hooks` copies the commands and skills in from the tracked originals under `src/swarm/hooks/{commands,skills}/`, and `ux-audit.json` is already treated as machine-local by `coordination/ownership.py` and `git/conflicts.py`. The `.claude/` entries are named individually rather than ignoring `.claude/commands/` or `.claude/skills/` wholesale, mirroring the explicit `WORKER_COMMAND_FILES` / `WORKER_SKILL_NAMES` tuples in `hooks/install.py`, so a hand-authored command or skill added later still shows up in `git status` instead of vanishing — those lists and these patterns need to stay in sync.
+
 ### Fixes
 
 ## [2026.7.26] - 2026-07-26
