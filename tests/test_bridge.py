@@ -42,7 +42,10 @@ def _make_request(
         app = {}
     if daemon is not None:
         app["daemon"] = daemon
-    # Use a real dict so setdefault works
+    # Mirror create_app, which seeds this before aiohttp freezes the real
+    # Application — handlers therefore read it with plain indexing.  A plain
+    # dict here, so setdefault carries no frozen-app semantics.
+    app.setdefault("_terminal_sessions", set())
     request.app = app
     return request
 

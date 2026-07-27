@@ -907,7 +907,11 @@ def test_no_reexec_when_already_dev(monkeypatch):
         patch("swarm.update.get_local_source_path", return_value=None),
         patch("os.execvp") as mock_execvp,
         patch("swarm.cli.setup_logging"),
-        patch("asyncio.run"),
+        # Close the coroutine instead of dropping it: `serve` builds
+        # ``run_daemon(...)`` before handing it to ``asyncio.run``, and a bare
+        # mock never consumes it — Python then reports "coroutine 'run_daemon'
+        # was never awaited" against whatever test triggers the collection.
+        patch("asyncio.run", side_effect=lambda coro, *a, **kw: coro.close()),
     ):
         mock_cfg.return_value.port = 9090
         mock_cfg.return_value.log_level = "WARNING"

@@ -6,7 +6,6 @@ import asyncio
 import logging
 import os
 import tempfile
-import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
@@ -74,7 +73,7 @@ def _isolate_db_secrets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.fixture(autouse=True, scope="session")
-def _assert_live_db_untouched():
+def _assert_live_db_untouched(pytestconfig: pytest.Config):
     """Belt-and-suspenders: fail the session if the live ``~/.swarm/swarm.db``
     mtime changed during the test run. The module-level override should
     prevent this; the assertion catches any code path that bypasses it
@@ -88,12 +87,20 @@ def _assert_live_db_untouched():
     # (The setup-time _DEFAULT_DB_PATH override is the actual protection;
     # this assertion is belt-and-suspenders for the no-daemon CI case.)
     if _EXTERNAL_DAEMON_AT_START or _external_daemon_running():
-        warnings.warn(
-            "live-DB mtime safeguard skipped: a swarm daemon is running and "
-            "legitimately writes ~/.swarm/swarm.db. The setup-time sandbox "
-            "still protects tests; this check only runs when no daemon is up.",
-            stacklevel=2,
-        )
+        # Reported through the terminal reporter rather than ``warnings.warn``.
+        # This is an expected, environment-dependent notice — it fires on any
+        # operator box with a daemon up and never in CI — so raising it as a
+        # warning permanently blocks the project's zero-warning gate and
+        # trains people to ignore the warnings summary.  Still printed, so
+        # a skipped safeguard is never silent.
+        reporter = pytestconfig.pluginmanager.get_plugin("terminalreporter")
+        if reporter is not None:
+            reporter.write_line(
+                "live-DB mtime safeguard skipped: a swarm daemon is running and "
+                "legitimately writes ~/.swarm/swarm.db. The setup-time sandbox "
+                "still protects tests; this check only runs when no daemon is up.",
+                yellow=True,
+            )
         return
     end_mtime = _LIVE_DB_PATH.stat().st_mtime
     if _LIVE_DB_MTIME_AT_START is not None and end_mtime != _LIVE_DB_MTIME_AT_START:

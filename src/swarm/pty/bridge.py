@@ -201,7 +201,10 @@ def _validate_terminal_request(
 
     daemon = _get_daemon(request)
 
-    sessions: set = request.app.setdefault("_terminal_sessions", set())
+    # Seeded in ``create_app`` before the Application is frozen — a lazy
+    # ``setdefault`` here mutates started-app state and triggers aiohttp's
+    # deprecation on the first terminal connection.
+    sessions: set = request.app["_terminal_sessions"]
     if len(sessions) >= _MAX_TERMINAL_SESSIONS:
         return web.json_response({"error": "Too many terminal sessions"}, status=503)
 

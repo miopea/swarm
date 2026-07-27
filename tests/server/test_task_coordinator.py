@@ -358,6 +358,36 @@ class TestAutoStartNextAssigned:
         d.tasks_coord.auto_start_next_assigned("api")
         # Task stays ASSIGNED — the test passes if no exception leaked
 
+    def test_orphaned_coroutine_closed_when_no_event_loop(self, monkeypatch) -> None:
+        """A raising ``create_task`` must not leak an un-awaited coroutine.
+
+        ``d.start_task(...)`` is evaluated *before* ``asyncio.create_task``
+        runs, so when create_task raises the coroutine object is already
+        built.  Dropping it on the floor makes Python emit "coroutine ... was
+        never awaited" at GC — noise in operator logs from a real sync/CLI
+        code path, and attributed to whatever unrelated test happened to
+        trigger the collection.
+        """
+        d = make_daemon()
+        task = d.task_board.create(title="T")
+        d.task_board.assign(task.id, "api")
+
+        captured: list = []
+
+        def _raising_create_task(coro, *args, **kwargs):
+            captured.append(coro)
+            raise RuntimeError("no loop")
+
+        monkeypatch.setattr(
+            "swarm.server.task_coordinator.asyncio.create_task",
+            _raising_create_task,
+        )
+        d.tasks_coord.auto_start_next_assigned("api")
+
+        assert captured, "create_task was never reached"
+        # A closed coroutine drops its frame; an orphaned one still holds it.
+        assert captured[0].cr_frame is None, "orphaned coroutine was not closed"
+
 
 # ---------------------------------------------------------------------------
 # retry_draft_reply — email re-draft path

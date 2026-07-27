@@ -825,17 +825,24 @@ class TaskCoordinator:
             # Real work never reaches here, so the loop is always preempted.
             d._maybe_run_standing_loop(worker_name)
             return
+        # Go through ``d.start_task`` (the daemon proxy) rather than
+        # ``self.start_task`` so existing tests that patch
+        # ``daemon.start_task`` still intercept the auto-chain dispatch.
+        # Bind the coroutine before the try: it is constructed either way, so
+        # the except branch has to close it explicitly (same idiom as
+        # ``mcp/handlers/_queen_relay.py``).
+        coro = d.start_task(next_assigned.id, actor="auto-chain")
         try:
-            # Go through ``d.start_task`` (the daemon proxy) rather than
-            # ``self.start_task`` so existing tests that patch
-            # ``daemon.start_task`` still intercept the auto-chain dispatch.
-            t = asyncio.create_task(d.start_task(next_assigned.id, actor="auto-chain"))
+            t = asyncio.create_task(coro)
             t.add_done_callback(_log_task_exception)
             d._track_task(t)
         except RuntimeError:
             # No running event loop (sync/CLI context) — leave the task
             # ASSIGNED; the idle-watcher or the next dashboard action
-            # will pick it up.
+            # will pick it up.  Close the coroutine so it doesn't surface as
+            # "coroutine ... was never awaited" at GC, arbitrarily attributed
+            # to whatever runs next.
+            coro.close()
             return
 
     # ----- email reply -----

@@ -65,7 +65,13 @@ timeout = 30
 testpaths = ["tests"]
 norecursedirs = ["tests/fixtures"]
 python_classes = ["Test[A-Z]*"]
+# CLAUDE.md: "ZERO_WARNINGS === REQUIRED → Any warning = failure".  Promote
+# warnings to errors so that rule is enforced by the suite instead of relying
+# on someone reading the summary — the four that were tolerated for months
+# (two orphaned coroutines, aiohttp started-app mutation, a conftest notice)
+# each masked a real defect.  Keep the ignore list narrow and justified.
 filterwarnings = [
+    "error",
     "ignore::aiohttp.web.NotAppKeyWarning",
     "ignore::pytest.PytestUnraisableExceptionWarning",
     "ignore::pytest.PytestCollectionWarning",

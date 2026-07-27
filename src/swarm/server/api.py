@@ -494,6 +494,13 @@ def create_app(daemon: SwarmDaemon, enable_web: bool = True) -> web.Application:
     )
     app["daemon"] = daemon
     app["rate_limits"] = defaultdict(deque)  # ip -> deque of timestamps
+    # Per-request state seeded here rather than lazily in the handlers:
+    # aiohttp freezes the Application mapping on start, so a first-request
+    # ``setdefault`` warns ("Changing state of started or joined application")
+    # on every live daemon and is slated to become an error.
+    # Readers: pty/bridge.py, server/routes/websocket.py.
+    app["_terminal_sessions"] = set()
+    app["_ws_ip_counts"] = {}
 
     # Web dashboard routes (before API to allow / to serve dashboard)
     if enable_web:

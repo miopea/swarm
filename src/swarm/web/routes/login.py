@@ -117,11 +117,16 @@ def _set_session_cookie(response: web.Response, password: str, secure: bool) -> 
 
 
 def _passkey_store(request: web.Request) -> PasskeyStore:
-    """Get or create the PasskeyStore from app state."""
+    """Get the PasskeyStore from app state.
+
+    Seeded by ``setup_web_routes`` before aiohttp freezes the Application.
+    A missing key means the app was built without the web routes that own
+    this handler; fall back to a transient store rather than writing to a
+    started Application, which aiohttp deprecates.
+    """
     store = request.app.get("passkey_store")
     if store is None:
-        store = PasskeyStore()
-        request.app["passkey_store"] = store
+        return PasskeyStore()
     return store
 
 

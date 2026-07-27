@@ -26,6 +26,21 @@ from tests.fakes.process import FakeWorkerProcess
 _TEST_PASSWORD = "secret123"
 
 
+def test_terminal_sessions_initialised_before_app_freeze(daemon) -> None:
+    """``_terminal_sessions`` must exist on the app before it starts.
+
+    aiohttp freezes the ``Application`` mapping once the server starts, so
+    creating the key lazily inside a request handler emits
+    ``DeprecationWarning: Changing state of started or joined application``
+    on the first terminal connection — in production, not just under test —
+    and aiohttp has slated that for removal.  Seed it in ``create_app``
+    alongside ``daemon`` / ``rate_limits`` and read it with plain indexing.
+    """
+    app = create_app(daemon, enable_web=False)
+    assert "_terminal_sessions" in app
+    assert app["_terminal_sessions"] == set()
+
+
 @pytest.fixture
 def daemon(monkeypatch):
     """Create a minimal daemon without starting it."""
@@ -94,10 +109,9 @@ async def test_terminal_missing_worker(client, daemon):
 
 
 @pytest.mark.asyncio
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_terminal_concurrency_limit(client):
     """When _terminal_sessions is full, return 503."""
-    sessions = client.app.setdefault("_terminal_sessions", set())
+    sessions = client.app["_terminal_sessions"]
     sessions.clear()
     for i in range(_MAX_TERMINAL_SESSIONS):
         sessions.add(f"fake-session-{i}")
@@ -109,7 +123,6 @@ async def test_terminal_concurrency_limit(client):
 
 
 @pytest.mark.asyncio
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_terminal_missing_worker_param(client):
     """Missing worker query parameter returns 400."""
     resp = await client.get(f"/ws/terminal?token={_TEST_PASSWORD}")
@@ -119,7 +132,6 @@ async def test_terminal_missing_worker_param(client):
 
 
 @pytest.mark.asyncio
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_terminal_unknown_worker(client):
     """Unknown worker name returns 404."""
     resp = await client.get(f"/ws/terminal?worker=nonexistent&token={_TEST_PASSWORD}")
@@ -129,14 +141,13 @@ async def test_terminal_unknown_worker(client):
 
 
 @pytest.mark.asyncio
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
 async def test_terminal_slot_reserved_before_await(client):
     """The slot should be reserved immediately (before first await).
 
     After the concurrency check and before WS prepare, the slot must
     already be in the sessions set to prevent race conditions.
     """
-    sessions = client.app.setdefault("_terminal_sessions", set())
+    sessions = client.app["_terminal_sessions"]
     sessions.clear()
     for i in range(_MAX_TERMINAL_SESSIONS - 1):
         sessions.add(f"fake-session-{i}")

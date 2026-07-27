@@ -174,19 +174,32 @@ class TestPasskeyStoreCache:
         request.app.get.return_value = sentinel
         assert login_mod._passkey_store(request) is sentinel
 
-    def test_creates_and_caches_store_when_absent(self) -> None:
+    def test_returns_transient_store_without_mutating_app_when_absent(self) -> None:
+        """A missing key must NOT be written back onto the Application.
+
+        The store is seeded pre-freeze by ``setup_web_routes``; writing it
+        lazily from a request handler mutates a started aiohttp app, which
+        emits ``DeprecationWarning: Changing state of started or joined
+        application`` and is slated to become an error.
+        """
         from unittest.mock import MagicMock
 
         from swarm.auth.passkeys import PasskeyStore
 
         request = MagicMock()
         request.app.get.return_value = None
-        # The dict-style assignment goes through __setitem__
         request.app.__setitem__ = MagicMock()
         result = login_mod._passkey_store(request)
         assert isinstance(result, PasskeyStore)
-        # And the new store was cached back onto request.app
-        request.app.__setitem__.assert_called_once()
-        cached_key, cached_val = request.app.__setitem__.call_args[0]
-        assert cached_key == "passkey_store"
-        assert cached_val is result
+        request.app.__setitem__.assert_not_called()
+
+    def test_setup_web_routes_seeds_store_before_freeze(self) -> None:
+        """The real seeding path: present on the app straight out of setup."""
+        from aiohttp import web
+
+        from swarm.auth.passkeys import PasskeyStore
+        from swarm.web.app import setup_web_routes
+
+        app = web.Application()
+        setup_web_routes(app)
+        assert isinstance(app["passkey_store"], PasskeyStore)

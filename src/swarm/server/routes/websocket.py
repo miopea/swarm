@@ -177,7 +177,9 @@ def _check_ws_access(request: web.Request) -> web.Response | None:
             ip,
         )
         return web.Response(status=429, text="Too many failed auth attempts")
-    ws_ip_counts: dict[str, int] = request.app.setdefault("_ws_ip_counts", {})
+    # Seeded in ``create_app`` before aiohttp freezes the Application — a
+    # lazy ``setdefault`` here mutates started-app state and warns.
+    ws_ip_counts: dict[str, int] = request.app["_ws_ip_counts"]
     current = ws_ip_counts.get(ip, 0)
     if current >= _MAX_WS_PER_IP:
         _log.warning(
@@ -199,7 +201,9 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     d = get_daemon(request)
 
     ip = get_client_ip(request)
-    ws_ip_counts: dict[str, int] = request.app.setdefault("_ws_ip_counts", {})
+    # Seeded in ``create_app`` before aiohttp freezes the Application — a
+    # lazy ``setdefault`` here mutates started-app state and warns.
+    ws_ip_counts: dict[str, int] = request.app["_ws_ip_counts"]
     ws_ip_counts[ip] = ws_ip_counts.get(ip, 0) + 1
 
     # Wrap everything that follows in a single outer try/finally so the

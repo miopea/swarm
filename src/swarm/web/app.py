@@ -244,6 +244,12 @@ def setup_web_routes(app: web.Application) -> None:
 
     templates_dir, static_dir = _resolve_web_dirs(app)
     app["static_dir"] = static_dir
+    # Seeded here (pre-freeze) rather than lazily on first login request:
+    # writing to a started Application is deprecated in aiohttp.  The
+    # constructor does no I/O — credentials load lazily in PasskeyStore.load().
+    from swarm.auth.passkeys import PasskeyStore
+
+    app["passkey_store"] = PasskeyStore()
 
     env = aiohttp_jinja2.setup(
         app,
