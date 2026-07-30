@@ -31,20 +31,23 @@ jobs:
       - name: Run tests with coverage
         run: uv run pytest --cov=swarm --cov-report=term-missing --cov-fail-under=70 -q
 
-      # ADVISORY ONLY — this step CANNOT fail the build, by design.
-      # mypy reports roughly 450 errors across ~80 files, so gating on it today
-      # would just red every run. The count is deliberately NOT pinned in the
-      # step name: uv.lock is gitignored, so CI resolves dependency versions
-      # fresh and the total drifts with them (452/83 locally vs 442/77 in CI on
-      # 2026-07-30). A name asserting an exact number would go stale and be
-      # quietly wrong — the same class of defect this whole change is fixing.
-      # The name says "advisory" so a green run is never mistaken for evidence
-      # of type-safety. Remediation is tracked separately; when the count
-      # reaches zero, drop continue-on-error and the suffix together.
-      # Do NOT rename this back to a bare "Type check".
-      - name: Type check with mypy (advisory — non-gating, see #1051)
+      # GATING as of #1062. It was advisory under continue-on-error while ~450
+      # errors across 83 modules made a whole-tree gate red every run — a step
+      # that could not fail, i.e. reporting on something it was not measuring
+      # (the same defect class as the pip-audit step below).
+      #
+      # Those 83 modules are now silenced explicitly in pyproject.toml's
+      # [[tool.mypy.overrides]], so mypy exits 0 and this step gates for real.
+      # Every module NOT on that list — every new file, and every one cleaned
+      # up and deleted from it — fails CI on a new type error.
+      #
+      # Do NOT re-add continue-on-error. The reviewable way to accept a dirty
+      # module is a line in that overrides list, which shows up in a diff;
+      # continue-on-error hides everything at once. And do NOT pin an error
+      # count in this step's name: uv.lock is gitignored, so CI resolves
+      # dependency versions fresh and any count drifts with them.
+      - name: Type check with mypy
         run: uv run mypy src/swarm/ --ignore-missing-imports
-        continue-on-error: true
 
       # GATING. This step used to carry continue-on-error while pip-audit was
       # not a declared dependency, so it exited 2 with "Failed to spawn" and

@@ -1542,3 +1542,35 @@ def test_update_command_restart_no_daemon(runner, monkeypatch):
     result = runner.invoke(main, ["update"], input="y\n")
     assert result.exit_code == 0, result.output
     assert "No running daemon detected" in result.output
+
+
+# --- #1062: task-create priority type ---
+
+
+def test_tasks_create_stores_a_real_priority_enum():
+    """#1062: `_tasks_create` was annotated `prio: int` while its only caller
+    passes `PRIORITY_MAP[...]`, which yields a `TaskPriority`.
+
+    The annotation was the defect, not the runtime — measured before fixing:
+    the value arriving really is the enum, so the CLI worked. But the lie
+    matters, because an `int` actually getting through would break the board:
+    `_PRIORITY_ORDER[task.priority]` KeyErrors on sort and `.value` blows up
+    on serialize. This pins the behaviour the annotation now claims.
+    """
+    from swarm.cli import _tasks_create
+    from swarm.tasks.board import TaskBoard
+    from swarm.tasks.task import PRIORITY_MAP, TaskPriority
+
+    board = TaskBoard()
+    for label in ("low", "normal", "high", "urgent"):
+        _tasks_create(board, f"task-{label}", "", PRIORITY_MAP[label], label)
+
+    stored = board.all_tasks
+    assert len(stored) == 4
+    for t in stored:
+        assert isinstance(t.priority, TaskPriority), (
+            f"{t.title} stored {t.priority!r} — an int here KeyErrors on sort"
+        )
+    # The consumer that would actually break on an int.
+    assert len(board.available_tasks) == 4
+    assert next(t.priority for t in board.available_tasks) == TaskPriority.URGENT

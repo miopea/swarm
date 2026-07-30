@@ -177,6 +177,7 @@ def _load_config_db_first(config_path: str | None) -> HiveConfig:
 
 if TYPE_CHECKING:
     from swarm.tasks.board import TaskBoard
+    from swarm.tasks.task import TaskPriority
 
 # Default daemon API port
 _DEFAULT_PORT = 9090
@@ -2015,7 +2016,9 @@ def _tasks_list(board: TaskBoard) -> None:
     click.echo(f"\n{board.summary()}")
 
 
-def _tasks_create(board: TaskBoard, title: str | None, desc: str, prio: int, label: str) -> None:
+def _tasks_create(
+    board: TaskBoard, title: str | None, desc: str, prio: TaskPriority, label: str
+) -> None:
     if not title:
         click.echo("--title is required for create", err=True)
         raise SystemExit(1)
@@ -2221,7 +2224,9 @@ async def _probe_daemon_sha(port: int, token: str) -> tuple[bool, str]:
     url = f"http://localhost:{port}/api/health"
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=_auth_headers(token), timeout=3.0) as resp:
+            async with session.get(
+                url, headers=_auth_headers(token), timeout=aiohttp.ClientTimeout(total=3.0)
+            ) as resp:
                 if resp.status != 200:
                     return False, ""
                 data = await resp.json()
@@ -2245,7 +2250,9 @@ async def _wait_for_daemon_sha_change(port: int, token: str, pre_sha: str, timeo
     while _time.monotonic() < deadline:
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=2.0) as resp:
+                async with session.get(
+                    url, headers=headers, timeout=aiohttp.ClientTimeout(total=2.0)
+                ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         new_sha = str(data.get("build_sha", ""))
@@ -2287,7 +2294,9 @@ async def _restart_running_daemon(port: int, token: str, timeout: float = 30.0) 
     headers = {"X-Requested-With": "swarm-cli", **_auth_headers(token)}
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, timeout=5.0) as resp:
+            async with session.post(
+                url, headers=headers, timeout=aiohttp.ClientTimeout(total=5.0)
+            ) as resp:
                 if resp.status != 200:
                     text = await resp.text()
                     return f"Restart request failed ({resp.status}): {text[:200]}"

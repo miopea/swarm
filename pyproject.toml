@@ -122,6 +122,114 @@ strict = false
 warn_return_any = true
 warn_unused_configs = true
 
+# --- #1062: type-check gating -------------------------------------------
+# mypy carries a backlog of ~450 errors across the modules listed below.
+# Gating on the whole tree would red every run, so the CI step sat under
+# continue-on-error and could never fail — a check reporting on something it
+# was not measuring, the same defect class as #1051's pip-audit step.
+#
+# Strategy: silence the KNOWN-DIRTY modules explicitly, so mypy exits 0 and
+# the CI step can genuinely GATE. Any module NOT on this list — every new
+# file, and every one cleaned up and removed from here — fails CI on a new
+# type error. 83 of 285 modules are listed; the other ~200 gate today.
+#
+# Why per-module and not a baseline: uv.lock is gitignored, so CI resolves
+# dependency versions fresh and the error set drifts with them (450/82 here
+# vs 442/77 in CI on the same commit). A line-or-message baseline captured
+# locally would report phantom "new" errors in CI. Module granularity is
+# coarse enough to be stable across that drift.
+#
+# KNOWN GAP, stated rather than hidden: a NEW error inside an
+# already-listed module is not caught. Shrinking this list is the work —
+# delete a module the moment it type-checks clean.
+[[tool.mypy.overrides]]
+module = [
+    "swarm.auth._oauth",
+    "swarm.auth.graph",
+    "swarm.auth.jira",
+    "swarm.auth.passkeys",
+    "swarm.auth.webauthn",
+    "swarm.cli",
+    "swarm.client",
+    "swarm.config.loader",
+    "swarm.config.serialization",
+    "swarm.db.config_store",
+    "swarm.db.core",
+    "swarm.db.playbook_store",
+    "swarm.db.proposal_store",
+    "swarm.drones.decision_executor",
+    "swarm.drones.directives",
+    "swarm.drones.dreamer",
+    "swarm.drones.idle_watcher",
+    "swarm.drones.inter_worker_watcher",
+    "swarm.drones.pilot",
+    "swarm.drones.poll_dispatcher",
+    "swarm.drones.pressure",
+    "swarm.drones.state_tracker",
+    "swarm.drones.store",
+    "swarm.git.worktree",
+    "swarm.hooks.install",
+    "swarm.integrations.jira",
+    "swarm.logging",
+    "swarm.mcp.handlers._email",
+    "swarm.mcp.queen_handlers._common",
+    "swarm.mcp.queen_handlers._tasks",
+    "swarm.mcp.queen_handlers._views",
+    "swarm.mcp.server",
+    "swarm.mcp.tools",
+    "swarm.messages.store",
+    "swarm.pipelines.engine",
+    "swarm.pipelines.schedule",
+    "swarm.pipelines.template",
+    "swarm.providers",
+    "swarm.providers.claude",
+    "swarm.pty.bridge",
+    "swarm.queen.queen",
+    "swarm.queen.session",
+    "swarm.server.analyzer",
+    "swarm.server.api",
+    "swarm.server.config_appliers.coordination",
+    "swarm.server.config_appliers.drones",
+    "swarm.server.config_appliers.llms",
+    "swarm.server.config_appliers.notifications",
+    "swarm.server.config_appliers.queen",
+    "swarm.server.config_appliers.test",
+    "swarm.server.config_appliers.workers",
+    "swarm.server.config_manager",
+    "swarm.server.daemon",
+    "swarm.server.email_service",
+    "swarm.server.helpers",
+    "swarm.server.invariants",
+    "swarm.server.loop_runner",
+    "swarm.server.playbook_ops",
+    "swarm.server.resource_monitor",
+    "swarm.server.routes.attention",
+    "swarm.server.routes.config",
+    "swarm.server.routes.hooks",
+    "swarm.server.routes.jira",
+    "swarm.server.routes.pipelines",
+    "swarm.server.routes.system",
+    "swarm.server.routes.tasks",
+    "swarm.server.routes.websocket",
+    "swarm.server.routes.workers",
+    "swarm.server.runner",
+    "swarm.server.task_coordinator",
+    "swarm.server.test_runner",
+    "swarm.server.worker_service",
+    "swarm.tasks.board",
+    "swarm.tasks.cross_task",
+    "swarm.tasks.task",
+    "swarm.testing.project",
+    "swarm.update",
+    "swarm.web.app",
+    "swarm.web.routes.login",
+    "swarm.web.routes.proposals",
+    "swarm.web.routes.pwa",
+    "swarm.web.routes.tasks",
+    "swarm.web.routes.workers",
+]
+ignore_errors = true
+
 [tool.ruff]
 line-length = 100
 

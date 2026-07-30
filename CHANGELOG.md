@@ -8,7 +8,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Changes
 
+- **The CI type-check step now gates instead of being decorative (#1062).** It ran under `continue-on-error` because ~450 errors across 83 modules would have redded every run — a step structurally incapable of failing, the same defect class as the pip-audit step in #1051. Those 83 modules are now silenced explicitly in `[[tool.mypy.overrides]]`, so `mypy` exits 0 and the step gates for real: the other ~200 modules, and every new file, fail CI on a new type error. Verified the gate is not theatre by planting a deliberate error in a non-listed module — CI-equivalent run exits 1 — then reverting it. Per-module rather than a baseline because `uv.lock` is gitignored, so CI resolves dependency versions fresh and the error set drifts (450/82 locally vs 442/77 in CI on the same commit); a line-or-message baseline captured locally would report phantom "new" errors in CI. Known gap, stated rather than hidden: a new error *inside* an already-listed module is not caught — shrinking that list is the work, and a module should be deleted from it the moment it type-checks clean.
+
 ### Fixes
+
+- **`_tasks_create`'s priority annotation no longer lies (#1062).** It declared `prio: int` while its only caller passes `PRIORITY_MAP[...]`, which yields a `TaskPriority`. Measured before changing anything: the runtime was already correct, so the CLI worked and no user was affected — this was a mis-annotation, not the runtime bug it was reported as. It still matters, because an actual `int` reaching the board would `KeyError` on `_PRIORITY_ORDER[task.priority]` when sorting and break `.value` on serialize; a regression test now pins that behaviour across all four priorities.
+- **`aiohttp` timeouts use `ClientTimeout` (#1062).** Three `session.get`/`post` calls in `cli.py` passed a bare `float`, which `aiohttp` 3.14 no longer accepts on those signatures — surfaced by the 3.13.3 → 3.14.3 bump in #1061, which is why that bump had to land first.
 
 ## [2026.7.30] - 2026-07-30
 
