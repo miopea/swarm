@@ -21,14 +21,23 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Application Frameworks",
 ]
 dependencies = [
-    "click>=8.0,<9",
+    # Floors below are security floors, not feature floors — raising one
+    # retires advisories that the CI pip-audit gate would otherwise have to
+    # waive. Delete the matching lines from .github/pip-audit-waivers.txt in
+    # the same commit as any bump here (task #1061).
+    "click>=8.3.3,<9",  # PYSEC-2026-2132
     "pyyaml>=6.0,<7",
-    "aiohttp>=3.9,<4",
+    "aiohttp>=3.14.1,<4",  # 21 advisories incl. PYSEC-2026-2094..2113, -237
     "aiohttp-jinja2>=1.6,<2",
     "jinja2>=3.1,<4",
     "extract-msg>=0.48,<1",
     "webauthn>=2.0,<3",
     "croniter>=2.0,<3",
+    # Transitive (via webauthn), pinned directly ONLY to carry a security
+    # floor: 48.0.1 clears GHSA-537c-gmf6-5ccf plus PYSEC-2026-35/36. Pinning
+    # a transitive means we now own its upgrade cadence — done deliberately
+    # here because these are runtime advisories in a package doing crypto.
+    "cryptography>=48.0.1",
 ]
 
 [project.urls]
