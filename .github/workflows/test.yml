@@ -3,8 +3,16 @@ name: Test
 on:
   push:
     branches: [main]
+  # #1081: NO `branches:` filter here, deliberately. Filtering by base branch
+  # means a stacked PR (one whose base is another feature branch, not main)
+  # gets ZERO checks and still reports mergeable/CLEAN — CI that cannot run
+  # is indistinguishable from CI that passed. rcg-platform #224 demonstrated
+  # the defect by timeline: its first run started 2 minutes AFTER the PR was
+  # retargeted to main, i.e. never ran against the stacked base at all.
+  #
+  # Do NOT also unfilter `push` — every branch with an open PR would then run
+  # twice, once per event.
   pull_request:
-    branches: [main]
 
 jobs:
   test:
