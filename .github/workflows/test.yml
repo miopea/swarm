@@ -32,12 +32,17 @@ jobs:
         run: uv run pytest --cov=swarm --cov-report=term-missing --cov-fail-under=70 -q
 
       # ADVISORY ONLY — this step CANNOT fail the build, by design.
-      # mypy currently reports 452 errors across 83 files, so gating on it today
-      # would just red every run. The name says "advisory" so that a green run is
-      # never mistaken for evidence of type-safety. Remediation is tracked
-      # separately; when the count reaches zero, drop continue-on-error and the
-      # suffix together. Do NOT rename this back to a bare "Type check".
-      - name: Type check with mypy (advisory — non-gating, 452 known errors, see #1051)
+      # mypy reports roughly 450 errors across ~80 files, so gating on it today
+      # would just red every run. The count is deliberately NOT pinned in the
+      # step name: uv.lock is gitignored, so CI resolves dependency versions
+      # fresh and the total drifts with them (452/83 locally vs 442/77 in CI on
+      # 2026-07-30). A name asserting an exact number would go stale and be
+      # quietly wrong — the same class of defect this whole change is fixing.
+      # The name says "advisory" so a green run is never mistaken for evidence
+      # of type-safety. Remediation is tracked separately; when the count
+      # reaches zero, drop continue-on-error and the suffix together.
+      # Do NOT rename this back to a bare "Type check".
+      - name: Type check with mypy (advisory — non-gating, see #1051)
         run: uv run mypy src/swarm/ --ignore-missing-imports
         continue-on-error: true
 
