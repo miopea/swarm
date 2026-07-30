@@ -1,0 +1,71 @@
+# pip-audit waivers — advisories that already existed the first time the CI
+# security-audit step ever actually ran (2026-07-30, task #1051).
+#
+# WHY THIS FILE EXISTS: `uv run pip-audit` was in .github/workflows/test.yml
+# under `continue-on-error: true`, and pip-audit was never declared in
+# pyproject.toml — so it exited 2 with "Failed to spawn" and the step reported
+# green on every run since it was added. It had never audited anything.
+#
+# Declaring pip-audit surfaced 35 advisories at once. They are WAIVED HERE, NOT
+# FIXED, so the step can start gating on NEW advisories immediately instead of
+# staying green forever. Remediation is tracked separately — delete lines from
+# this file as each lands; a stale ID is inert but should not linger.
+#
+# THE RUNTIME ONES ARE THE URGENT ONES: aiohttp and cryptography are runtime
+# dependencies serving the dashboard, not dev tooling.
+#
+# Format: one advisory ID per line. Blank lines and #-comments ignored.
+
+# aiohttp 3.13.3 (RUNTIME) — 21 advisories, fixed by 3.13.4/3.14.0/3.14.1
+PYSEC-2026-2094
+PYSEC-2026-2095
+PYSEC-2026-2096
+PYSEC-2026-2097
+PYSEC-2026-2098
+PYSEC-2026-2099
+PYSEC-2026-2100
+PYSEC-2026-2101
+PYSEC-2026-2102
+PYSEC-2026-2103
+PYSEC-2026-2104
+PYSEC-2026-2105
+PYSEC-2026-2106
+PYSEC-2026-2107
+PYSEC-2026-2108
+PYSEC-2026-2109
+PYSEC-2026-2110
+PYSEC-2026-2111
+PYSEC-2026-2112
+PYSEC-2026-2113
+PYSEC-2026-237
+
+# cbor2 5.8.0 (RUNTIME) — 1 advisories, fixed by 5.9.0
+PYSEC-2026-2123
+
+# click 8.3.1 (RUNTIME) — 1 advisories, fixed by 8.3.3
+PYSEC-2026-2132
+
+# cryptography 46.0.5 (RUNTIME) — 3 advisories, fixed by 46.0.6/46.0.7/48.0.1
+GHSA-537c-gmf6-5ccf
+PYSEC-2026-35
+PYSEC-2026-36
+
+# idna 3.11 (RUNTIME) — 1 advisories, fixed by 3.15
+PYSEC-2026-215
+
+# pyasn1 0.6.2 (RUNTIME) — 4 advisories, fixed by 0.6.3/0.6.4
+PYSEC-2026-2263
+PYSEC-2026-3455
+PYSEC-2026-3456
+PYSEC-2026-3457
+
+# pygments 2.19.2 (dev-only) — 1 advisories, fixed by 2.20.0
+PYSEC-2026-2987
+
+# pytest 9.0.2 (dev-only) — 1 advisories, fixed by 9.0.3
+PYSEC-2026-1845
+
+# soupsieve 2.8.3 (RUNTIME) — 2 advisories, fixed by 2.8.4
+PYSEC-2026-3071
+PYSEC-2026-3072
+

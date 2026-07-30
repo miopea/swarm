@@ -47,6 +47,13 @@ dev = [
     # CI (which installs this same spec) rejected the imports. Keep in lockstep
     # with CI — bump both together.
     "ruff==0.15.20",
+    # CI's "Security audit dependencies" step ran `uv run pip-audit` under
+    # continue-on-error while pip-audit was declared nowhere — so it exited 2
+    # with "Failed to spawn" and reported green on every run since it was
+    # added, having never audited anything (task #1051). Declared here so the
+    # step can actually run; known findings are waived, one deletable line
+    # each, in .github/pip-audit-waivers.txt.
+    "pip-audit>=2.7",
 ]
 
 [project.scripts]

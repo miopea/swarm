@@ -31,10 +31,26 @@ jobs:
       - name: Run tests with coverage
         run: uv run pytest --cov=swarm --cov-report=term-missing --cov-fail-under=70 -q
 
-      - name: Type check with mypy
+      # ADVISORY ONLY — this step CANNOT fail the build, by design.
+      # mypy currently reports 452 errors across 83 files, so gating on it today
+      # would just red every run. The name says "advisory" so that a green run is
+      # never mistaken for evidence of type-safety. Remediation is tracked
+      # separately; when the count reaches zero, drop continue-on-error and the
+      # suffix together. Do NOT rename this back to a bare "Type check".
+      - name: Type check with mypy (advisory — non-gating, 452 known errors, see #1051)
         run: uv run mypy src/swarm/ --ignore-missing-imports
         continue-on-error: true
 
+      # GATING. This step used to carry continue-on-error while pip-audit was
+      # not a declared dependency, so it exited 2 with "Failed to spawn" and
+      # reported green on every run without auditing anything (task #1051).
+      # It now fails the build on any advisory that is not explicitly waived in
+      # .github/pip-audit-waivers.txt. Do not re-add continue-on-error: the
+      # correct way to accept a finding is a line in the waiver file, which is
+      # reviewable in a diff.
       - name: Security audit dependencies
-        run: uv run pip-audit
-        continue-on-error: true
+        run: |
+          WAIVERS=$(grep -vE '^\s*(#|$)' .github/pip-audit-waivers.txt \
+            | sed 's/^/--ignore-vuln /' | tr '\n' ' ')
+          echo "Waiving $(grep -cE '^\s*(PYSEC|GHSA)' .github/pip-audit-waivers.txt) known advisories; failing on anything else."
+          uv run pip-audit $WAIVERS
