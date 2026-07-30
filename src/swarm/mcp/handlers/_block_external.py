@@ -86,6 +86,56 @@ TOOLS: list[dict[str, Any]] = [
             ],
         },
     },
+    {
+        "name": "swarm_block_on_operator",
+        "description": (
+            "Declare that your task is waiting on a HUMAN DECISION and cannot "
+            "proceed until the operator acts — merge authorization, a spend "
+            "approval, a product call, a credential only they can rotate. Use "
+            "this the moment you finish everything you can and the only "
+            "remaining step is someone else's to take.\n\n"
+            "WHY THIS EXISTS SEPARATELY: swarm_report_blocker needs an integer "
+            "``blocked_by_task``, and there is no task representing 'the "
+            "operator has not approved this yet' — so this state could not be "
+            "declared at all, and the IdleWatcher nudged workers on a loop for "
+            "something they could not change. Repeated nudges on unactionable "
+            "state train you to ignore nudges, which is exactly when a real one "
+            "gets missed.\n\n"
+            "Different from swarm_block_on_external (waiting on an upstream "
+            "ARTIFACT — a release, a vendor PR) because nobody in the swarm can "
+            "clear this one. It shows on the board as a distinct "
+            "awaiting-operator state so the Queen can batch every such ask into "
+            "one conversation instead of relaying them one at a time.\n\n"
+            "The task stays YOURS and stops being nudged. When the operator "
+            "acts, it returns to ASSIGNED and you pick it up normally — no "
+            "Queen prompt needed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": (
+                        "What decision you need, stated so the operator can act "
+                        "on it without asking a follow-up. Name the artifact: "
+                        "'PR #299 is green, needs merge authorization to main'."
+                    ),
+                },
+                "task_number": {
+                    "type": "integer",
+                    "description": (
+                        "Which of your tasks to block. Required to disambiguate "
+                        "when you own several active tasks."
+                    ),
+                },
+            },
+            "required": ["reason"],
+            "examples": [
+                {"reason": "PR #299 green (CI 30568610413), needs merge authorization to main"},
+                {"task_number": 1065, "reason": "awaiting operator approval to merge"},
+            ],
+        },
+    },
 ]
 
 
@@ -204,4 +254,66 @@ def _handle_block_on_external(
     ]
 
 
-HANDLERS = {"swarm_block_on_external": _handle_block_on_external}
+def _handle_block_on_operator(
+    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+) -> list[TextContent]:
+    """#1070: park an owned task as BLOCKED awaiting a human decision.
+
+    Reuses ``block_on_external``'s transition and target resolution — the
+    state change is identical, only the CAUSE differs — but stamps the
+    canonical ``AWAITING_OPERATOR_REF`` so the board can surface these as
+    their own filterable class.
+    """
+    from swarm.drones.log import LogCategory, SystemAction
+    from swarm.tasks.history import TaskAction
+    from swarm.tasks.task import AWAITING_OPERATOR_REF
+
+    board = d.task_board
+    if not board:
+        return [{"type": "text", "text": "No task board."}]
+    reason = str(args.get("reason") or "").strip()
+    if not reason:
+        return [
+            {
+                "type": "text",
+                "text": (
+                    "Missing 'reason' — say what decision you need, so the "
+                    "operator can act without a follow-up question."
+                ),
+            }
+        ]
+    task, error = _resolve_target(board, worker_name, args.get("task_number"))
+    if error:
+        return error
+    if not board.block_on_external(task.id, worker_name, AWAITING_OPERATOR_REF, reason):
+        return [{"type": "text", "text": f"Could not block #{task.number} (state changed?)."}]
+
+    detail = f"#{task.number} awaiting operator: {reason[:100]}"
+    try:
+        d.drone_log.add(
+            SystemAction.TASK_PARKED,
+            worker_name,
+            detail,
+            category=LogCategory.TASK,
+            is_notification=True,
+        )
+        if getattr(d, "task_history", None) is not None:
+            d.task_history.append(task.id, TaskAction.EDITED, actor=worker_name, detail=detail)
+    except Exception:
+        pass  # audit is best-effort; the transition already succeeded
+    return [
+        {
+            "type": "text",
+            "text": (
+                f"#{task.number} is now AWAITING OPERATOR — still yours, and the "
+                f"idle-watcher will stop nudging you about it. It returns to "
+                f"ASSIGNED when the operator acts."
+            ),
+        }
+    ]
+
+
+HANDLERS = {
+    "swarm_block_on_external": _handle_block_on_external,
+    "swarm_block_on_operator": _handle_block_on_operator,
+}

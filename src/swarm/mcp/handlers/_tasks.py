@@ -53,7 +53,15 @@ TOOLS: list[dict[str, Any]] = [
             "properties": {
                 "filter": {
                     "type": "string",
-                    "enum": ["all", "backlog", "unassigned", "assigned", "active", "mine"],
+                    "enum": [
+                        "all",
+                        "backlog",
+                        "unassigned",
+                        "assigned",
+                        "active",
+                        "awaiting-operator",
+                        "mine",
+                    ],
                     "description": "Which tasks to return (default: 'all').",
                 },
                 "limit": {

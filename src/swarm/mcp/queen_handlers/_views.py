@@ -57,7 +57,8 @@ TOOLS: list[dict[str, Any]] = [
         "name": "queen_view_task_board",
         "description": (
             "Return the task board — open tasks first, then recently-closed. Filter by "
-            "status ('open'|'backlog'|'unassigned'|'assigned'|'active'|'done'|'failed') or "
+            "status ('open'|'awaiting-operator'|'backlog'|'unassigned'|"
+            "'assigned'|'active'|'done'|'failed') or "
             "by assigned worker. Useful when the operator asks 'what's in flight?' or when "
             "reasoning about whether to propose a new assignment."
         ),
@@ -211,7 +212,13 @@ def _handle_view_task_board(
     limit = _clamp(args.get("limit", 50), 50, 1, 500)
 
     tasks = list(d.task_board.all_tasks)
-    if status_filter == "open":
+    if status_filter == "awaiting-operator":
+        # #1070: the Queen's batching view — every task finished as far as the
+        # swarm is concerned and waiting on a HUMAN decision. Surfacing these
+        # as one class is the point: they become a single operator ask instead
+        # of being relayed one at a time.
+        tasks = [t for t in tasks if t.is_awaiting_operator]
+    elif status_filter == "open":
         tasks = [t for t in tasks if t.status.value in _OPEN_STATUSES]
     elif status_filter == "done":
         tasks = [t for t in tasks if t.status.value in _DONE_STATUSES]

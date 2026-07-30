@@ -402,6 +402,41 @@ class TaskBoard(EventEmitter):
             self._notify()
         return True
 
+    def unblock(self, task_id: str) -> bool:
+        """#1070: BLOCKED → ASSIGNED, keeping the owner. THE EXIT.
+
+        A blocker you can set but not clear just moves the problem — #1059
+        found BLOCKED tasks had no exit at all, and this task was filed with
+        an explicit instruction not to repeat that shape. So the
+        awaiting-operator blocker ships with its own release in the same
+        change.
+
+        Distinct from :meth:`release`, which drops the OWNER and returns the
+        task to the pool. Here the same worker resumes: the operator acted,
+        the reason to wait is gone, and the work is still theirs. Landing in
+        ASSIGNED rather than ACTIVE is deliberate — it keeps the #405/#611
+        INV-1 invariant true by construction (this can never mint a second
+        ACTIVE task) and lets the normal momentum machinery pick the task up,
+        which is what "resumes without needing a Queen prompt" means.
+
+        Clears ``block_reason`` and ``external_blocker_ref`` so the task no
+        longer advertises a dependency that has been satisfied.
+        """
+        import time
+
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None or task.status != TaskStatus.BLOCKED:
+                return False
+            task.status = TaskStatus.ASSIGNED
+            task.block_reason = ""
+            task.external_blocker_ref = ""
+            task.updated_at = time.time()
+            self._persist()
+            self._notify()
+            _log.info("task %s unblocked → ASSIGNED (%s)", task_id, task.assigned_worker)
+        return True
+
     def release(self, task_id: str) -> bool:
         """#1059: drop a task's owner from ANY holdable status → UNASSIGNED.
 

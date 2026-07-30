@@ -26,6 +26,14 @@ HOLD_TAG = "hold"  # canonical tag applied when filing a task on HOLD
 # saw the park "not persist". Cleared by ``TaskBoard.activate``, the single
 # re-dispatch chokepoint, so resuming the task is still one normal action.
 PARKED_TAG = "parked"
+# #1070: the canonical ``external_blocker_ref`` value meaning "waiting on a
+# HUMAN DECISION", not on an upstream artifact. swarm_report_blocker requires
+# an integer ``blocked_by_task``, and there is no task representing "the
+# operator has not approved the merge yet" — so hub could not declare the
+# blocker at all and was nudged three times for a state it could not change.
+# A named constant rather than a scattered magic string, and it reuses the
+# existing persisted field so there is no schema migration.
+AWAITING_OPERATOR_REF = "operator-decision"
 HOLD_TAGS: frozenset[str] = frozenset(
     {HOLD_TAG, "dormant", "no-auto-dispatch", "deferred", PARKED_TAG}
 )
@@ -295,6 +303,19 @@ class SwarmTask:
         self.updated_at = time.time()
         if resolution:
             self.resolution = resolution
+
+    @property
+    def is_awaiting_operator(self) -> bool:
+        """#1070: True when this task is BLOCKED on a HUMAN DECISION.
+
+        Distinct from blocked-on-an-upstream-artifact (a package release, a
+        vendor PR) because nobody in the swarm can clear it — only the
+        operator can, and the Queen needs to see these as one batch of asks
+        rather than relaying them one at a time.
+        """
+        return (
+            self.status == TaskStatus.BLOCKED and self.external_blocker_ref == AWAITING_OPERATOR_REF
+        )
 
     @property
     def is_on_hold(self) -> bool:

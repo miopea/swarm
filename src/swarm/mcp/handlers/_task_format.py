@@ -170,6 +170,12 @@ def _apply_task_filter(
         return [t for t in tasks if t.status.value == "unassigned"]
     if filt == "active":
         return [t for t in tasks if t.status.value == "active"]
+    if filt == "awaiting-operator":
+        # #1070: work that is finished as far as the swarm is concerned and
+        # waiting on a HUMAN decision. Its own filter so the Queen can batch
+        # every such ask into one operator conversation instead of relaying
+        # them one at a time — and so nobody mistakes it for stalled work.
+        return [t for t in tasks if t.is_awaiting_operator]
     if filt == "assigned":
         return [t for t in tasks if t.assigned_worker is not None]
     if filt == "mine":
