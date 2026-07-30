@@ -231,6 +231,47 @@ didn't appear in the worker's transcript and the requested change was
 security-sensitive. The DB query would have resolved the ambiguity in
 under a second.
 
+### Worker identity: where it comes from, and when a fix reaches a session
+
+A worker's identity is a free-form string in its MCP URL — `?worker=<name>` in
+`<workdir>/.mcp.json`, written by `daemon._write_worker_mcp_configs`. The server
+canonicalises it against the worker registry (`_resolve_worker_identity`,
+`mcp/server.py`) and every ownership guard is an exact comparison against the
+result. So a worker with the wrong file *is* a different worker, as far as the
+board is concerned.
+
+**A session reads `.mcp.json` at STARTUP.** Writing a corrected file does not
+reach a session that is already running — it keeps transmitting whatever it
+loaded. That produces the confusing state where a fix is verifiably deployed and
+a live worker still cannot close its own tasks.
+
+The two failure modes are NOT equivalent, and this distinction cost most of a day
+(#1035/#1036/#1045/#1055):
+
+| Symptom | Cause | Rescued without a restart? |
+| --- | --- | --- |
+| Wrong **case** (`Platform` vs `platform`) | stale/hand-written file | **Yes** — the server canonicalises case-insensitively |
+| Wrong **identity** (`project-root` for a sculpt-studio session) | no file of its own, so the session inherits a PARENT directory's `.mcp.json` | **No** — the inherited name is a legitimately different registered worker, so it canonicalises cleanly to the wrong one |
+
+Case-correction cannot detect wrong-identity. A worker missing its own file needs
+the file written **and** its session restarted.
+
+Diagnosing it:
+
+```bash
+# What identity does this workdir actually transmit?
+grep -o 'worker=[^"&]*' <workdir>/.mcp.json
+
+# Does a running session predate the fix?  Compare against the file's mtime —
+# a session older than the write is still on the old identity.
+ps -o lstart= -p <claude-pid>; stat -c '%y' <workdir>/.mcp.json
+```
+
+Note `daemon.workers` holds **live PTY processes**, not configured workers — which
+is why identity files are sourced from `config.workers` via `_identity_targets()`
+(#1055). CONFIGURED ≠ RUNNING; `swarm_query_peers` is the source of truth for who
+is actually up.
+
 ### Live MCP tool-surface propagation
 
 Tool-surface changes (new MCP tool added, existing schema/description updated,
