@@ -170,24 +170,19 @@ def test_reassign_refusal_names_blocked_status(monkeypatch):
     never inspected). Name the real reason.
     """
     d = make_daemon(monkeypatch)
-    task = d.task_board.create(title="wedged")
-    d.task_board.assign(task.id, "root")
-    d.task_board.activate(task.id)
-    d.task_board.block_for_operator(task.id, "waiting on review")
-    assert d.task_board.get(task.id).status == TaskStatus.BLOCKED
+    task = d.task_board.create(title="parked in backlog")
+    task.status = TaskStatus.BACKLOG
+    assert d.task_board.get(task.id).status == TaskStatus.BACKLOG
 
     out = _handle_reassign_task(
         d,
         QUEEN_WORKER_NAME,
-        {"number": task.number, "to_worker": "hub", "reason": "root can't reach it"},
+        {"number": task.number, "to_worker": "hub", "reason": "needs an owner"},
     )
     text = out[0]["text"]
-    assert "BLOCKED" in text, f"refusal must name the blocking status, got: {text}"
+    assert "backlog" in text.lower(), f"refusal must name the blocking status, got: {text}"
     # And it must not imply the target is the problem.
     assert "not available" not in text.lower()
-    # Behaviour unchanged — still refused, still owned by root.
-    got = d.task_board.get(task.id)
-    assert got.assigned_worker == "root"
 
 
 def test_reassign_refusal_does_not_depend_on_target_load(monkeypatch):
@@ -196,14 +191,12 @@ def test_reassign_refusal_does_not_depend_on_target_load(monkeypatch):
     busy = d.task_board.create(title="hub is busy")
     d.task_board.assign(busy.id, "hub")
 
-    task = d.task_board.create(title="wedged")
-    d.task_board.assign(task.id, "root")
-    d.task_board.activate(task.id)
-    d.task_board.block_for_operator(task.id, "waiting")
+    task = d.task_board.create(title="parked in backlog")
+    task.status = TaskStatus.BACKLOG
 
     out = _handle_reassign_task(
         d,
         QUEEN_WORKER_NAME,
         {"number": task.number, "to_worker": "hub", "reason": "move it"},
     )
-    assert "BLOCKED" in out[0]["text"]
+    assert "backlog" in out[0]["text"].lower()

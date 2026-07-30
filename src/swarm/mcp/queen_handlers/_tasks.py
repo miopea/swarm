@@ -18,10 +18,13 @@ import asyncio
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any
 
+from swarm.logging import get_logger
 from swarm.mcp._arg_types import QueenForceCompleteTaskArgs, QueenReassignTaskArgs
 from swarm.mcp.queen_handlers._common import _assert_queen
 from swarm.mcp.types import TextContent
 from swarm.tasks.task import TaskStatus
+
+_log = get_logger("mcp.queen.tasks")
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -191,6 +194,29 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+def _clear_blockers(d: SwarmDaemon, task_number: int) -> int:
+    """#1059: drop BlockerStore rows for a task being released or reassigned.
+
+    A BLOCKED task can carry rows filed by more than one worker, so this uses
+    ``clear_for_task`` (all workers) rather than ``clear`` (one pair) — the
+    same call the coordinator's force-complete path already makes before
+    closing a wedged task. Without it a released task arrives at its new
+    owner still carrying the old owner's blocker, and the IdleWatcher goes on
+    suppressing nudges for a dependency that is no longer anyone's.
+
+    Best-effort: the release itself is the load-bearing transition, and a
+    store that is absent (tests, older DBs) must not fail the move.
+    """
+    store = getattr(d, "blocker_store", None)
+    if store is None:
+        return 0
+    try:
+        return int(store.clear_for_task(task_number))
+    except Exception:
+        _log.warning("failed clearing blocker rows for #%s", task_number, exc_info=True)
+        return 0
+
+
 def _resolve_task(d: SwarmDaemon, args: dict[str, Any]) -> SwarmTask | list[TextContent]:
     """Look up a task by ``number`` or ``task_id``. Return the task or an error payload."""
     number = args.get("number")
@@ -251,10 +277,14 @@ def _why_unassignable(d: SwarmDaemon, task_id: str) -> str:
         return "the task no longer exists."
     status = task.status.value
     if task.status == TaskStatus.BLOCKED:
+        # #1059 made BLOCKED releasable, so reaching here with one now means
+        # the release step itself failed rather than the old dead-end. Do not
+        # restore the previous text ("a blocked task cannot be released or
+        # moved") — that is no longer true.
         return (
             f"#{task.number} is BLOCKED"
             + (f" ({task.block_reason})" if task.block_reason else "")
-            + " — a blocked task cannot be released or moved. Unblock it first."
+            + " and could not be released — unexpected; check the daemon log."
         )
     if task.is_on_hold:
         return f"#{task.number} is on HOLD — clear the hold tag before assigning it."
@@ -289,8 +319,23 @@ def _handle_reassign_task(
         return [{"type": "text", "text": f"Task #{task.number} already assigned to {to_worker}."}]
 
     if task.assigned_worker:
-        # Move: unassign first so board.assign accepts (it checks is_available).
-        d.task_board.unassign(task.id)
+        # #1059: release first so board.assign accepts (it checks is_available).
+        # This used to call board.unassign, which requires ASSIGNED/ACTIVE — so
+        # on a BLOCKED task it returned False, THE RESULT WAS DISCARDED, the
+        # task stayed owned, and assign then refused with a message about
+        # availability. board.release accepts any holdable status, and the
+        # result is now checked instead of swallowed.
+        if not d.task_board.release(task.id):
+            return [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Could not release #{task.number} from {prev} "
+                        f"(status={task.status.value}). Nothing changed."
+                    ),
+                }
+            ]
+        _clear_blockers(d, task.number)
     elif task.is_on_hold:
         # #939: assigning an UNASSIGNED, HOLD-parked task is a plain assign +
         # endorsement — clear the HOLD so board.assign's is_available gate

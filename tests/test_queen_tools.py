@@ -297,7 +297,7 @@ class TestReassignTask:
             QUEEN_WORKER_NAME,
             {"to_worker": "bob", "reason": "context", "number": 1},
         )
-        daemon.task_board.unassign.assert_called_once_with("task-1")
+        daemon.task_board.release.assert_called_once_with("task-1")
         daemon.task_board.assign.assert_called_once_with("task-1", "bob")
         assert "Reassigned #1" in _text(result)
         assert "ASSIGNED, not started" in _text(result)

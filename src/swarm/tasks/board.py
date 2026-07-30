@@ -402,6 +402,58 @@ class TaskBoard(EventEmitter):
             self._notify()
         return True
 
+    def release(self, task_id: str) -> bool:
+        """#1059: drop a task's owner from ANY holdable status → UNASSIGNED.
+
+        The board had no supported way to move an owned, non-UNASSIGNED task
+        to another worker. Four verbs refused a BLOCKED one for four
+        *different* reasons — ``assign`` needs UNASSIGNED, ``start_task``
+        needs ASSIGNED, ``unassign`` needs ASSIGNED/ACTIVE, and no
+        worker-side tool releases ownership at all — which is why it read as
+        several unrelated bugs. The only escape was force-complete → reopen
+        → approve → reassign, and step one writes a COMPLETED history entry
+        for work that was never done.
+
+        Deliberately a NEW verb rather than widening ``unassign``: that one
+        is called from the dashboard route and ``TaskManager.unassign_task``,
+        both of which mean "put this in-flight work back in the pool" and
+        should keep refusing a BLOCKED task. ``release`` means "this task is
+        being taken off its owner regardless of what it was doing", which is
+        a different intent and deserves its own name.
+
+        Terminal tasks are refused — a DONE/FAILED task has no owner to
+        release and reopening is the verb for that. Does NOT touch
+        ``block_reason`` / ``external_blocker_ref``: the task keeps its
+        record of why it stalled, and the caller clears the BlockerStore
+        rows (the board has no handle on that store).
+
+        INV-1 is preserved by construction: this only ever moves a task OUT
+        of ACTIVE, so it cannot create a second active task for any worker.
+        """
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
+            if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+                return False
+            if not task.assigned_worker and task.status == TaskStatus.UNASSIGNED:
+                return False  # nothing to release — already ownerless
+            prev_owner = task.assigned_worker
+            prev_status = task.status.value
+            # #1015: a released task is no longer parked BY its old owner.
+            if PARKED_TAG in task.tags:
+                task.tags = [t for t in task.tags if t != PARKED_TAG]
+            task.unassign()
+            _log.info(
+                "task %s released from %s (was %s)",
+                task_id,
+                prev_owner or "nobody",
+                prev_status,
+            )
+            self._persist()
+            self._notify()
+        return True
+
     def set_jira_key(self, task_id: str, jira_key: str) -> bool:
         """Set the jira_key on an existing task. Thread-safe."""
         import time
@@ -536,13 +588,18 @@ class TaskBoard(EventEmitter):
         ``reason``. BLOCKED is off-active: it's excluded from
         ``active_tasks`` so the IdleWatcher never nudges it, yet it stays in
         ``all_tasks`` so it remains visible/tracked (not completed/archived).
-        #1057: unparking is NOT currently reachable as this once claimed.
-        ``task.start()`` does clear the watch reference, and ``activate`` has
-        no status gate — but both of ``activate``'s call sites are gated
-        upstream on ASSIGNED (``start_task`` and the state-tracker promotion),
-        so nothing can take a BLOCKED task back to ACTIVE. ``board.unassign``
-        refuses it too (needs ASSIGNED/ACTIVE), so a task parked here can
-        currently be neither resumed nor released. Tracked as its own task.
+        Getting a task back OUT of BLOCKED (#1059): use :meth:`release`,
+        which accepts any holdable status and returns the task to UNASSIGNED
+        with no owner — then assign it as normal. The Queen's
+        ``queen_reassign_task`` does exactly that in one call.
+
+        What does NOT work, and did not before either: resuming a BLOCKED
+        task in place, back to ACTIVE for the SAME owner. ``activate`` has no
+        status gate and would accept it, but both call sites are gated
+        upstream on ASSIGNED (``start_task``, and the state-tracker
+        promotion). An earlier version of this docstring claimed that path
+        as "the normal operator re-dispatch"; it was never reachable. Release
+        and re-assign is the supported route.
 
         Rejects (returns False) unless the task exists, is owned by
         *worker_name*, and is ASSIGNED or ACTIVE — no cross-worker blocking,
@@ -577,13 +634,12 @@ class TaskBoard(EventEmitter):
         stable. Returns False if the task no longer exists or isn't
         ACTIVE (the stall resolved on its own — park is moot).
 
-        #1057: unparking is NOT currently reachable as described. ``activate``
-        itself has no status gate and would accept a BLOCKED task, but both of
-        its call sites are gated upstream on ASSIGNED (``start_task`` and the
-        state-tracker promotion), so nothing in the system can take a BLOCKED
-        task back to ACTIVE. ``board.unassign`` also refuses it (it requires
-        ASSIGNED/ACTIVE), which is why a BLOCKED task can be neither resumed
-        nor released today. Tracked as its own task — do not paper over it here.
+        Getting a task back OUT of BLOCKED (#1059): :meth:`release` accepts
+        any holdable status and returns it to UNASSIGNED with no owner, ready
+        to assign again. Resuming in place — BLOCKED straight back to ACTIVE
+        for the same owner — is still not reachable: ``activate`` would take
+        it, but both call sites are gated upstream on ASSIGNED. Release and
+        re-assign is the supported route.
         """
         with self._lock:
             task = self._tasks.get(task_id)
