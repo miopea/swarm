@@ -138,6 +138,56 @@ TOOLS: list[dict[str, Any]] = [
             ],
         },
     },
+    {
+        "name": "queen_edit_task",
+        "description": (
+            "Correct a filed task's description, title, or acceptance criteria. "
+            "Use this when requirements change after filing, or when a worker "
+            "sends you an addendum — writing it into the task means the next "
+            "reader sees the truth instead of the correction living only in a "
+            "message thread. Prefer editing over re-filing: a new task loses "
+            "the original's history, number and cross-references.\n\n"
+            "You can edit ANY non-terminal task regardless of owner — that is "
+            "oversight, and it is why you have acceptance_criteria here and "
+            "workers do not: the verifier grades a completion against those, so "
+            "an assignee editing its own would be self-grading. Completed and "
+            "failed tasks are refused; editing closed work rewrites the record. "
+            "Every edit is recorded in task history naming what changed."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "number": {"type": "integer", "description": "Task number.  Preferred."},
+                "task_id": {
+                    "type": "string",
+                    "description": "Task id.  Use if only the id is known.",
+                },
+                "description": {
+                    "type": "string",
+                    "description": (
+                        "New full description. REPLACES the old one — carry over "
+                        "anything from the original worth keeping."
+                    ),
+                },
+                "title": {"type": "string", "description": "New short title."},
+                "acceptance_criteria": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Replacement criteria list. The verifier grades against "
+                        "these, so changing them changes how the task is judged."
+                    ),
+                },
+            },
+            "examples": [
+                {
+                    "number": 1059,
+                    "description": "Original scope, plus: use #1013 as the acceptance fixture.",
+                },
+                {"number": 1070, "acceptance_criteria": ["Worker can declare a human blocker"]},
+            ],
+        },
+    },
 ]
 
 
@@ -342,7 +392,71 @@ def _handle_force_complete_task(
     ]
 
 
+def _handle_edit_task(d: SwarmDaemon, worker_name: str, args: dict[str, Any]) -> list[TextContent]:
+    """#1060: the Queen's edit verb — description/title plus acceptance_criteria.
+
+    She gets ``acceptance_criteria`` and workers do not, deliberately: the
+    verifier drone grades a completion against those criteria, so an assignee
+    editing its own would be self-grading. The Queen is oversight rather than
+    the graded party, which is also how today's addenda actually arrived —
+    Queen-authored, worker-applied.
+    """
+    err = _assert_queen(worker_name)
+    if err:
+        return err
+    target = _resolve_task(d, args)
+    if isinstance(target, list):
+        return target
+    task = target
+
+    if task.status in {TaskStatus.DONE, TaskStatus.FAILED}:
+        return [
+            {
+                "type": "text",
+                "text": (
+                    f"Task #{task.number} is {task.status.value} — editing closed work "
+                    f"rewrites the record rather than correcting live requirements."
+                ),
+            }
+        ]
+
+    description = args.get("description")
+    title = args.get("title")
+    criteria = args.get("acceptance_criteria")
+    if description is None and title is None and criteria is None:
+        return [
+            {
+                "type": "text",
+                "text": "Pass 'description', 'title' and/or 'acceptance_criteria'.",
+            }
+        ]
+    cleaned = None
+    if criteria is not None:
+        cleaned = [str(c).strip() for c in criteria if str(c).strip()]
+
+    d.edit_task(
+        task.id,
+        title=title,
+        description=description,
+        acceptance_criteria=cleaned,
+        actor="queen",
+    )
+    changed = ", ".join(
+        n
+        for n, v in (
+            ("title", title),
+            ("description", description),
+            ("acceptance_criteria", criteria),
+        )
+        if v is not None
+    )
+    return [
+        {"type": "text", "text": f"Task #{task.number} updated ({changed}). Recorded in history."}
+    ]
+
+
 HANDLERS = {
     "queen_reassign_task": _handle_reassign_task,
     "queen_force_complete_task": _handle_force_complete_task,
+    "queen_edit_task": _handle_edit_task,
 }

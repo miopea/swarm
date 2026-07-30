@@ -26,6 +26,50 @@ if TYPE_CHECKING:
 
 _log = get_logger("server.tasks")
 
+# How much of a replaced value to keep in the audit trail. Long enough to
+# recognise what was overwritten, short enough that task_history stays a log
+# rather than a second copy of every task body.
+_EDIT_PREVIEW_CHARS = 80
+
+
+def _preview(value: str) -> str:
+    """One-line, length-capped rendering of a field value for the audit trail."""
+    flat = " ".join(str(value).split())
+    if len(flat) <= _EDIT_PREVIEW_CHARS:
+        return flat
+    return flat[:_EDIT_PREVIEW_CHARS] + "…"
+
+
+def _describe_edit(
+    before: SwarmTask,
+    *,
+    title: str | None = None,
+    description: str | None = None,
+    acceptance_criteria: list[str] | None = None,
+) -> str:
+    """#1060: summarise an edit for ``task_history``.
+
+    ``edit_task`` always recorded ``TaskAction.EDITED`` but with an EMPTY
+    detail, so the trail proved that *something* changed and never what. An
+    edit verb that can silently rewrite requirements is a worse hazard than
+    the stale description it fixes, so the entry names each field and the
+    value it replaced.
+
+    Only the fields the MCP edit surface can actually change are described —
+    the other ten ``edit_task`` parameters stay deliberately unexposed.
+    """
+    parts: list[str] = []
+    if title is not None and title != before.title:
+        parts.append(f"title: {_preview(before.title)!r} -> {_preview(title)!r}")
+    if description is not None and description != before.description:
+        parts.append(f"description replaced (was: {_preview(before.description)!r})")
+    if acceptance_criteria is not None and acceptance_criteria != before.acceptance_criteria:
+        parts.append(
+            f"acceptance_criteria: {len(before.acceptance_criteria)} -> "
+            f"{len(acceptance_criteria)} item(s)"
+        )
+    return "; ".join(parts)
+
 
 class TaskManager:
     """Handles pure task lifecycle operations: create, edit, status transitions.
@@ -228,7 +272,19 @@ class TaskManager:
         actor: str = "user",
     ) -> bool:
         """Edit a task. Raises if not found."""
-        self.require_task(task_id)
+        before = self.require_task(task_id)
+        # #1060: capture what is about to change BEFORE the update, so the
+        # history entry can name it. The append below already existed but
+        # carried no detail — an edit was recorded without being described,
+        # which is the silent-requirement-rewrite hazard the edit verb has to
+        # avoid being. Previews are truncated: history is an audit trail, not
+        # a second copy of the task body.
+        changes = _describe_edit(
+            before,
+            title=title,
+            description=description,
+            acceptance_criteria=acceptance_criteria,
+        )
         result = self.task_board.update(
             task_id,
             title=title,
@@ -246,7 +302,7 @@ class TaskManager:
             effort_tier=effort_tier,
         )
         if result:
-            self.task_history.append(task_id, TaskAction.EDITED, actor=actor)
+            self.task_history.append(task_id, TaskAction.EDITED, actor=actor, detail=changes)
         return result
 
     async def apply_synthesized_criteria(self, task: SwarmTask, actor: str = "system") -> None:

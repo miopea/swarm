@@ -56,6 +56,19 @@ class ReportBlockerArgs(TypedDict, total=False):
     reason: str
 
 
+class EditTaskArgs(TypedDict, total=False):
+    """``swarm_edit_task`` — correct requirements on a task you own (#1060).
+
+    Deliberately narrower than ``daemon.edit_task``'s thirteen fields:
+    ``acceptance_criteria`` is Queen-only (self-grading), and assignment /
+    priority / tags belong to other verbs.
+    """
+
+    number: int
+    description: str
+    title: str
+
+
 class ParkTaskArgs(TypedDict, total=False):
     """``swarm_park_task`` — voluntarily park an active task."""
 

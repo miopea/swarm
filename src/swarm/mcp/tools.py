@@ -29,6 +29,8 @@ from swarm.mcp.handlers._blockers import TOOLS as _BLOCKER_T
 from swarm.mcp.handlers._create import HANDLERS as _CREATE_H
 from swarm.mcp.handlers._create import TOOLS as _CREATE_T
 from swarm.mcp.handlers._create import _handle_create_task  # noqa: F401
+from swarm.mcp.handlers._edit import HANDLERS as _EDIT_H
+from swarm.mcp.handlers._edit import TOOLS as _EDIT_T
 from swarm.mcp.handlers._email import HANDLERS as _EMAIL_H
 from swarm.mcp.handlers._email import TOOLS as _EMAIL_T
 from swarm.mcp.handlers._files import HANDLERS as _FILES_H
@@ -133,6 +135,7 @@ TOOLS: list[dict[str, Any]] = [
     *_EMAIL_T,
     *_TASKS_T,
     *_CREATE_T,
+    *_EDIT_T,
     *_FILES_T,
     *_LEARN_T,
     *_PB_T,
@@ -149,6 +152,7 @@ _HANDLERS = {
     **_EMAIL_H,
     **_TASKS_H,
     **_CREATE_H,
+    **_EDIT_H,
     **_FILES_H,
     **_LEARN_H,
     **_PB_H,
