@@ -371,7 +371,10 @@ class IdleWatcher:
         """
         bucketed: dict[str, list] = {}
         for t in self._task_board.active_tasks:
-            if t.assigned_worker:
+            # #1015: a deliberately-parked task is not work the worker is
+            # neglecting — it's work they set down on purpose. Nudging about
+            # it is exactly the "repeated idle-watcher nudges" symptom.
+            if t.assigned_worker and not t.is_on_hold:
                 bucketed.setdefault(t.assigned_worker, []).append(t)
         return bucketed
 

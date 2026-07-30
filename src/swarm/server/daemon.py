@@ -57,6 +57,19 @@ from swarm.worker.worker import Worker, WorkerState
 
 _log = get_logger("server.daemon")
 
+
+def _worker_dir(w: Worker) -> Path:
+    """A worker's workdir as a real filesystem path.
+
+    Worker paths are operator-authored and routinely use ``~`` — 8 of 24
+    on the box that reported #1045. ``Path("~/proj")`` is a *relative*
+    path whose first component is literally ``~``, so every ``is_dir()``
+    guard over an unexpanded worker path answers False and silently
+    skips that worker. Mirrors ``WorkerConfig.resolved_path``.
+    """
+    return Path(w.path).expanduser()
+
+
 _QUEEN_MAX_CONCURRENT = 2
 _USAGE_REFRESH_INTERVAL = 10  # seconds
 _HEARTBEAT_INITIAL_DELAY = 2  # seconds
@@ -1489,7 +1502,14 @@ class SwarmDaemon(EventEmitter):
         # Claude Code reads headers from .mcp.json on connect.
         token = get_or_create_mcp_token()
         for w in self.workers:
-            worker_dir = Path(w.path)
+            # #1045: ``Path("~/proj").is_dir()`` is False — a tilde path is a
+            # literal relative dir named "~", not the home directory. Without
+            # expanduser every ~-configured worker was silently skipped, so it
+            # never received its identity file and — worse — an existing stale
+            # one was never CORRECTED. That is how rcg-platform kept a
+            # hand-written ``?worker=Platform`` while the board stored
+            # ``platform``: 8 of 24 workers on the reporting box were skipped.
+            worker_dir = _worker_dir(w)
             if not worker_dir.is_dir():
                 continue
             # ``.mcp.json`` is Claude Code's config format. Non-hooks providers
@@ -1531,7 +1551,7 @@ class SwarmDaemon(EventEmitter):
 
         store = getattr(self, "playbook_store", None)
         for w in self.workers:
-            worker_dir = Path(w.path)
+            worker_dir = _worker_dir(w)
             if not worker_dir.is_dir():
                 continue
             # ``.claude/commands`` + ``.claude/skills`` are Claude Code paths.
@@ -1586,7 +1606,7 @@ class SwarmDaemon(EventEmitter):
                 wt_map: dict[str, Path] = {}
                 for w in self.workers:
                     if w.repo_path:
-                        wt_map[w.name] = Path(w.path)
+                        wt_map[w.name] = _worker_dir(w)
                 if not wt_map:
                     if self._conflicts:
                         self._conflicts = []
@@ -1618,7 +1638,7 @@ class SwarmDaemon(EventEmitter):
         if self.file_ownership.mode == OwnershipMode.OFF:
             return
 
-        eligible = [(w.name, Path(w.path)) for w in self.workers if Path(w.path).is_dir()]
+        eligible = [(w.name, d) for w in self.workers if (d := _worker_dir(w)).is_dir()]
         if not eligible:
             return
 

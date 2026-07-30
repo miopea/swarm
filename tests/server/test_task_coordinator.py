@@ -516,13 +516,17 @@ class TestStartTaskSendFailureHandling:
         # why the task didn't bounce.
         buzz = [e for e in d.drone_log.entries if e.action == SystemAction.TASK_SEND_FAILED]
         assert len(buzz) == 1
-        assert "[auto-handoff: kept ASSIGNED for retry]" in buzz[0].detail
+        assert "kept ASSIGNED to rcg-networks for retry" in buzz[0].detail
 
     @pytest.mark.asyncio
-    async def test_send_failure_unassigns_regular_task(self, monkeypatch) -> None:
-        """Inverse case: a non-handoff task still unassigns on send failure
-        (today's behaviour preserved). Only the "auto-handoff" tag triggers
-        the new keep-ASSIGNED branch."""
+    async def test_send_failure_keeps_regular_task_assigned(self, monkeypatch) -> None:
+        """#1045 generalised #527 to EVERY assignment.
+
+        A send failure is a delivery failure, not an assignment decision.
+        Requeueing a plain task silently discarded the routing while the
+        caller saw success — the mechanism behind #1039/#1044/#1045/#1048
+        and #980 (twice), none of which carried the auto-handoff tag.
+        Genuine worker death is still handled by ``unassign_worker``."""
         from swarm.drones.log import SystemAction
         from swarm.pty.process import ProcessError
         from swarm.tasks.history import TaskAction
@@ -555,13 +559,12 @@ class TestStartTaskSendFailureHandling:
         ok = await d.tasks_coord.start_task(task.id)
 
         assert ok is False
-        # Status reverted to UNASSIGNED (back in the pending pool) — the
-        # pre-#527 behaviour the fix intentionally preserves for
-        # non-handoff tasks.
+        # Assignment survives — the board stays truthful and the
+        # IdleWatcher retries delivery once the PTY recovers.
         reloaded = d.task_board.get(task.id)
-        assert reloaded.status == TaskStatus.UNASSIGNED
+        assert reloaded.status == TaskStatus.ASSIGNED
         actions = [a for (_, a, _, _) in history_calls]
-        assert TaskAction.UNASSIGNED in actions
+        assert TaskAction.UNASSIGNED not in actions
         # Buzz entry still fires; detail does NOT contain the auto-handoff
         # marker (since this isn't an auto-handoff task).
         buzz = [e for e in d.drone_log.entries if e.action == SystemAction.TASK_SEND_FAILED]

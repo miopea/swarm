@@ -260,31 +260,35 @@ class TaskCoordinator:
             # retries delivery once the recipient's PTY recovers. The
             # auto-spawn's _spawned_msg_ids dedup prevents re-spawning
             # the same handoff in the interim.
+            # #1045 generalises that from auto-handoffs to EVERY assignment.
+            # A send failure is a DELIVERY failure, not an assignment
+            # decision: the assignment already succeeded and was logged, and
+            # silently rewriting board state because a PTY write failed is
+            # precisely what made the board untrustworthy for planning.
+            # Observed on #1039, #1044, #1045, #1048 and twice on #980 —
+            # each recorded only as "send failed to <worker> — returned to
+            # pending" while the caller saw success. Note #980 carried no
+            # ``target_worker``, so narrowing this to explicitly-targeted
+            # tasks would have left a reported case broken.
+            #
+            # Genuine worker DEATH is still handled — and better — by
+            # ``TaskBoard.unassign_worker`` from the poll dispatcher's
+            # dead-worker cleanup, which is the deliberate "return this
+            # work to the pool" mechanism. A transient send failure is not
+            # that, and the operator is told loudly either way via the
+            # TASK_SEND_FAILED notification below.
             is_auto_handoff = "auto-handoff" in (task.tags or [])
-            if is_auto_handoff:
-                d.task_history.append(
-                    task_id,
-                    TaskAction.EDITED,
-                    actor="system",
-                    detail=(
-                        f"send failed to {worker_name} — keeping ASSIGNED "
-                        f"(auto-handoff tasks are not requeueable)"
-                    ),
-                )
-            else:
-                d.task_board.unassign(task_id)
-                d.task_history.append(
-                    task_id,
-                    TaskAction.UNASSIGNED,
-                    actor="system",
-                    detail=f"send failed to {worker_name} — returned to pending",
-                )
+            why = "auto-handoff" if is_auto_handoff else "delivery failure is not a requeue"
+            d.task_history.append(
+                task_id,
+                TaskAction.EDITED,
+                actor="system",
+                detail=f"send failed to {worker_name} — keeping ASSIGNED ({why})",
+            )
             d.broadcast_ws(
                 {"type": "task_send_failed", "worker": worker_name, "task_title": task.title}
             )
-            buzz_detail = task.title + (
-                " [auto-handoff: kept ASSIGNED for retry]" if is_auto_handoff else ""
-            )
+            buzz_detail = f"{task.title} [kept ASSIGNED to {worker_name} for retry]"
             d.drone_log.add(
                 SystemAction.TASK_SEND_FAILED,
                 worker_name,
@@ -815,7 +819,11 @@ class TaskCoordinator:
                     d.task_board.active_tasks_for_worker(worker_name),
                     key=lambda t: t.number,
                 )
-                if t.status == TaskStatus.ASSIGNED
+                # #1015: a task the worker deliberately parked is not queued
+                # work. Without the hold check this chain re-activated the
+                # very task that was just set down, so the park never
+                # survived a cycle. ``activate`` clears the marker on resume.
+                if t.status == TaskStatus.ASSIGNED and not t.is_on_hold
             ),
             None,
         )

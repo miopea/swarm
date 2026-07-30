@@ -42,10 +42,14 @@ def _skip_call(drone_log: MagicMock, action: Any) -> Any:
     return None
 
 
-def _task(number: int, task_id: str) -> MagicMock:
+def _task(number: int, task_id: str, *, on_hold: bool = False) -> MagicMock:
     t = MagicMock()
     t.number = number
     t.id = task_id
+    # Must be a real bool: the sweep skips held tasks (#1015 — a parked
+    # task is a deliberate set-down, not neglected work), and a bare
+    # MagicMock attribute is truthy, which would hide every task.
+    t.is_on_hold = on_hold
     return t
 
 

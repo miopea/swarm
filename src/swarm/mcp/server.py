@@ -405,6 +405,72 @@ async def handle_message(request: web.Request) -> web.Response:
 # ---------------------------------------------------------------------------
 
 
+# Identities that are legitimate MCP callers but never appear in the
+# worker registry.  The Queen reaches this same endpoint from her own
+# workdir with ``?worker=queen`` and is only in ``daemon.workers`` while
+# her PTY happens to be running.
+_RESERVED_IDENTITIES = frozenset({"queen"})
+
+
+def _resolve_worker_identity(daemon: Any, raw: str) -> str:
+    """Canonicalise the caller identity against the worker registry.
+
+    Identity arrives as a free-form string in the MCP URL
+    (``?worker=<name>``), written into each worker's ``.mcp.json`` by
+    ``daemon._write_worker_mcp_configs``.  Nothing downstream re-checked
+    it, and every ownership guard is an exact string comparison — so a
+    stale or wrong-cased file silently turned a legitimate worker into
+    an identity that owns nothing.
+
+    #1045: rcg-platform's ``.mcp.json`` said ``worker=Platform`` while
+    the board stores ``platform``.  Every attempt to close a
+    PRE-ASSIGNED task was rejected with "not assigned to you", naming
+    the caller's own worker on both sides of the message.  The
+    UNASSIGNED self-close path compares nothing, so it accepted the
+    bogus name and stamped it onto the board — ``#1044`` was the only
+    task among 1000+ owned by ``Platform``, which is what made the bug
+    look intermittent rather than deterministic.
+
+    Matching is case-insensitive and returns the REGISTRY spelling, so
+    downstream comparisons stay exact and the ownership guard stays
+    strict.  A name that resolves to no worker is reported as
+    ``unknown`` rather than passed through: an unregistered identity can
+    never legitimately own a task, and the handlers already have a
+    fail-fast diagnostic for ``unknown`` that points at the MCP URL
+    instead of blaming the assignment.
+    """
+    name = (raw or "").strip()
+    if not name:
+        return "unknown"
+
+    known: dict[str, str] = {}
+    for w in getattr(daemon, "workers", None) or ():
+        known.setdefault(w.name.casefold(), w.name)
+    cfg = getattr(daemon, "config", None)
+    for w in getattr(cfg, "workers", None) or ():
+        known.setdefault(w.name.casefold(), w.name)
+
+    folded = name.casefold()
+    canonical = known.get(folded)
+    if canonical is not None:
+        if canonical != name:
+            _log.warning(
+                "MCP caller identity %r canonicalised to registry name %r — "
+                "fix the ?worker= value in that worker's .mcp.json",
+                name,
+                canonical,
+            )
+        return canonical
+    if folded in _RESERVED_IDENTITIES:
+        return folded
+    _log.warning(
+        "MCP caller identity %r matches no registered worker — treating as "
+        "unknown so ownership checks fail loudly rather than silently",
+        name,
+    )
+    return "unknown"
+
+
 def _dispatch(
     request: web.Request,
     worker_name: str,
@@ -415,6 +481,10 @@ def _dispatch(
     from swarm.server.helpers import get_daemon
 
     daemon = get_daemon(request)
+
+    # The URL-supplied name is untrusted — canonicalise it against the
+    # registry before any ownership comparison downstream sees it.
+    worker_name = _resolve_worker_identity(daemon, worker_name)
 
     # Track last MCP activity per worker for the IdleWatcher's
     # tools-dropped detection (task #257).  Skip the sentinel

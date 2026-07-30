@@ -2738,8 +2738,15 @@ async def test_apply_config_update_workflows_invalid_value(daemon, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_start_task_send_failure_undoes_assignment(daemon):
-    """start_task undoes assignment when send fails."""
+async def test_start_task_send_failure_keeps_assignment(daemon):
+    """#1045: a send failure must NOT undo the assignment.
+
+    Delivery failing is not an assignment decision. The old behaviour
+    silently returned the task to the pending pool while the caller saw
+    success, which is how #1039/#1044/#1045/#1048 — and #980 twice —
+    reverted to unassigned with no error anywhere. Genuine worker death
+    is handled separately and deliberately by ``unassign_worker``.
+    """
     task = daemon.create_task(title="Test task", description="Important work")
     daemon.workers[0].state = WorkerState.RESTING
     await daemon.assign_task(task.id, "api")
@@ -2754,9 +2761,10 @@ async def test_start_task_send_failure_undoes_assignment(daemon):
 
     assert result is False
     reloaded = daemon.task_board.get(task.id)
-    # Task should be unassigned (returned to pending)
-    assert reloaded.status == TaskStatus.UNASSIGNED
-    assert reloaded.assigned_worker is None
+    # The assignment survives a delivery failure — the IdleWatcher retries
+    # once the PTY recovers.
+    assert reloaded.status == TaskStatus.ASSIGNED
+    assert reloaded.assigned_worker == "api"
     # Should have broadcast task_send_failed
     calls = [c[0][0] for c in daemon.broadcast_ws.call_args_list]
     assert any(c.get("type") == "task_send_failed" for c in calls)

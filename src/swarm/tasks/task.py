@@ -18,7 +18,17 @@ _log = logging.getLogger("swarm.tasks.task")
 # item (e.g. a "HOLD until upstream ships" dependency bump) stays on the
 # board without being grabbed by a mismatched worker. Matched case-folded.
 HOLD_TAG = "hold"  # canonical tag applied when filing a task on HOLD
-HOLD_TAGS: frozenset[str] = frozenset({HOLD_TAG, "dormant", "no-auto-dispatch", "deferred"})
+# #1015/#1045: applied by ``TaskBoard.park`` when a worker deliberately sets
+# its OWN active task down. Park moves ACTIVE → ASSIGNED and keeps the owner,
+# which made the task indistinguishable from freshly-queued work — so the
+# momentum machinery (``auto_start_next_assigned``, the IdleWatcher) picked
+# the very same task straight back up and re-activated it, and the operator
+# saw the park "not persist". Cleared by ``TaskBoard.activate``, the single
+# re-dispatch chokepoint, so resuming the task is still one normal action.
+PARKED_TAG = "parked"
+HOLD_TAGS: frozenset[str] = frozenset(
+    {HOLD_TAG, "dormant", "no-auto-dispatch", "deferred", PARKED_TAG}
+)
 
 
 class TaskStatus(Enum):

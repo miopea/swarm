@@ -54,6 +54,9 @@ def _task(number: int, task_id: str) -> MagicMock:
     t.id = task_id
     t.status = MagicMock()
     t.status.value = "active"
+    # Real bool — the sweep skips held tasks (#1015) and a bare MagicMock
+    # attribute is truthy, which would hide every task from the bucketing.
+    t.is_on_hold = False
     return t
 
 

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
-from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus, TaskType
+from swarm.tasks.task import PARKED_TAG, SwarmTask, TaskPriority, TaskStatus, TaskType
 
 if TYPE_CHECKING:
     from swarm.tasks.store import TaskStore
@@ -469,6 +469,12 @@ class TaskBoard(EventEmitter):
                         other.status = TaskStatus.ASSIGNED
                         other.updated_at = time.time()
                         demoted.append(other.id)
+            # #1015: resuming a parked task clears its set-down marker. This
+            # is the single re-dispatch chokepoint, so an operator re-dispatch
+            # or a worker picking the task back up both un-park it — the
+            # suppression is a pause, not a one-way door.
+            if PARKED_TAG in task.tags:
+                task.tags = [t for t in task.tags if t != PARKED_TAG]
             task.start()
             self._persist()
             self._notify()
@@ -506,6 +512,12 @@ class TaskBoard(EventEmitter):
             ):
                 return False
             task.status = TaskStatus.ASSIGNED
+            # #1015: mark it as a deliberate set-down. Without this the task
+            # is indistinguishable from freshly-queued ASSIGNED work and the
+            # momentum machinery re-activates it within one cycle — the park
+            # never survives. ``activate`` clears the tag on resume.
+            if PARKED_TAG not in task.tags:
+                task.tags = [*task.tags, PARKED_TAG]
             task.updated_at = time.time()
             self._persist()
             self._notify()
