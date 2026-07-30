@@ -58,6 +58,19 @@ _IDLE_STATES: frozenset[WorkerState] = frozenset({WorkerState.RESTING, WorkerSta
 _ACTION_REQUIRED_MSG_TYPES: frozenset[str] = frozenset({"dependency", "warning"})
 
 
+def _source_key(m: Message) -> tuple[str, float]:
+    """#1116: identify the SEND a message row came from, not the row.
+
+    ``MessageStore.send`` fans a broadcast out into one row per recipient,
+    each with its own primary key but all sharing the single ``created_at``
+    stamped once for the call. Keying on ``(sender, created_at)`` therefore
+    collapses a broadcast to one unit of work while leaving two genuinely
+    distinct sends — even with identical text — separate, because their
+    timestamps differ. Neither content nor recipient participates.
+    """
+    return (m.sender, float(m.created_at))
+
+
 def _nudge_message(sender: str, unread_count: int) -> str:
     """Build the PTY message sent to an idle recipient.
 
@@ -142,6 +155,20 @@ class InterWorkerMessageWatcher:
         # still-unread handoff doesn't re-spawn on every sweep before
         # the board reflects the new assignment.
         self._spawned_msg_ids: set[int] = set()
+        # #1116: SOURCE-send keys we've already spawned for. A broadcast is
+        # not one row — ``store.send`` fans it out into ONE ROW PER RECIPIENT,
+        # each with its own primary key (measured: 23 rows, 23 recipients, one
+        # ``created_at``). So ``_spawned_msg_ids`` above can never dedup a
+        # broadcast: every idle worker sees a DIFFERENT id for the same send,
+        # and each one spawns its own handoff task. That is how a single
+        # rcg-dev-install broadcast became #1108/#1112/#1113, two of them
+        # byte-identical.
+        #
+        # ``(sender, created_at)`` identifies the SEND, not the row: the
+        # fan-out shares one float timestamp because ``send`` stamps ``now``
+        # once. Keys on neither content nor recipient, so two genuinely
+        # distinct sends — even with identical text — still spawn separately.
+        self._spawned_sources: set[tuple[str, float]] = set()
         # worker_name → last-nudge monotonic timestamp
         self._last_nudge: dict[str, float] = {}
         # worker_name → last AUTO_NUDGE_MESSAGE_SKIPPED entry timestamp.
@@ -416,6 +443,7 @@ class InterWorkerMessageWatcher:
             if m.msg_type in _ACTION_REQUIRED_MSG_TYPES
             and getattr(m, "id", None) is not None
             and m.id not in self._spawned_msg_ids
+            and _source_key(m) not in self._spawned_sources
         ]
         if not handoffs:
             return False
@@ -433,6 +461,9 @@ class InterWorkerMessageWatcher:
             return False
         for m in handoffs:
             self._spawned_msg_ids.add(m.id)
+        # #1116: record the SEND as spawned, not just this recipient's row —
+        # otherwise the same broadcast spawns again for the next idle worker.
+        self._spawned_sources.add(_source_key(latest))
         # #894: PERSIST the spawn-dedup by CONSUMING the source message(s).
         # ``_spawned_msg_ids`` is in-memory only, so a daemon restart wiped it
         # and the watcher re-relayed an already-handed-off (and since-retracted)
