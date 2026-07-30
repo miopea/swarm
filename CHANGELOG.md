@@ -8,6 +8,14 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Changes
 
+### Fixes
+
+## [2026.7.30] - 2026-07-30
+
+### Features
+
+### Changes
+
 - **CI's dependency audit can now fail, and 25 of its 35 findings are fixed rather than waived (#1051, #1061).** The "Security audit dependencies" step ran `uv run pip-audit` under `continue-on-error` while `pip-audit` was declared nowhere, so it exited 2 with "Failed to spawn" and reported green on every run since it was added — it had never audited anything. Declaring it surfaced 35 advisories at once, waived in `.github/pip-audit-waivers.txt` so the gate could start working immediately (#1051, no changelog entry of its own). #1061 then retired the runtime ones by actually bumping: `aiohttp>=3.14.1` (21 advisories), `cryptography>=48.0.1` (3), `click>=8.3.3` (1). `cryptography` is transitive via `webauthn` and is now pinned directly **only** to carry a security floor — that means owning its upgrade cadence, done deliberately because these are runtime advisories in a package doing crypto. Waivers are down to 10; the remainder are transitive (`cbor2`, `idna`, `pyasn1`, `soupsieve`) plus two dev-only, each of which would need its own direct pin, which is a separate call about how much transitive surface to own. Since `uv.lock` is gitignored, CI resolves fresh each run, so this step can legitimately go red with no code change — the correct response is a reviewed waiver line, never re-adding `continue-on-error`.
 
 ### Fixes
