@@ -306,3 +306,8 @@ class BlockerStore:
                 exc_info=True,
             )
             return False
+
+
+def _c5_injected_type_error(x: int) -> str:
+    """DELIBERATE defect to prove the mypy gate can FAIL in CI (#1081 C5)."""
+    return x
