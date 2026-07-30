@@ -151,3 +151,59 @@ def test_queen_assigns_plain_unassigned_task(monkeypatch):
     )
     assert "platform" in out[0]["text"]
     assert d.task_board.get(task.id).assigned_worker == "platform"
+
+
+# ---------------------------------------------------------------------------
+# #1057: the refusal must name the resolving fact
+# ---------------------------------------------------------------------------
+
+
+def test_reassign_refusal_names_blocked_status(monkeypatch):
+    """A BLOCKED owned task cannot be moved, and the old message said only
+    "(not available)" — which reads as though the TARGET is unavailable.
+
+    The gate is on the SOURCE task: the handler already tries to release it
+    (``board.unassign``), but that requires ASSIGNED/ACTIVE, so on a BLOCKED
+    task it silently returns False, the task stays owned, and ``board.assign``
+    then refuses via ``is_available``. Cost the Queen an hour on the theory
+    that the target worker's load was the cause (it never is — the target is
+    never inspected). Name the real reason.
+    """
+    d = make_daemon(monkeypatch)
+    task = d.task_board.create(title="wedged")
+    d.task_board.assign(task.id, "root")
+    d.task_board.activate(task.id)
+    d.task_board.block_for_operator(task.id, "waiting on review")
+    assert d.task_board.get(task.id).status == TaskStatus.BLOCKED
+
+    out = _handle_reassign_task(
+        d,
+        QUEEN_WORKER_NAME,
+        {"number": task.number, "to_worker": "hub", "reason": "root can't reach it"},
+    )
+    text = out[0]["text"]
+    assert "BLOCKED" in text, f"refusal must name the blocking status, got: {text}"
+    # And it must not imply the target is the problem.
+    assert "not available" not in text.lower()
+    # Behaviour unchanged — still refused, still owned by root.
+    got = d.task_board.get(task.id)
+    assert got.assigned_worker == "root"
+
+
+def test_reassign_refusal_does_not_depend_on_target_load(monkeypatch):
+    """The target's workload is never consulted — same message either way."""
+    d = make_daemon(monkeypatch)
+    busy = d.task_board.create(title="hub is busy")
+    d.task_board.assign(busy.id, "hub")
+
+    task = d.task_board.create(title="wedged")
+    d.task_board.assign(task.id, "root")
+    d.task_board.activate(task.id)
+    d.task_board.block_for_operator(task.id, "waiting")
+
+    out = _handle_reassign_task(
+        d,
+        QUEEN_WORKER_NAME,
+        {"number": task.number, "to_worker": "hub", "reason": "move it"},
+    )
+    assert "BLOCKED" in out[0]["text"]

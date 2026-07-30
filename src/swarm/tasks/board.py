@@ -536,8 +536,13 @@ class TaskBoard(EventEmitter):
         ``reason``. BLOCKED is off-active: it's excluded from
         ``active_tasks`` so the IdleWatcher never nudges it, yet it stays in
         ``all_tasks`` so it remains visible/tracked (not completed/archived).
-        Unpark is the normal operator re-dispatch (``activate`` →
-        BLOCKED→ACTIVE), which clears the watch reference.
+        #1057: unparking is NOT currently reachable as this once claimed.
+        ``task.start()`` does clear the watch reference, and ``activate`` has
+        no status gate — but both of ``activate``'s call sites are gated
+        upstream on ASSIGNED (``start_task`` and the state-tracker promotion),
+        so nothing can take a BLOCKED task back to ACTIVE. ``board.unassign``
+        refuses it too (needs ASSIGNED/ACTIVE), so a task parked here can
+        currently be neither resumed nor released. Tracked as its own task.
 
         Rejects (returns False) unless the task exists, is owned by
         *worker_name*, and is ASSIGNED or ACTIVE — no cross-worker blocking,
@@ -570,8 +575,15 @@ class TaskBoard(EventEmitter):
         (idle-watcher, completion, oversight) already skips BLOCKED, and
         the reconciler only mutates ACTIVE tasks so an unbound BLOCKED is
         stable. Returns False if the task no longer exists or isn't
-        ACTIVE (the stall resolved on its own — park is moot). Unpark is
-        the normal operator re-dispatch (``activate`` → BLOCKED→ACTIVE).
+        ACTIVE (the stall resolved on its own — park is moot).
+
+        #1057: unparking is NOT currently reachable as described. ``activate``
+        itself has no status gate and would accept a BLOCKED task, but both of
+        its call sites are gated upstream on ASSIGNED (``start_task`` and the
+        state-tracker promotion), so nothing in the system can take a BLOCKED
+        task back to ACTIVE. ``board.unassign`` also refuses it (it requires
+        ASSIGNED/ACTIVE), which is why a BLOCKED task can be neither resumed
+        nor released today. Tracked as its own task — do not paper over it here.
         """
         with self._lock:
             task = self._tasks.get(task_id)

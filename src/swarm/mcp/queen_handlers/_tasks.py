@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 from swarm.mcp._arg_types import QueenForceCompleteTaskArgs, QueenReassignTaskArgs
 from swarm.mcp.queen_handlers._common import _assert_queen
 from swarm.mcp.types import TextContent
+from swarm.tasks.task import TaskStatus
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -31,13 +32,17 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "queen_reassign_task",
         "description": (
-            "Give a task an owner: MOVE an assigned/in-progress task between workers, "
+            "Give a task an owner: MOVE an ASSIGNED or ACTIVE task between workers, "
             "OR ASSIGN an UNASSIGNED task (including an authority-guard / HOLD-parked "
             "one) to a worker for the first time.  Use when the original assignee can't "
-            "reach the work (blocked, wrong expertise, over-loaded) and a peer is "
+            "reach the work (wrong expertise, over-loaded) and a peer is "
             "better-positioned, or when an orphaned unassigned/parked task needs an "
             "owner.  Assigning a HOLD-parked task clears the HOLD — your assignment is "
-            "the endorsement.  Call queen_view_worker_state on the target worker first "
+            "the endorsement.  #1057: this does NOT move a BLOCKED task — releasing an "
+            "owner needs ASSIGNED/ACTIVE, so a BLOCKED task must be unblocked first; "
+            "the refusal names the reason.  The TARGET worker's current workload is "
+            "never consulted, so a busy target is never why this fails.  "
+            "Call queen_view_worker_state on the target worker first "
             "so you're acting on current reality, not a stale assumption.  If `start` is "
             "true, the worker is immediately sent the task message; otherwise the task "
             "sits ASSIGNED for the next poll cycle."
@@ -176,6 +181,41 @@ def _fire_async(coro: Coroutine[Any, Any, None]) -> None:
             pass
 
 
+def _why_unassignable(d: SwarmDaemon, task_id: str) -> str:
+    """#1057: say WHY ``board.assign`` refused, in resolving terms.
+
+    The gate is ``task.is_available`` — ``status == UNASSIGNED and not
+    is_on_hold`` — a property of the SOURCE task. It never inspects the
+    target worker. The old text was a bare "(not available)", which reads
+    as though the TARGET is unavailable and sends the reader to look at
+    the wrong thing entirely. It cost the Queen an hour on the theory
+    that reassignment fails when the target already holds a task; the
+    target's load is never consulted at all.
+
+    This handler already tries to release an owned task first
+    (``board.unassign`` above), but that requires ASSIGNED/ACTIVE — so on
+    a BLOCKED task it silently no-ops and we land here still owned.
+    """
+    task = d.task_board.get(task_id)
+    if task is None:
+        return "the task no longer exists."
+    status = task.status.value
+    if task.status == TaskStatus.BLOCKED:
+        return (
+            f"#{task.number} is BLOCKED"
+            + (f" ({task.block_reason})" if task.block_reason else "")
+            + " — a blocked task cannot be released or moved. Unblock it first."
+        )
+    if task.is_on_hold:
+        return f"#{task.number} is on HOLD — clear the hold tag before assigning it."
+    if task.assigned_worker:
+        return (
+            f"#{task.number} is still assigned to {task.assigned_worker} and could not "
+            f"be released (status={status})."
+        )
+    return f"#{task.number} is {status}, and only an UNASSIGNED task can be assigned."
+
+
 def _handle_reassign_task(
     d: SwarmDaemon, worker_name: str, args: QueenReassignTaskArgs
 ) -> list[TextContent]:
@@ -216,7 +256,10 @@ def _handle_reassign_task(
         return [
             {
                 "type": "text",
-                "text": f"Failed to assign #{task.number} to {to_worker} (not available).",
+                "text": (
+                    f"Failed to assign #{task.number} to {to_worker} — "
+                    f"{_why_unassignable(d, task.id)}"
+                ),
             }
         ]
     from swarm.drones.log import LogCategory, SystemAction
