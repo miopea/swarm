@@ -1485,6 +1485,41 @@ class SwarmDaemon(EventEmitter):
         """Capture worker's recent output as task learnings (delegates)."""
         self.playbook_ops.consolidate_learnings(task)
 
+    def _identity_targets(self) -> list[tuple[str, Path, str]]:
+        """Every ``(worker_name, directory, provider)`` needing an identity file.
+
+        Sourced from the CONFIGURED workers, not just the running ones (#1055).
+        ``self.workers`` holds live PTY processes — ``worker_service.discover``
+        builds it from ``pool.discover()`` — so iterating it wrote a
+        ``.mcp.json`` only for workers whose process happened to be up when the
+        daemon last started. A configured worker that was down got no identity
+        file, and nothing writes one later because this only runs at startup.
+        That is how sculpt-studio and aria ended up with none at all despite
+        valid, existing paths; their sessions then inherit the PARENT
+        directory's ``.mcp.json`` and transmit ``project-root``.
+
+        #1045's canonicalisation cannot catch that: ``project-root`` is a real
+        registered worker, so a borrowed identity resolves cleanly and the
+        failure stays silent. Writing the file for every configured worker is
+        the only thing that closes it.
+
+        Running workers are unioned in rather than replaced: under
+        ``isolation: worktree`` a worker's live path is its worktree, which
+        differs from the configured repo path, and the session that needs the
+        file runs in the worktree.
+
+        Paths are resolved so the two sources dedupe on the same key.
+        """
+        default_prov = self.config.provider or "claude"
+        targets: dict[Path, tuple[str, Path, str]] = {}
+        for wc in self.config.workers:
+            d = wc.resolved_path
+            targets.setdefault(d, (wc.name, d, wc.provider or default_prov))
+        for w in self.workers:
+            d = _worker_dir(w).resolve()
+            targets.setdefault(d, (w.name, d, w.provider_name or default_prov))
+        return list(targets.values())
+
     def _write_worker_mcp_configs(self) -> None:
         """Write per-worker .mcp.json files with worker identity in the URL.
 
@@ -1501,29 +1536,32 @@ class SwarmDaemon(EventEmitter):
         # an injected Authorization header. This is transparent to the worker —
         # Claude Code reads headers from .mcp.json on connect.
         token = get_or_create_mcp_token()
-        for w in self.workers:
-            # #1045: ``Path("~/proj").is_dir()`` is False — a tilde path is a
-            # literal relative dir named "~", not the home directory. Without
-            # expanduser every ~-configured worker was silently skipped, so it
-            # never received its identity file and — worse — an existing stale
-            # one was never CORRECTED. That is how rcg-platform kept a
-            # hand-written ``?worker=Platform`` while the board stored
-            # ``platform``: 8 of 24 workers on the reporting box were skipped.
-            worker_dir = _worker_dir(w)
+        for name, worker_dir, provider_name in self._identity_targets():
             if not worker_dir.is_dir():
                 continue
             # ``.mcp.json`` is Claude Code's config format. Non-hooks providers
             # don't read it — Codex reaches the same MCP server via
             # ``~/.codex/config.toml`` (codex-team-config) — so don't drop an
             # inert file into their worktrees.
-            if not get_provider(w.provider_name).supports_hooks:
+            try:
+                if not get_provider(provider_name).supports_hooks:
+                    continue
+            except Exception:
+                # A typo'd provider in config must not abort the whole sweep and
+                # silently strand every worker after it in the iteration.
+                _log.warning(
+                    "unknown provider %r for worker %s — skipping its .mcp.json",
+                    provider_name,
+                    name,
+                    exc_info=True,
+                )
                 continue
             mcp_path = worker_dir / ".mcp.json"
             mcp_config = {
                 "mcpServers": {
                     "swarm": {
                         "type": "http",
-                        "url": f"http://localhost:{port}/mcp?worker={w.name}",
+                        "url": f"http://localhost:{port}/mcp?worker={name}",
                         "headers": {"Authorization": f"Bearer {token}"},
                     }
                 }
@@ -1531,7 +1569,7 @@ class SwarmDaemon(EventEmitter):
             try:
                 mcp_path.write_text(_json.dumps(mcp_config, indent=2) + "\n")
             except OSError:
-                _log.debug("failed to write .mcp.json for %s", w.name)
+                _log.warning("failed to write .mcp.json for %s", name, exc_info=True)
 
     def _install_worker_artifacts(self) -> None:
         """Install Swarm slash commands and Skills into each worker's workdir.
@@ -1550,8 +1588,10 @@ class SwarmDaemon(EventEmitter):
         from swarm.providers import get_provider
 
         store = getattr(self, "playbook_store", None)
-        for w in self.workers:
-            worker_dir = _worker_dir(w)
+        # #1055: same target set as the identity files — a configured worker
+        # that happened to be down at daemon start was skipped here too, so it
+        # silently lost its ``/swarm-*`` commands and Skills as well.
+        for name, worker_dir, provider_name in self._identity_targets():
             if not worker_dir.is_dir():
                 continue
             # ``.claude/commands`` + ``.claude/skills`` are Claude Code paths.
@@ -1559,16 +1599,25 @@ class SwarmDaemon(EventEmitter):
             # Codex's skills live globally in ``~/.agents/skills`` via
             # codex-team-config — so skip the writes rather than litter their
             # worktrees with inert dirs.
-            if not get_provider(w.provider_name).supports_hooks:
+            try:
+                if not get_provider(provider_name).supports_hooks:
+                    continue
+            except Exception:
+                _log.warning(
+                    "unknown provider %r for worker %s — skipping its artifacts",
+                    provider_name,
+                    name,
+                    exc_info=True,
+                )
                 continue
             try:
                 install_worker_commands(worker_dir)
             except Exception:
-                _log.debug("failed to install slash commands for %s", w.name, exc_info=True)
+                _log.debug("failed to install slash commands for %s", name, exc_info=True)
             try:
                 install_worker_skills(worker_dir)
             except Exception:
-                _log.debug("failed to install skills for %s", w.name, exc_info=True)
+                _log.debug("failed to install skills for %s", name, exc_info=True)
             # Phase 3: render ACTIVE in-scope playbooks as native Skills —
             # other providers reach playbooks via swarm_get_playbooks.
             if store is None:
@@ -1576,9 +1625,9 @@ class SwarmDaemon(EventEmitter):
             try:
                 from swarm.playbooks.installer import install_worker_playbooks
 
-                install_worker_playbooks(worker_dir, store, worker_name=w.name)
+                install_worker_playbooks(worker_dir, store, worker_name=name)
             except Exception:
-                _log.debug("failed to install playbooks for %s", w.name, exc_info=True)
+                _log.debug("failed to install playbooks for %s", name, exc_info=True)
 
     def _cleanup_file_locks(self) -> None:
         """Remove expired file locks."""

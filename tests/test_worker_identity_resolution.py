@@ -214,3 +214,59 @@ def test_parked_task_resumes_when_explicitly_activated(monkeypatch) -> None:
     got = d.task_board.get(t.id)
     assert got.status == TaskStatus.ACTIVE
     assert not got.is_on_hold
+
+
+# --- #1055: every CONFIGURED worker needs an identity file ---------------
+
+
+@pytest.mark.asyncio
+async def test_mcp_config_written_for_configured_but_not_running_worker(
+    monkeypatch, tmp_path
+) -> None:
+    """#1055: ``daemon.workers`` holds LIVE PTY processes (built by
+    ``worker_service.discover`` from ``pool.discover()``), not configured
+    workers. ``_write_worker_mcp_configs`` iterated it, so a worker whose
+    PTY happened to be down at daemon start got no identity file — and
+    nothing writes one later, since the writer only runs at startup.
+
+    That is how sculpt-studio and aria ended up with no ``.mcp.json`` at
+    all despite valid, existing absolute paths. Their sessions then
+    inherit the PARENT directory's config and transmit ``project-root``.
+
+    #1045's canonicalisation cannot rescue this: ``project-root`` is a
+    real registered worker, so the wrong identity resolves cleanly and
+    the failure stays silent. Every configured worker must get its own
+    file.
+    """
+    from swarm.config.models import WorkerConfig
+
+    monkeypatch.setattr("swarm.auth.mcp_token.get_or_create_mcp_token", lambda: "tok")
+
+    running_dir = tmp_path / "running"
+    running_dir.mkdir()
+    idle_dir = tmp_path / "sculpt-studio"
+    idle_dir.mkdir()
+
+    d = make_daemon(monkeypatch)
+    d.config.port = 9090
+    # Configured: both. Running (in d.workers): only one.
+    d.config.workers = [
+        WorkerConfig(name="running-one", path=str(running_dir)),
+        WorkerConfig(name="sculpt-studio", path=str(idle_dir)),
+    ]
+    from swarm.worker.worker import Worker
+
+    d.workers = [
+        Worker(
+            name="running-one",
+            path=str(running_dir),
+            process=FakeWorkerProcess(name="running-one"),
+        )
+    ]
+
+    d._write_worker_mcp_configs()
+
+    assert "?worker=running-one" in (running_dir / ".mcp.json").read_text()
+    written = idle_dir / ".mcp.json"
+    assert written.exists(), "a configured worker must get an identity file even when not running"
+    assert "?worker=sculpt-studio" in written.read_text()
