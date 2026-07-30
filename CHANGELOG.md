@@ -10,6 +10,8 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **`swarm init` no longer tells you to run `swarm start all` after it already started the daemon.** Installing the systemd/launchd service also *starts* it, so the final "Ready! Next: swarm start all" sent every fresh installer straight into `Another swarm daemon is already running. Run 'swarm stop' to stop it.` — the first thing a new dev saw was an error. Init now probes the unauthenticated `/health` endpoint (up to 15s when this run installed the service, one quick look when it was already there) and prints the dashboard link instead. When nothing answers, the advice depends on whether anything supervises the daemon: with a service installed it points at `systemctl --user status swarm` / `launchctl list com.swarm.dashboard`, and only a host with no service manager still gets the `swarm start all` hint. The port is read straight from the `config` row in `swarm.db` (or the YAML seed, else 9090) rather than through `_load_config_db_first`, which would create and migrate the DB and break init's promise never to touch it. The `domain` branch also stopped printing two separate "Ready!" lines.
+
 ## [2026.7.27] - 2026-07-27
 
 ### Features

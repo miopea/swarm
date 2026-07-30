@@ -370,6 +370,72 @@ def _read_db_state() -> dict[str, Any] | None:
     }
 
 
+def _resolve_dashboard_port(yaml_path: Path) -> int:
+    """Best-effort read of the dashboard port for the post-init link.
+
+    Deliberately does **not** go through ``_load_config_db_first`` —
+    that creates the DB and runs ``auto_migrate``, and ``swarm init``
+    promises never to touch the database.  Reads the single ``port``
+    row directly when a DB is already there, falls back to the YAML
+    seed, then to the documented default.
+    """
+    from swarm.db.core import _DEFAULT_DB_PATH, SwarmDB
+
+    if _DEFAULT_DB_PATH.exists():
+        try:
+            db = SwarmDB()
+            row = db.fetchone("SELECT value FROM config WHERE key = 'port'")
+            db.close()
+            if row and row["value"]:
+                return int(row["value"])
+        except Exception:
+            _log.debug("_resolve_dashboard_port: DB read failed", exc_info=True)
+
+    if yaml_path.exists():
+        try:
+            import yaml
+
+            data = yaml.safe_load(yaml_path.read_text()) or {}
+            port = data.get("port") if isinstance(data, dict) else None
+            if port:
+                return int(port)
+        except Exception:
+            _log.debug("_resolve_dashboard_port: YAML read failed", exc_info=True)
+
+    return 9090
+
+
+def _wait_for_dashboard(port: int, timeout: float = 0.0) -> bool:
+    """Poll ``/health`` until the daemon answers, or *timeout* elapses.
+
+    ``/health`` is the unauthenticated tunnel-probe endpoint, so this
+    works against a password-protected daemon too.  ``timeout=0``
+    means "one quick look" — used when the service was already
+    installed and we're only confirming it's up.
+    """
+    import time
+    import urllib.error
+    import urllib.request
+
+    url = f"http://localhost:{port}/health"
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as resp:
+                if resp.status == 200:
+                    return True
+        except urllib.error.HTTPError:
+            # Something is serving the port and speaking HTTP — that's
+            # the daemon (or a proxy in front of it), which is all we
+            # need to know before printing the link.
+            return True
+        except Exception:
+            _log.debug("_wait_for_dashboard: probe failed", exc_info=True)
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.5)
+
+
 def _db_has_data(db_state: dict[str, Any] | None) -> bool:
     """True if the DB file exists and holds any user data."""
     if not db_state or "error" in db_state:
@@ -640,6 +706,13 @@ def init(  # noqa: C901
         install_service as _install_svc,
     )
 
+    # True when this run installed (and therefore started) the service —
+    # the only case where the dashboard needs a moment to come up.
+    service_started = False
+    # Command that inspects the service, when one manages the daemon.
+    # ``None`` means nothing supervises it and the operator has to start
+    # the daemon themselves.
+    service_hint: str | None = None
     systemd_err = _check_systemd()
     if systemd_err and is_wsl():
         click.echo("\n  systemd is not enabled in WSL.")
@@ -655,10 +728,13 @@ def init(  # noqa: C901
             checks.append(("systemd service", None))
     elif systemd_err and is_macos():
         if _PLIST_PATH.exists():
+            service_hint = "launchctl list com.swarm.dashboard"
             checks.append(("launchd service", True))
         else:
             try:
                 install_launchd(output_path if not skip_config else None)
+                service_started = True
+                service_hint = "launchctl list com.swarm.dashboard"
                 checks.append(("launchd service", True))
             except Exception:
                 checks.append(("launchd service", False))
@@ -666,10 +742,13 @@ def init(  # noqa: C901
         click.echo(f"  {systemd_err}")
         checks.append(("background service", None))
     elif _SERVICE_PATH.exists():
+        service_hint = "systemctl --user status swarm"
         checks.append(("systemd service", True))
     else:
         try:
             _install_svc(output_path if not skip_config else None)
+            service_started = True
+            service_hint = "systemctl --user status swarm"
             checks.append(("systemd service", True))
         except Exception:
             checks.append(("systemd service", False))
@@ -728,12 +807,39 @@ def init(  # noqa: C901
         click.echo("\n  Restart WSL (wsl --shutdown) then re-run: swarm init")
     all_ok = all(s is not False for _, s in checks)
     if all_ok and not needs_restart:
-        if domain:
-            click.echo(f"\n  Ready! Dashboard: https://{domain}")
-            click.echo(
-                "\n  Note: Ensure ports 80 and 443 are open in your firewall/security group."
-            )
-        click.echo("\n  Ready! Next: swarm start all")
+        # Installing the service also STARTS it, so by this point the
+        # daemon is usually already listening.  Telling the operator to
+        # run `swarm start all` then just errors with "Another swarm
+        # daemon is already running" — hand them the link instead.
+        # Only wait around when we started the service in this run; an
+        # already-installed service just gets one quick look.
+        port = _resolve_dashboard_port(out_file)
+        wait = 15.0 if service_started else 0.0
+        if wait:
+            click.echo("\n  Waiting for the dashboard to come up...")
+        if _wait_for_dashboard(port, timeout=wait):
+            if domain:
+                click.echo(f"\n  Ready! Dashboard: https://{domain}")
+                click.echo(f"  Local: http://localhost:{port}")
+                click.echo(
+                    "\n  Note: Ensure ports 80 and 443 are open in your firewall/security group."
+                )
+            else:
+                click.echo(f"\n  Ready! Dashboard: http://localhost:{port}")
+        elif service_hint:
+            # A service supervises the daemon, so `swarm start all` would
+            # only collide with it once it finishes coming up.
+            click.echo(f"\n  Dashboard: http://localhost:{port} (not answering yet)")
+            if domain:
+                click.echo(f"  Remote: https://{domain}")
+            click.echo(f"  Check the service: {service_hint}")
+        else:
+            if domain:
+                click.echo(f"\n  Once started, the dashboard will be at https://{domain}")
+                click.echo(
+                    "\n  Note: Ensure ports 80 and 443 are open in your firewall/security group."
+                )
+            click.echo("\n  Ready! Next: swarm start all")
     elif not all_ok:
         click.echo("\n  Some checks failed -- see above.", err=True)
 

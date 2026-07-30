@@ -292,6 +292,107 @@ def test_init_wizard_runs_on_true_first_run(runner, monkeypatch, tmp_path):
     assert data["workers"][0]["name"] == "myapp"
 
 
+def _stub_service_layer(monkeypatch, tmp_path, *, systemd: bool = True) -> None:
+    """Make init's service-install step deterministic and side-effect free.
+
+    ``systemd=False`` simulates a host with no service manager, where
+    the operator really does have to run the daemon themselves.
+    """
+    import swarm.service as svc
+
+    monkeypatch.setattr(svc, "is_wsl", lambda: False)
+    monkeypatch.setattr(svc, "is_macos", lambda: False)
+    monkeypatch.setattr(svc, "_check_systemd", lambda: None if systemd else "systemctl not found")
+    monkeypatch.setattr(svc, "_SERVICE_PATH", tmp_path / "swarm.service")
+    monkeypatch.setattr(svc, "install_service", lambda config_path=None: tmp_path / "swarm.service")
+
+
+def test_init_prints_dashboard_url_when_daemon_is_up(runner, monkeypatch, tmp_path):
+    """``swarm init`` starts the service, so once the daemon answers the
+    operator needs a link — not ``swarm start all``, which fails with
+    "Another swarm daemon is already running".
+    """
+    _stub_service_layer(monkeypatch, tmp_path)
+    monkeypatch.setattr("swarm.cli._wait_for_dashboard", lambda port, timeout=0.0: True)
+    monkeypatch.setattr("swarm.cli._resolve_dashboard_port", lambda yaml_path: 9090)
+
+    result = runner.invoke(main, ["init", "--skip-hooks", "--skip-config"])
+    assert result.exit_code == 0, result.output
+    assert "http://localhost:9090" in result.output
+    assert "swarm start all" not in result.output
+
+
+def test_init_falls_back_to_start_hint_with_no_service_manager(runner, monkeypatch, tmp_path):
+    """No systemd/launchd and nothing listening — the operator has to
+    start the daemon themselves, so the start hint is right here.
+    """
+    _stub_service_layer(monkeypatch, tmp_path, systemd=False)
+    monkeypatch.setattr("swarm.cli._wait_for_dashboard", lambda port, timeout=0.0: False)
+    monkeypatch.setattr("swarm.cli._resolve_dashboard_port", lambda yaml_path: 9090)
+
+    result = runner.invoke(main, ["init", "--skip-hooks", "--skip-config"])
+    assert result.exit_code == 0, result.output
+    assert "swarm start all" in result.output
+
+
+def test_init_points_at_service_when_daemon_slow_to_start(runner, monkeypatch, tmp_path):
+    """A service supervises the daemon, so a slow start is a service
+    question — ``swarm start all`` would just collide with it.
+    """
+    _stub_service_layer(monkeypatch, tmp_path)
+    monkeypatch.setattr("swarm.cli._wait_for_dashboard", lambda port, timeout=0.0: False)
+    monkeypatch.setattr("swarm.cli._resolve_dashboard_port", lambda yaml_path: 9090)
+
+    result = runner.invoke(main, ["init", "--skip-hooks", "--skip-config"])
+    assert result.exit_code == 0, result.output
+    assert "systemctl --user status swarm" in result.output
+    assert "swarm start all" not in result.output
+
+
+def test_init_domain_output_has_one_ready_line(runner, monkeypatch, tmp_path):
+    """With a domain configured, the remote URL is the headline and the
+    start hint must not tag along behind it.
+    """
+    _stub_service_layer(monkeypatch, tmp_path)
+    monkeypatch.setattr("swarm.cli._wait_for_dashboard", lambda port, timeout=0.0: True)
+    monkeypatch.setattr("swarm.cli._resolve_dashboard_port", lambda yaml_path: 9090)
+    monkeypatch.setattr("swarm.cli._read_db_state", lambda: None)
+    monkeypatch.setattr("swarm.reverse_proxy.setup_caddy", lambda domain, port=9090: True)
+
+    project_dir = tmp_path / "projects" / "myapp"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".git").mkdir()
+
+    out_path = tmp_path / "swarm.yaml"
+    result = runner.invoke(
+        main,
+        ["init", "--skip-hooks", "-d", str(tmp_path / "projects"), "-o", str(out_path)],
+        input="a\nsecret\nswarm.example.com\ny\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert "https://swarm.example.com" in result.output
+    assert "swarm start all" not in result.output
+    assert result.output.count("Ready!") == 1
+
+
+def test_resolve_dashboard_port_reads_yaml(tmp_path, monkeypatch):
+    """Port comes from the YAML when no DB exists yet."""
+    from swarm.cli import _resolve_dashboard_port
+
+    monkeypatch.setattr("swarm.db.core._DEFAULT_DB_PATH", tmp_path / "missing.db")
+    yaml_path = tmp_path / "swarm.yaml"
+    yaml_path.write_text("port: 9191\nworkers: []\n")
+    assert _resolve_dashboard_port(yaml_path) == 9191
+
+
+def test_resolve_dashboard_port_defaults_to_9090(tmp_path, monkeypatch):
+    """No DB, no YAML — fall back to the documented default."""
+    from swarm.cli import _resolve_dashboard_port
+
+    monkeypatch.setattr("swarm.db.core._DEFAULT_DB_PATH", tmp_path / "missing.db")
+    assert _resolve_dashboard_port(tmp_path / "nope.yaml") == 9090
+
+
 # --- _resolve_target ---
 
 
