@@ -231,16 +231,73 @@ def test_worker_view_keeps_task_panel_mounted():
     )
 
 
-def test_queen_view_expands_task_panel_without_persisting():
-    """The Queen dashboard always shows the task board expanded, but must not
-    overwrite the operator's worker-view minimize preference."""
+def test_queen_view_restores_the_operators_collapse_preference():
+    """The Queen view must HONOUR the stored minimize preference, not force
+    the task panel open.
+
+    It used to hardcode ``setBottomCollapsed(false, false)`` — "the Queen
+    dashboard always shows the task board expanded" — so every return to the
+    Queen silently discarded a minimize, and because expanding re-applies the
+    saved split the panel also came back at its dragged size. Reported by the
+    operator: "every time I go back to the queen it doesn't remember if the
+    task list was minimized or how it was sized."
+
+    persist=False still matters: restoring a preference must not rewrite it.
+    """
     _, cc_body = _dashboard_iife_bodies()
     i = cc_body.find("function show() {")
     assert i >= 0, "expected the Command Center show() in dashboard.js"
     block = cc_body[i : cc_body.find("document.body.classList.add('cc-active')", i)]
-    assert "window.setBottomCollapsed(false, false)" in block, (
-        "show() must expand the task panel with persist=false"
+    assert "window.setBottomCollapsed(false, false)" not in block, (
+        "show() must not hardcode the task panel open — that discards a minimize"
     )
+    assert "readBottomCollapsed" in block, (
+        "show() must read the stored preference through the shared helper"
+    )
+    assert "window.setBottomCollapsed(queenCollapsed, false)" in block, (
+        "restoring a preference must not persist it back"
+    )
+
+
+def test_all_collapse_readers_share_one_helper():
+    """The Queen view and the worker view each read this preference their own
+    way and disagreed — the worker honoured it, the Queen ignored it. One
+    reader so they cannot drift apart again.
+
+    It also returns None for "never set", because the worker view previously
+    used ``storedCollapse !== ''`` and read an absent preference as
+    "collapse", minimizing a panel nobody had asked to minimize.
+    """
+    js = (STATIC_DIR / "dashboard.js").read_text()
+    assert "function readBottomCollapsed()" in js
+    assert "window.readBottomCollapsed = readBottomCollapsed;" in js
+    # Comment-stripped: the string survives in a comment explaining the fix,
+    # and a raw `in js` check reads that as the defect still being present.
+    # Third instance of comment-vs-code in this fleet today, and I hit it in
+    # the test I wrote to guard against exactly this class of drift.
+    live = re.sub(r"/\*.*?\*/", "", js, flags=re.S)
+    live = re.sub(r"^\s*//.*$", "", live, flags=re.M)
+    assert "storedCollapse !== ''" not in live, "absent preference must not mean collapsed"
+    # Every getItem of the key must sit INSIDE the helper. Checked by SCOPE,
+    # not per-line: a line-based check cannot tell that the helper's own
+    # getItem lines are inside the helper — the same fixed-window mistake this
+    # fleet has been correcting all week, which I reproduced writing this test.
+    start = js.index("function readBottomCollapsed()")
+    end = js.index("window.readBottomCollapsed = readBottomCollapsed;")
+    outside = js[:start] + js[end:]
+    assert "getItem('swarm_bottom_collapsed'" not in outside, (
+        "a caller reads the collapse key directly instead of via readBottomCollapsed()"
+    )
+
+
+def test_collapse_preference_outlives_the_tab():
+    """The panel's SIZE persists in localStorage ('swarm-split'). Keeping the
+    collapsed flag in sessionStorage split one preference across two
+    lifetimes: reopen the tab and the panel returned expanded, at the size you
+    had dragged it to while minimized."""
+    js = (STATIC_DIR / "dashboard.js").read_text()
+    assert "localStorage.setItem('swarm_bottom_collapsed'" in js
+    assert "sessionStorage.setItem('swarm_bottom_collapsed'" not in js
 
 
 def test_bottom_collapse_helper_is_exported():

@@ -6146,10 +6146,38 @@
             if (!collapsed && window.__applySavedSplit) window.__applySavedSplit();
         }
         if (persist) {
-            try { sessionStorage.setItem('swarm_bottom_collapsed', collapsed ? '1' : ''); } catch(e) {}
+            // localStorage, not sessionStorage: the SIZE of this panel is
+            // already persisted in localStorage ('swarm-split'), so keeping
+            // the collapsed flag session-scoped made the two halves of one
+            // preference outlive each other — reopen the tab and the panel
+            // came back expanded at the size you'd dragged it to while
+            // minimized. Same lifetime for both halves.
+            try { localStorage.setItem('swarm_bottom_collapsed', collapsed ? '1' : ''); } catch(e) {}
+            try { sessionStorage.removeItem('swarm_bottom_collapsed'); } catch(e) {}
         }
     }
     window.setBottomCollapsed = setBottomCollapsed;
+
+    // Single reader for the bottom-panel collapse preference. Exists because
+    // the Queen view and the worker view each read it their own way and
+    // disagreed: the worker view honoured the stored value while the Queen
+    // view hardcoded "expanded", so returning to the Queen silently discarded
+    // a minimize. Both now go through here.
+    //
+    // Returns null when the operator has never expressed a preference, so
+    // callers can apply their own default (mobile collapses, desktop does
+    // not) rather than reading absence as "collapsed".
+    function readBottomCollapsed() {
+        var v = null;
+        try { v = localStorage.getItem('swarm_bottom_collapsed'); } catch(e) {}
+        if (v === null) {
+            // Migrate a value written before this became durable.
+            try { v = sessionStorage.getItem('swarm_bottom_collapsed'); } catch(e) {}
+        }
+        if (v === null) return null;
+        return v === '1';
+    }
+    window.readBottomCollapsed = readBottomCollapsed;
     function toggleBottomPanel() {
         var panel = document.querySelector('.bottom-tabbed');
         if (!panel) return;
@@ -6165,9 +6193,8 @@
         var panel = document.querySelector('.bottom-tabbed');
         if (!panel) return;
         var isMobile = window.innerWidth < 768;
-        var stored = null;
-        try { stored = sessionStorage.getItem('swarm_bottom_collapsed'); } catch(e) {}
-        var shouldCollapse = stored === '1' || (stored === null && isMobile);
+        var stored = readBottomCollapsed();
+        var shouldCollapse = stored === null ? isMobile : stored;
         if (shouldCollapse) setBottomCollapsed(true, false);
     })();
 
@@ -11368,12 +11395,17 @@
         if (bottom) bottom.style.display = '';
         var rh = resizeHandle();
         if (rh) rh.style.display = '';
-        // Queen view always shows the task board EXPANDED. persist=false so a
-        // worker-view "minimize" preference survives the round trip.
-        // setBottomCollapsed clears the inline rows and re-applies the
-        // operator's dragged split.
+        // Honour the operator's collapse preference here, same as the worker
+        // view. This used to hardcode EXPANDED ("Queen view always shows the
+        // task board expanded"), which meant every return to the Queen threw
+        // away a minimize — and, because expanding re-applies the saved split,
+        // the panel also reappeared at its dragged size when the operator had
+        // deliberately put it away. Reported directly by the operator.
+        // persist=false: restoring a preference must not rewrite it.
+        var queenCollapsed = window.readBottomCollapsed ? window.readBottomCollapsed() : null;
+        if (queenCollapsed === null) queenCollapsed = window.innerWidth < 768;
         if (window.setBottomCollapsed) {
-            window.setBottomCollapsed(false, false);
+            window.setBottomCollapsed(queenCollapsed, false);
         } else {
             var da = detailArea();
             if (da) {
@@ -11453,10 +11485,14 @@
         if (bottom) bottom.style.display = '';
         var rh = resizeHandle();
         if (rh) rh.style.display = '';
-        var storedCollapse = null;
-        try { storedCollapse = sessionStorage.getItem('swarm_bottom_collapsed'); } catch (_) {}
+        // Was `storedCollapse !== ''`, which read a NEVER-SET preference
+        // (null) as "collapse" — so a fresh session's first worker visit
+        // minimized the panel nobody had asked to minimize. null now means
+        // "no preference", and the mobile default applies.
+        var storedCollapse = window.readBottomCollapsed ? window.readBottomCollapsed() : null;
+        if (storedCollapse === null) storedCollapse = window.innerWidth < 768;
         if (window.setBottomCollapsed) {
-            window.setBottomCollapsed(storedCollapse !== '', false);
+            window.setBottomCollapsed(storedCollapse, false);
         } else {
             var da = detailArea();
             if (da) da.style.gridTemplateRows = '1fr 0 0';
