@@ -582,11 +582,22 @@ class TaskBoard(EventEmitter):
         Intentional set-down (operator preempt, scope change) — NOT a
         blocker (no ``swarm_report_blocker`` binding is created). Keeps
         ``assigned_worker`` so the same worker resumes later. Rejects
-        (returns False) unless the task exists, is ACTIVE, and is owned
-        by *worker_name* — no cross-worker parking. Composes with the
-        #405 invariants immediately: the worker has no ACTIVE task right
+        (returns False) unless the task exists, is owned by *worker_name*,
+        and is ACTIVE or ASSIGNED — no cross-worker parking. Composes with
+        the #405 invariants immediately: the worker has no ACTIVE task right
         after, no reconciler/reload needed. The caller records *reason*
         to history/buzz; this method is the pure state transition.
+
+        #1159: ASSIGNED was added to the accepted set. Requiring ACTIVE made
+        the verb RACY rather than strict — the INV-2 reconciler demotes a
+        worker's ACTIVE task to ASSIGNED every time it goes RESTING, so the
+        window in which park was reachable was seconds wide and not under
+        the caller's control. #1158 sat ASSIGNED-and-nudged with no way to
+        set it down. From ASSIGNED the status does not change; what the call
+        adds is the PARKED_TAG marker, which is the part that actually stops
+        the momentum machinery. BLOCKED and terminal tasks stay refused:
+        BLOCKED is already off-active and has its own unblock verbs (#1059
+        ``release``), and a DONE/FAILED task has nothing to set down.
         """
         import time
 
@@ -595,7 +606,7 @@ class TaskBoard(EventEmitter):
             if (
                 task is None
                 or task.assigned_worker != worker_name
-                or task.status != TaskStatus.ACTIVE
+                or task.status not in (TaskStatus.ACTIVE, TaskStatus.ASSIGNED)
             ):
                 return False
             task.status = TaskStatus.ASSIGNED
@@ -970,19 +981,30 @@ class TaskBoard(EventEmitter):
         ]
 
     def parkable_tasks_for_worker(self, worker_name: str) -> list[SwarmTask]:
-        """#407: the tasks this worker may park — its OWN tasks that are
-        currently ACTIVE. ``park()`` only transitions ACTIVE→ASSIGNED, so
-        this *is* the parkable set. With #405 INV-1 enforced it is ≤1, but
-        an un-reconciled / pre-reload board can hold several; the park
-        handler refuses to guess among them rather than silently picking
-        one (the 2026-05-17 public-website wrong-task incident)."""
+        """#407: the tasks this worker may park — its OWN ACTIVE or ASSIGNED
+        tasks, minus any already parked. With #405 INV-1 enforced the ACTIVE
+        set is ≤1, but an un-reconciled / pre-reload board can hold several;
+        the park handler refuses to guess among them rather than silently
+        picking one (the 2026-05-17 public-website wrong-task incident).
+
+        #1159: ASSIGNED tasks are included because ``park`` now accepts them
+        (see :meth:`park` — requiring ACTIVE made the verb racy against the
+        INV-2 reconciler). Already-parked tasks are excluded so parking is
+        idempotent from the caller's side: re-parking a set-down task is a
+        no-op that should not make the "which one did you mean?" prompt
+        ambiguous. ACTIVE sorts first so the no-argument form still picks the
+        task the worker is actually on when it owns both kinds."""
         with self._lock:
             snapshot = list(self._tasks.values())
-        return [
+        candidates = [
             t
             for t in snapshot
-            if t.assigned_worker == worker_name and t.status == TaskStatus.ACTIVE
+            if t.assigned_worker == worker_name
+            and t.status in (TaskStatus.ACTIVE, TaskStatus.ASSIGNED)
+            and not t.is_on_hold
         ]
+        candidates.sort(key=lambda t: t.status != TaskStatus.ACTIVE)
+        return candidates
 
     def query(
         self,

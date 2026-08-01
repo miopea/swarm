@@ -27,11 +27,12 @@ TOOLS: list[dict[str, Any]] = [
             "you) so you can resume it later. Different from "
             "``swarm_report_blocker`` (which means 'I'm waiting on an "
             "upstream task') and from ``swarm_complete_task`` (which means "
-            "'done'). Pass ``task_number`` to say exactly which of your "
-            "active tasks to set down; if you own only one active task you "
-            "may omit it. If you own more than one and omit ``task_number`` "
-            "the tool REFUSES and lists them rather than guessing — never "
-            "silently parks an arbitrary task."
+            "'done'). Works on your own ACTIVE or ASSIGNED tasks — you do "
+            "not have to catch it in the ACTIVE state. Pass ``task_number`` "
+            "to say exactly which task to set down; if you own only one "
+            "candidate you may omit it. If you own more than one and omit "
+            "``task_number`` the tool REFUSES and lists them rather than "
+            "guessing — never silently parks an arbitrary task."
         ),
         "inputSchema": {
             "type": "object",
@@ -46,10 +47,10 @@ TOOLS: list[dict[str, Any]] = [
                 "task_number": {
                     "type": "integer",
                     "description": (
-                        "Which of YOUR active tasks to park (its display "
-                        "number). Optional only when you own exactly one "
-                        "active task; required to disambiguate when you own "
-                        "several. Must be owned by you and ACTIVE."
+                        "Which of YOUR tasks to park (its display number). "
+                        "Optional only when you own exactly one parkable task; "
+                        "required to disambiguate when you own several. Must be "
+                        "owned by you and ACTIVE or ASSIGNED."
                     ),
                 },
             },
@@ -64,7 +65,7 @@ TOOLS: list[dict[str, Any]] = [
 
 
 def _handle_park_task(d: SwarmDaemon, worker_name: str, args: ParkTaskArgs) -> list[TextContent]:
-    """#406/#407: park one of the caller's OWN ACTIVE tasks back to ASSIGNED.
+    """#406/#407: park one of the caller's OWN ACTIVE/ASSIGNED tasks.
 
     Only ever touches *this caller's* own tasks, so cross-worker parking
     is impossible by construction. Not a blocker — no binding is created.
@@ -75,10 +76,15 @@ def _handle_park_task(d: SwarmDaemon, worker_name: str, args: ParkTaskArgs) -> l
     task. When a worker owns >1 ACTIVE task (legal pre-#405-reload /
     un-reconciled state) that silently set down an arbitrary one (the
     2026-05-17 public-website wrong-task footgun). Now: an explicit
-    ``task_number`` parks exactly that task (must be owned + ACTIVE);
-    omitted parks the sole ACTIVE task iff there is exactly one; omitted
+    ``task_number`` parks exactly that task (must be owned + parkable);
+    omitted parks the sole candidate iff there is exactly one; omitted
     with >1 candidate REFUSES and lists them — never a silent guess, no
     mutation on the refusal/rejection paths.
+
+    #1159: the candidate set is ACTIVE **or** ASSIGNED. Requiring ACTIVE
+    made the verb racy against the INV-2 reconciler rather than strict —
+    see :meth:`TaskBoard.park`. The success text now quotes the status read
+    back from the board instead of asserting that the board is truthful.
     """
     reason = str(args.get("reason") or "").strip()
     if not reason:
@@ -114,26 +120,39 @@ def _handle_park_task(d: SwarmDaemon, worker_name: str, args: ParkTaskArgs) -> l
                 }
             ]
         if target.id not in {t.id for t in parkable}:
+            hint = (
+                "it is already parked"
+                if target.is_on_hold
+                else f"a {target.status.value} task cannot be parked"
+            )
             return [
                 {
                     "type": "text",
                     "text": (
-                        f"Task #{want} is {target.status.value}, not ACTIVE — only an "
-                        f"active task can be parked. Nothing changed."
+                        f"Task #{want} was not parked — {hint}. Only your own "
+                        f"ACTIVE or ASSIGNED tasks can be set down. Nothing changed."
                     ),
                 }
             ]
         task = target
     else:
         if not parkable:
-            return [{"type": "text", "text": f"No active task to park for '{worker_name}'."}]
+            return [
+                {
+                    "type": "text",
+                    "text": (
+                        f"No parkable task for '{worker_name}' — you own no "
+                        f"ACTIVE or ASSIGNED task that isn't already parked."
+                    ),
+                }
+            ]
         if len(parkable) > 1:
             nums = ", ".join(f"#{t.number}" for t in sorted(parkable, key=lambda t: t.number))
             return [
                 {
                     "type": "text",
                     "text": (
-                        f"Ambiguous — you own {len(parkable)} active tasks ({nums}). "
+                        f"Ambiguous — you own {len(parkable)} parkable tasks ({nums}). "
                         f"swarm_park_task won't guess which to set down. Re-call it "
                         f"with task_number=<n>. Nothing changed."
                     ),

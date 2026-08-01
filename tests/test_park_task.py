@@ -50,11 +50,40 @@ def test_park_rejects_non_owner(board):
     assert board.get(t.id).status == TaskStatus.ACTIVE  # untouched
 
 
-def test_park_rejects_non_active(board):
+def test_park_rejects_unowned_and_missing(board):
     t = board.create(title="x")
-    board.assign(t.id, "api")  # ASSIGNED, not ACTIVE
-    assert board.park(t.id, "api", "r") is False
+    board.assign(t.id, "api")
+    assert board.park(t.id, "web", "not mine") is False
     assert board.park("missing-id", "api", "r") is False
+
+
+def test_park_accepts_an_owned_assigned_task(board):
+    """#1159: park used to require ACTIVE. The INV-2 reconciler demotes a
+    worker's ACTIVE task to ASSIGNED every time it goes RESTING, so the
+    window in which the verb was reachable was seconds wide and not under
+    the caller's control — #1158 sat ASSIGNED and could not be parked at
+    all. An owned ASSIGNED task is accepted and carries the marker."""
+    t = board.create(title="x")
+    board.assign(t.id, "api")
+    assert board.park(t.id, "api", "set down") is True
+    got = board.get(t.id)
+    assert got.status == TaskStatus.ASSIGNED
+    assert got.assigned_worker == "api"
+    assert got.is_on_hold
+
+
+def test_park_rejects_terminal_and_blocked_tasks(board):
+    """Widening to ASSIGNED must not widen to everything: DONE/FAILED have
+    nothing to set down, and BLOCKED is already off-active with its own
+    unblock verbs."""
+    done = _active(board, "done", "api")
+    board.complete(done.id, resolution="shipped")
+    assert board.park(done.id, "api", "r") is False
+
+    blocked = _active(board, "blocked", "api")
+    assert board.block_for_operator(blocked.id, "awaiting a human") is True
+    assert board.park(blocked.id, "api", "r") is False
+    assert board.get(blocked.id).status == TaskStatus.BLOCKED
 
 
 # --- swarm_park_task MCP handler ---------------------------------------
@@ -83,7 +112,7 @@ def test_handler_requires_reason(daemon):
 
 def test_handler_no_active_task(daemon):
     out = _handle_park_task(daemon, "swarm", {"reason": "nothing to park"})
-    assert "no active task" in out[0]["text"].lower()
+    assert "no parkable task" in out[0]["text"].lower()
 
 
 def test_park_is_not_a_blocker(daemon):
@@ -187,15 +216,34 @@ def test_explicit_task_not_owned_by_caller_rejected_no_mutation(daemon):
     assert b.get(mine.id).status == TaskStatus.ACTIVE  # mine untouched too
 
 
-def test_explicit_task_not_active_rejected_no_mutation(daemon):
+def test_explicit_assigned_task_is_parkable(daemon):
+    """#1159 changed this contract. It used to assert an ASSIGNED task was
+    REFUSED ("not ACTIVE"), which is what left #1158 unparkable — the INV-2
+    reconciler had already demoted it. The status is unchanged either way;
+    what the call now adds is the marker that stops the nudges."""
     b = daemon.task_board
     t = b.create(title="assigned only")
     b.assign(t.id, "swarm")  # ASSIGNED, never activated
 
     out = _handle_park_task(daemon, "swarm", {"reason": "x", "task_number": t.number})
 
-    assert "not active" in out[0]["text"].lower()
-    assert b.get(t.id).status == TaskStatus.ASSIGNED  # unchanged (was already)
+    assert "parked" in out[0]["text"].lower()
+    assert b.get(t.id).status == TaskStatus.ASSIGNED
+    assert b.get(t.id).is_on_hold
+    assert SystemAction.TASK_PARKED in [e.action for e in daemon.drone_log.entries]
+
+
+def test_explicit_task_in_unparkable_state_rejected_no_mutation(daemon):
+    """The refusal path still exists — it just applies to BLOCKED/terminal
+    rather than to ASSIGNED."""
+    b = daemon.task_board
+    t = _force_active(b, "blocked one", "swarm")
+    assert b.block_for_operator(t.id, "awaiting a human") is True
+
+    out = _handle_park_task(daemon, "swarm", {"reason": "x", "task_number": t.number})
+
+    assert "cannot be parked" in out[0]["text"].lower()
+    assert b.get(t.id).status == TaskStatus.BLOCKED  # unchanged
     assert SystemAction.TASK_PARKED not in [e.action for e in daemon.drone_log.entries]
 
 
