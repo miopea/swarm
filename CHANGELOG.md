@@ -18,6 +18,8 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The task panel had no reachable minimize button on mobile (#1159).** The button was rendered the whole time — it was permanently off-screen. `.panel-header` is a nowrap flex row with no overflow handling, and `.tab-group` is a flex *item*, so its default `min-width: auto` refused to shrink below its content. Measured at a 414px viewport: the tab strip claimed 615px and pushed `.btn-collapse` — the last child, `margin-left: auto` — to x=647..670. Non-zero size, `display: flex`, and 233px past the right edge with nothing to scroll it into view. Also failed at 768px. `min-width: 0` lets the tab strip shrink and `overflow-x: auto` lets it scroll its own tabs, the same idiom `.filter-bar` already uses two rules up in that media query; the chevron keeps `flex-shrink: 0` so it stays pinned at the edge. Measured after: 414px → chevron at x=382..405 fully visible, header `scrollWidth` 669 → 412; desktop at 1200px unchanged in every measurement. Not covered by the pytest suite — this is CSS layout and the repo has no Playwright harness — so it was verified by direct measurement of the rendered header, before and after, at three viewports.
+
 ## [2026.8.1.2] - 2026-08-01
 
 ### Features
@@ -26,11 +28,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **`swarm_park_task` accepts an owned ASSIGNED task, not just an ACTIVE one (#1159).** Requiring ACTIVE made the verb **racy rather than strict**: the INV-2 reconciler demotes a worker's ACTIVE task to ASSIGNED every time that worker goes RESTING — six times in two hours on #1158 — so the window in which park was reachable was seconds wide and not under the caller's control. A worker who had deliberately set a task down could not set it down. From ASSIGNED the status does not change; what the call adds is the `PARKED_TAG` marker, which is the part that actually stops the momentum machinery. BLOCKED and terminal tasks stay refused — BLOCKED is already off-active and has its own unblock verb (#1059 `release`), and a DONE/FAILED task has nothing to set down. `parkable_tasks_for_worker` now also excludes already-parked tasks, so re-parking is a no-op rather than something that makes the "which one did you mean?" disambiguation prompt ambiguous, and sorts ACTIVE first so the no-argument form still picks the task the worker is on.
+
 ## [2026.8.1] - 2026-08-01
 
 ### Features
 
 ### Fixes
+
+- **`swarm_park_task` reported success and left the task ACTIVE (#1159).** The park write *did* land — what undid it was `WorkerStateTracker._promote_one_assigned`, which fires on every RESTING → BUZZING transition and promotes the worker's most-recently-updated ASSIGNED task. `TaskBoard.park` stamps `updated_at`, so the task just set down sorted **first** there and was re-activated by the worker's very next turn — a turn usually about something else entirely — after which `activate` cleared `PARKED_TAG` and erased the evidence, so it repeated every cycle. #1015's fix **landed but was incomplete rather than regressed**: it guarded `auto_start_next_assigned` and the IdleWatcher, both of which correctly skip `is_on_hold`, and missed this third re-activation path. The diagnosis is anchored in `task_history`, not inferred — the re-activation left **no** history row, which rules out `start_task` (that path always writes `TaskAction.STARTED`) and leaves the promoter, which writes none. The confirmation message was fixed too: it asserted *"Board is truthful now — no reload needed"*, a claim the caller could not verify, worded to discourage the very re-query that would have caught the bug, and it stayed word-for-word convincing for months. It now reports the status and owner **read back from the board** after the write, so a failed write says so.
 
 - **The Queen view remembers whether you minimized the task panel.** It hardcoded `setBottomCollapsed(false, false)` — "the Queen dashboard always shows the task board expanded" — so every return to the Queen silently discarded a minimize, and because expanding also re-applies the saved drag split, the panel reappeared at its dragged size when you had deliberately put it away. The worker view already honoured the preference, so the two views disagreed; both now read it through one `readBottomCollapsed()` helper so they cannot drift apart again. Two further defects surfaced while fixing it: the worker view's `storedCollapse !== ''` read a *never-set* preference as "collapse", minimizing a panel nobody had asked to minimize on a fresh session; and the collapsed flag lived in `sessionStorage` while the panel's size lives in `localStorage`, so one preference had two lifetimes — reopen the tab and the panel came back expanded at the size you'd dragged it to while minimized. Both halves are now durable, with a one-time migration of any session-scoped value.
 
