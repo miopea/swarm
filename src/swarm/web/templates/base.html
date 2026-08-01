@@ -2418,6 +2418,28 @@
             .bottom-tabbed.collapsed .tab-utils-mobile-btn { display: none !important; }
             .bottom-tabbed.collapsed .collapsed-label { display: none !important; }
 
+            /* Keep the minimize chevron reachable on mobile.
+               .panel-header is a nowrap flex row with no overflow, and
+               .tab-group is a flex ITEM — so its default min-width:auto
+               refused to shrink below its content (615px of tab buttons at
+               a 414px viewport). That pushed .btn-collapse, the last child,
+               to x=647 in a 414px window: rendered, non-zero size, and
+               permanently off-screen with nothing to scroll it into view.
+               There was no minimize button on mobile at all.
+               min-width:0 lets the tab strip shrink; overflow-x lets it
+               scroll its own tabs — same idiom as .filter-bar above. The
+               chevron keeps flex-shrink:0 so it stays pinned at the edge. */
+            .bottom-tabbed > .panel-header { gap: 0.25rem; }
+            .bottom-tabbed > .panel-header > .tab-group {
+                min-width: 0;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+            }
+            .bottom-tabbed > .panel-header > .tab-group::-webkit-scrollbar { display: none; }
+            .bottom-tabbed > .panel-header > .tab-group > .tab-btn { flex-shrink: 0; }
+            .bottom-tabbed > .panel-header > .btn-collapse { flex-shrink: 0; }
+
             /* UX audit fixes: mobile layout improvements */
             /* Collapse detail empty state on mobile */
             .detail-empty-state { display: none; }
