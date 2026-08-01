@@ -233,3 +233,75 @@ def test_invalid_task_number_rejected_no_mutation(daemon):
     out = _handle_park_task(daemon, "swarm", {"reason": "r", "task_number": "not-a-number"})
     assert "task_number" in out[0]["text"].lower()
     assert daemon.task_board.get(t.id).status == TaskStatus.ACTIVE  # untouched
+
+
+# --- #1159: the park must SURVIVE the state-tracker's BUZZING promotion --
+
+
+def _tracker_with_board(board):
+    """A WorkerStateTracker wired to *board*, reusing the state-tracker
+    suite's fixture builder so this test exercises the real promotion path
+    rather than a hand-rolled stand-in."""
+    from tests.test_state_tracker import _make_tracker
+
+    tracker, _emit = _make_tracker()
+    tracker.task_board = board
+    return tracker
+
+
+def test_parked_task_survives_worker_going_buzzing(board):
+    """#1159 root cause. ``_promote_one_assigned`` fires on every
+    RESTING → BUZZING transition and picks the most-recently-updated
+    ASSIGNED task. ``park`` stamps ``updated_at``, so the just-parked task
+    sorted FIRST and was re-activated by the worker's very next turn —
+    which also cleared PARKED_TAG, erasing the set-down entirely.
+
+    #1015 guarded ``auto_start_next_assigned`` and the IdleWatcher against
+    exactly this; this third re-activation path was never covered.
+    """
+    from swarm.worker.worker import Worker, WorkerState
+
+    t = _active(board, "the fold-in", "platform")
+    assert board.park(t.id, "platform", "set down deliberately") is True
+    assert board.get(t.id).status == TaskStatus.ASSIGNED
+
+    worker = Worker(name="platform", path="/tmp/platform")
+    worker.state = WorkerState.BUZZING
+    _tracker_with_board(board)._promote_one_assigned(worker)
+
+    got = board.get(t.id)
+    assert got.status == TaskStatus.ASSIGNED, "parked task was re-activated by the promoter"
+    assert got.is_on_hold, "PARKED_TAG was cleared, so the next cycle would re-activate too"
+
+
+def test_promotion_still_picks_up_genuinely_queued_work(board):
+    """The guard must not stall real dispatch: an un-parked ASSIGNED task
+    is still promoted when the worker goes BUZZING."""
+    from swarm.worker.worker import Worker, WorkerState
+
+    parked = _active(board, "set down", "platform")
+    assert board.park(parked.id, "platform", "pivoting") is True
+    queued = board.create(title="fresh work")
+    board.assign(queued.id, "platform")
+    # Adversarial ordering: make the PARKED task the most-recently-updated so
+    # it wins the sort. The guard must be the tag, never the timestamp.
+    board.get(parked.id).updated_at = board.get(queued.id).updated_at + 100
+
+    worker = Worker(name="platform", path="/tmp/platform")
+    worker.state = WorkerState.BUZZING
+    _tracker_with_board(board)._promote_one_assigned(worker)
+
+    assert board.get(queued.id).status == TaskStatus.ACTIVE
+    assert board.get(parked.id).status == TaskStatus.ASSIGNED
+
+
+def test_park_confirmation_reports_the_persisted_status(daemon):
+    """The old text asserted 'Board is truthful now — no reload needed',
+    a claim the caller could not verify and which was false for months.
+    The confirmation must now quote a status READ BACK from the board."""
+    t = _force_active(daemon.task_board, "x", "swarm")
+    out = _handle_park_task(daemon, "swarm", {"reason": "operator preempt"})
+    text = out[0]["text"]
+
+    assert "truthful" not in text.lower()
+    assert daemon.task_board.get(t.id).status.value in text.lower()

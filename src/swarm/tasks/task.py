@@ -25,6 +25,12 @@ HOLD_TAG = "hold"  # canonical tag applied when filing a task on HOLD
 # the very same task straight back up and re-activated it, and the operator
 # saw the park "not persist". Cleared by ``TaskBoard.activate``, the single
 # re-dispatch chokepoint, so resuming the task is still one normal action.
+# #1159: there was a THIRD re-activation path #1015 missed — the state
+# tracker's ``_promote_one_assigned``, which fires on every RESTING → BUZZING
+# transition. Because ``park`` stamps ``updated_at``, the just-parked task
+# sorted first there and was re-activated within seconds, which also cleared
+# this tag and erased the evidence. Any new code that moves a task to ACTIVE
+# without an explicit operator/worker dispatch must check ``is_on_hold``.
 PARKED_TAG = "parked"
 # #1070: the canonical ``external_blocker_ref`` value meaning "waiting on a
 # HUMAN DECISION", not on an upstream artifact. swarm_report_blocker requires

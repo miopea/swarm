@@ -291,13 +291,25 @@ class WorkerStateTracker:
         already shows an ACTIVE task we promote nothing (it's already
         in-progress); otherwise we promote the single most-recently-updated
         ASSIGNED task (the latest dispatch). Never more than one.
+
+        #1159: a deliberately-parked task is excluded. ``park`` stamps
+        ``updated_at``, so the just-set-down task sorted FIRST here and was
+        re-activated by the worker's very next RESTING → BUZZING transition
+        — seconds later, and for a turn that was about something else
+        entirely. ``activate`` then cleared PARKED_TAG, erasing the set-down
+        so the next cycle repeated it. #1015 fixed this same re-activation in
+        ``auto_start_next_assigned`` and the IdleWatcher; this third path was
+        never covered, which is why the park kept "not persisting" after
+        #1015 shipped. Going BUZZING is not evidence the worker resumed the
+        task it explicitly put down — resuming is ``start_task``, which
+        clears the marker through the same ``activate`` chokepoint.
         """
         if self.task_board is None:
             return
         mine = [t for t in self.task_board.all_tasks if t.assigned_worker == worker.name]
         if any(t.status == TaskStatus.ACTIVE for t in mine):
             return
-        assigned = [t for t in mine if t.status == TaskStatus.ASSIGNED]
+        assigned = [t for t in mine if t.status == TaskStatus.ASSIGNED and not t.is_on_hold]
         if not assigned:
             return
         assigned.sort(key=lambda t: t.updated_at, reverse=True)

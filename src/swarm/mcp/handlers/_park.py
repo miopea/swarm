@@ -156,12 +156,22 @@ def _handle_park_task(d: SwarmDaemon, worker_name: str, args: ParkTaskArgs) -> l
             )
     except Exception:
         pass  # audit best-effort — the transition already succeeded
+    # #1159: report the status READ BACK from the board, not the transition we
+    # asked for. The old text asserted "Board is truthful now — no reload
+    # needed" — a claim the caller cannot check, worded to discourage the very
+    # re-query that would have caught the bug. It stayed word-for-word
+    # convincing for months while the promoter silently re-activated the task.
+    # A read-back can still be stale, but it is a measurement rather than an
+    # assertion: if the write did not stick, this says so.
+    after = board.get(task.id)
+    status = after.status.value if after is not None else "unknown"
+    owner = (after.assigned_worker if after is not None else None) or "nobody"
     return [
         {
             "type": "text",
             "text": (
-                f"Parked #{task.number} → ASSIGNED (still yours). Board is "
-                f"truthful now — no reload needed. Resume it anytime."
+                f"Parked #{task.number}. Board now reads: status={status}, "
+                f"owner={owner}. Resume it anytime."
             ),
         }
     ]

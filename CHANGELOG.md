@@ -6,6 +6,14 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Features
 
+### Changes
+
+### Fixes
+
+## [2026.8.1] - 2026-08-01
+
+### Features
+
 ### Fixes
 
 - **The Queen view remembers whether you minimized the task panel.** It hardcoded `setBottomCollapsed(false, false)` — "the Queen dashboard always shows the task board expanded" — so every return to the Queen silently discarded a minimize, and because expanding also re-applies the saved drag split, the panel reappeared at its dragged size when you had deliberately put it away. The worker view already honoured the preference, so the two views disagreed; both now read it through one `readBottomCollapsed()` helper so they cannot drift apart again. Two further defects surfaced while fixing it: the worker view's `storedCollapse !== ''` read a *never-set* preference as "collapse", minimizing a panel nobody had asked to minimize on a fresh session; and the collapsed flag lived in `sessionStorage` while the panel's size lives in `localStorage`, so one preference had two lifetimes — reopen the tab and the panel came back expanded at the size you'd dragged it to while minimized. Both halves are now durable, with a one-time migration of any session-scoped value.
