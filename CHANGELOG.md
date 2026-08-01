@@ -10,6 +10,18 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.1.4] - 2026-08-01
+
+### Features
+
+- **Opt-in text composer in the fullscreen terminal (mobile).** Fullscreen is how a worker is actually read on a phone, but the overlay is `position: fixed; inset: 0; z-index: 9999` and `openTerminalFullscreen` moved only the terminal element into it — the composer stayed behind in the detail panel, fully covered. The only reachable input was the raw xterm, which gets no autocorrect, autocapitalize or dictation. A **⌨ Type** button in the fullscreen bar now docks the composer, and lights up while it is open so the button reports state rather than merely offering an action. **Default off** — it costs terminal rows and reading is the common case. It *moves* the existing `#mobile-send-bar` rather than building a second input, so there is one textarea, one `mobileSend()` and one set of autocorrect attributes to keep correct. The close path restores it **before** removing the overlay: the composer is a moved node, not a copy, so tearing the overlay down while docked would delete the detail panel's only touch input for the rest of the session — a regression that would surface later on a surface nobody associates with fullscreen. A test pins that ordering and was proven to fail when the two calls are swapped.
+
+### Changes
+
+### Fixes
+
+- **The mobile composer never rendered, on any device.** `#mobile-send-bar` carried an inline `style="display:none"` in the markup, and the rule meant to reveal it — `.mobile-send-bar.visible { display: flex }` inside `@media (pointer: coarse)` — has no `!important`. An inline style attribute outranks any selector without one, so `selectWorker`'s `classList.add('visible')` could never take effect. Measured in Chromium at 414px with touch emulation, with a positive control on each link in the chain: coarse pointer matched **true**, the rule existed and matched **true**, the class was applied **true**, and computed display was still `none`. So the one input path offering autocorrect, autocapitalize, spellcheck and voice dictation was dead from the start, which is why typing on mobile meant typing into the terminal. The inline attribute was redundant as well as harmful — `base.html` already hides the composer by default — so removing it is the whole fix. Desktop is unaffected: with a fine pointer the media query does not match and the composer stays hidden.
+
 ## [2026.8.1.3] - 2026-08-01
 
 ### Features

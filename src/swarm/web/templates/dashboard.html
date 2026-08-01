@@ -187,7 +187,12 @@
             <!-- Tiled terminal grid (hidden by default) -->
             <div class="panel-body tile-grid" id="tile-grid" style="display:none"></div>
             <!-- Mobile send bar (touch devices only) -->
-            <div class="mobile-send-bar" id="mobile-send-bar" style="display:none">
+            <!-- No style="display:none" here: an inline style beats
+                 `.mobile-send-bar.visible { display: flex }` (no !important),
+                 so the composer never rendered on any device even though the
+                 class was applied. `.mobile-send-bar { display: none }` in
+                 base.html already hides it by default. -->
+            <div class="mobile-send-bar" id="mobile-send-bar">
                 <textarea id="mobile-send-input" rows="1" placeholder="Type or dictate…"
                           enterkeyhint="send" autocapitalize="sentences" autocorrect="on"
                           spellcheck="true" aria-label="Compose a message to the worker"></textarea>

@@ -347,3 +347,92 @@ def test_split_drag_persists_the_applied_ratio():
     assert "area.children[0].getBoundingClientRect().height" not in block, (
         "endDrag must not re-measure the panel to derive the persisted split"
     )
+
+
+def test_fullscreen_composer_is_restored_before_the_overlay_is_removed():
+    """The fullscreen composer is a MOVED node, not a copy.
+
+    ``openTerminalFullscreen`` docks the existing ``#mobile-send-bar`` into
+    the overlay so the operator gets a real textarea (autocorrect,
+    autocapitalize, dictation) instead of raw xterm keystrokes. Because the
+    element is moved rather than cloned, tearing the overlay down while it is
+    still docked would delete the detail panel's only touch input for the rest
+    of the session — and it would look like an unrelated bug later, on a
+    surface the operator never associates with fullscreen.
+
+    So the close path must restore it FIRST. Asserting on order, not merely on
+    presence: both calls existing in the wrong sequence is exactly the failure.
+    """
+    js = (STATIC_DIR / "dashboard.js").read_text()
+    i = js.find("window.openTerminalFullscreen")
+    assert i >= 0, "expected openTerminalFullscreen in dashboard.js"
+    block = js[i : i + 6000]
+
+    assert "function restoreComposer()" in block, "expected a restoreComposer helper"
+    close_i = block.find("btn-close-fs').addEventListener")
+    assert close_i >= 0, "expected the close handler"
+    close_block = block[close_i:]
+
+    restore_i = close_block.find("restoreComposer()")
+    remove_i = close_block.find("overlay.remove()")
+    assert restore_i >= 0, "close handler must restore the composer"
+    assert remove_i >= 0, "close handler must remove the overlay"
+    assert restore_i < remove_i, (
+        "restoreComposer() must run BEFORE overlay.remove(), or the moved "
+        "#mobile-send-bar is destroyed with the overlay"
+    )
+
+
+def test_fullscreen_composer_reuses_the_existing_send_bar():
+    """No second input. A duplicate textarea would need its own send path,
+    its own auto-grow wiring and its own autocorrect attributes, and would
+    drift from the inline one."""
+    js = (STATIC_DIR / "dashboard.js").read_text()
+    i = js.find("window.openTerminalFullscreen")
+    block = js[i : i + 6000]
+    assert "getElementById('mobile-send-bar')" in block, (
+        "fullscreen must dock the existing #mobile-send-bar"
+    )
+    assert "<textarea" not in block, (
+        "fullscreen must not build its own textarea — reuse the composer"
+    )
+
+
+def test_fullscreen_composer_has_a_display_rule_outside_the_coarse_media_query():
+    """``.mobile-send-bar.visible { display: flex }`` lives in
+    ``@media (pointer: coarse)``, and Command Center sets ``display: none
+    !important`` on the id. Docked inside the overlay the composer needs its
+    own rule or it is present in the DOM and invisible."""
+    css = (TEMPLATES_DIR / "base.html").read_text()
+    assert ".terminal-fullscreen > #mobile-send-bar.visible" in css, (
+        "expected an overlay-scoped display rule for the docked composer"
+    )
+
+
+def test_mobile_composer_has_no_inline_display_style():
+    """An inline ``style="display:none"`` on #mobile-send-bar beat the rule
+    that reveals it.
+
+    ``selectWorker`` adds ``.visible``, and ``@media (pointer: coarse)`` has
+    ``.mobile-send-bar.visible { display: flex }`` — but that rule carries no
+    ``!important``, and an inline style attribute outranks any selector
+    without one. Measured in Chromium at 414px with touch emulation: coarse
+    pointer matched, the rule existed and matched, the class was applied, and
+    computed display was still ``none``. So the touch composer — the only
+    input path with autocorrect, autocapitalize and dictation — never
+    rendered on any device.
+
+    The base rule already hides it by default; the inline attribute was
+    redundant as well as harmful.
+    """
+    html = (TEMPLATES_DIR / "dashboard.html").read_text()
+    m = re.search(r'<div class="mobile-send-bar"[^>]*>', html)
+    assert m, "expected the #mobile-send-bar element in dashboard.html"
+    assert "style=" not in m.group(), (
+        "#mobile-send-bar must not carry an inline style — it outranks the "
+        f".visible rule that reveals it. Got: {m.group()}"
+    )
+    css = (TEMPLATES_DIR / "base.html").read_text()
+    assert ".mobile-send-bar {" in css and "display: none;" in css, (
+        "base.html must still hide the composer by default"
+    )

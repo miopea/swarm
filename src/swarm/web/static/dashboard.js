@@ -5081,7 +5081,12 @@
         overlay.innerHTML =
             '<div class="terminal-fullscreen-bar">' +
             '  <span class="fs-title">' + (selectedWorker || 'Terminal') + '</span>' +
-            '  <button class="btn-close-fs" id="btn-close-fs">Close</button>' +
+            '  <span class="fs-bar-actions">' +
+            '    <button class="btn-fs-compose" id="btn-fs-compose" aria-pressed="false"' +
+            '            title="Type with autocorrect and dictation"' +
+            '            aria-label="Toggle text composer">⌨ Type</button>' +
+            '    <button class="btn-close-fs" id="btn-close-fs">Close</button>' +
+            '  </span>' +
             '</div>' +
             '<div class="terminal-fullscreen-body" id="fs-term-body"></div>';
         document.body.appendChild(overlay);
@@ -5101,6 +5106,49 @@
         var vpResize = function() { fitAndResize(); };
         if (window.visualViewport) {
             window.visualViewport.addEventListener('resize', vpResize);
+        }
+
+        // --- Composer toggle (opt-in "normal input" for fullscreen) ---
+        // The overlay is position:fixed/inset:0/z-index:9999, so it covers the
+        // detail panel where #mobile-send-bar lives. Fullscreen is how you
+        // actually read a worker on a phone, so the effect was: the only input
+        // reachable there is the raw xterm, which gets no autocorrect,
+        // autocapitalize or dictation. This MOVES the existing composer into
+        // the overlay rather than building a second one — same textarea, same
+        // mobileSend(), same auto-grow wiring, nothing to keep in sync.
+        //
+        // Default OFF: it costs terminal rows, and reading is the common case.
+        var sendBar = document.getElementById('mobile-send-bar');
+        // Remember the exact slot so the composer goes back where it came from
+        // and not merely "somewhere in the panel" — nextSibling pins position.
+        var composerHome = sendBar ? sendBar.parentNode : null;
+        var composerNext = sendBar ? sendBar.nextSibling : null;
+        function restoreComposer() {
+            // MUST run before overlay.remove(). The composer is a MOVED node,
+            // not a copy, so removing the overlay while it is docked destroys
+            // the detail panel's only touch input for the rest of the session.
+            if (sendBar && composerHome && sendBar.parentNode !== composerHome) {
+                composerHome.insertBefore(sendBar, composerNext);
+            }
+        }
+        var composeBtn = document.getElementById('btn-fs-compose');
+        if (composeBtn && sendBar) {
+            composeBtn.addEventListener('click', function() {
+                var docked = sendBar.parentNode === overlay;
+                if (docked) {
+                    restoreComposer();
+                } else {
+                    overlay.appendChild(sendBar);
+                    var ta = document.getElementById('mobile-send-input');
+                    if (ta) ta.focus();  // raise the soft keyboard in the same tap
+                }
+                composeBtn.setAttribute('aria-pressed', String(!docked));
+                // The composer changes how many rows the terminal gets; refit
+                // so the PTY is told its real size instead of the old one.
+                requestAnimationFrame(function() { setTimeout(fitAndResize, 80); });
+            });
+        } else if (composeBtn) {
+            composeBtn.style.display = 'none';  // no composer in the DOM to dock
         }
 
         var body = document.getElementById('fs-term-body');
@@ -5137,6 +5185,7 @@
             if (window.visualViewport) {
                 window.visualViewport.removeEventListener('resize', vpResize);
             }
+            restoreComposer();  // before overlay.remove() — see restoreComposer
             origParent.appendChild(termEl);
             overlay.remove();
             requestAnimationFrame(function() {

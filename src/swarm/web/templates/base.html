@@ -2591,7 +2591,8 @@
             font-size: 0.85rem;
             font-weight: 600;
         }
-        .terminal-fullscreen-bar .btn-close-fs {
+        .terminal-fullscreen-bar .btn-close-fs,
+        .terminal-fullscreen-bar .btn-fs-compose {
             background: none;
             border: 1px solid var(--border);
             color: var(--text);
@@ -2600,10 +2601,33 @@
             font-size: 0.85rem;
             cursor: pointer;
         }
+        .terminal-fullscreen-bar .fs-bar-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        /* Composer toggle: lit while the composer is docked, so the button
+           reports the state rather than just offering the action. */
+        .terminal-fullscreen-bar .btn-fs-compose[aria-pressed="true"] {
+            border-color: var(--honey);
+            color: var(--honey);
+        }
         .terminal-fullscreen-body {
             flex: 1;
             overflow: hidden;
             touch-action: none;
+        }
+        /* The composer docked into the fullscreen overlay. This is the SAME
+           #mobile-send-bar element moved from the detail panel, not a second
+           input — so it keeps its autocorrect/dictation attributes and the
+           one mobileSend() path. It needs its own display rule because the
+           inline one lives in @media (pointer: coarse), and !important
+           because Command Center sets `#mobile-send-bar { display: none
+           !important }` for the detail panel — a scope that shouldn't reach
+           inside a fullscreen terminal the operator explicitly opened. */
+        .terminal-fullscreen > #mobile-send-bar.visible {
+            display: flex !important;
+            flex-shrink: 0;
         }
 
         /* Touch-friendly targets. P6 brought all interactive elements up to
