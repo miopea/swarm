@@ -1,6 +1,6 @@
 [project]
 name = "swarm-ai"
-version = "2026.8.2.4"
+version = "2026.8.2.5"
 description = "A hive-mind for Claude Code agents — web orchestrator"
 readme = "README.md"
 license = "MIT"
@@ -142,6 +142,22 @@ warn_unused_configs = true
 # KNOWN GAP, stated rather than hidden: a NEW error inside an
 # already-listed module is not caught. Shrinking this list is the work —
 # delete a module the moment it type-checks clean.
+#
+# MEASURED INSTANCE (#1201), so this stays concrete rather than theoretical.
+# #1195 added a REQUIRED keyword-only argument to two spawn helpers. Deleting
+# the resulting kwarg from a call site in `swarm.server.worker_service` (on
+# this list) type-checked CLEAN — "Success: no issues found in 286 source
+# files". The identical deletion in `swarm.queen.runtime` (NOT on this list)
+# was caught: 'Missing named argument "write_identity"'. That pair is the
+# discriminator — it shows the miss is the silencing, not a mypy limitation.
+# The live daemon found it instead, as a 500 on worker creation.
+#
+# So: adding a required parameter across modules is exactly the change this
+# list is worst at. When you make one, check the call sites by hand or add a
+# test that exercises them unpatched (see tests/test_worker_service.py's
+# "#1201" block) — do not rely on the type checker for a listed module.
+# Un-silencing is the real fix but is not free: measured 2026-08-02,
+# `swarm.server.worker_service` = 18 errors, `swarm.server.daemon` = 41.
 [[tool.mypy.overrides]]
 module = [
     "swarm.auth._oauth",

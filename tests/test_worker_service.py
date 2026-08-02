@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from swarm.config import HiveConfig, QueenConfig
+from swarm.config import HiveConfig, QueenConfig, WorkerConfig
 from swarm.drones.log import DroneLog
 from swarm.drones.pilot import DronePilot
 from swarm.server.daemon import SwarmDaemon
@@ -409,3 +409,88 @@ async def test_launch_with_existing_workers_uses_resume_true(monkeypatch, daemon
         f"launch() must pass resume=True when re-launching after a "
         f"holder respawn — got kwargs={captured!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# #1201 — the production call sites must actually SUPPLY the identity writer.
+#
+# #1195 made ``add_worker_live`` / ``launch_workers`` refuse to run without a
+# ``write_identity``, which is a runtime guarantee. Nothing verified that the
+# real callers pass one, and two independent safety nets both miss it:
+#
+#   * mypy — ``swarm.server.worker_service`` is in the [[tool.mypy.overrides]]
+#     silence list, so a missing required kwarg there type-checks CLEAN.
+#     Measured: deleting the kwarg gave "Success: no issues found in 286 source
+#     files". The identical deletion in ``swarm.queen.runtime`` (not silenced)
+#     WAS caught — that pair is what proves the gap is the silencing rather
+#     than a mypy limitation.
+#   * the suite — 1195 tests passed with the kwarg deleted, because every test
+#     that reaches this path PATCHES ``add_worker_live``, so the signature is
+#     never exercised.
+#
+# The live daemon found it instead: POST /api/config/workers returned 500,
+# "add_worker_live() missing 1 required keyword-only argument: 'write_identity'".
+#
+# These tests deliberately do NOT patch ``add_worker_live`` — patching it is
+# exactly what hid the defect.
+# ---------------------------------------------------------------------------
+
+
+def _recording_pool(monkeypatch):
+    """A pool whose spawn succeeds, recording the cwd it was given."""
+    pool = MagicMock()
+
+    async def _spawn(name, cwd, **kwargs):
+        return FakeWorkerProcess(name=name)
+
+    async def _kill(name):
+        return None
+
+    pool.spawn = _spawn
+    pool.kill = _kill
+    return pool
+
+
+@pytest.mark.asyncio
+async def test_spawn_supplies_the_identity_writer_to_the_real_helper(daemon, monkeypatch):
+    """Drop ``write_identity=self._write_identity`` from WorkerService.spawn and
+    this fails with a TypeError — which neither mypy nor any other test does."""
+    seen: list[tuple[str, str]] = []
+    daemon.pool = _recording_pool(monkeypatch)
+    daemon.worker_svc._write_identity = lambda wc, path: seen.append((wc.name, path))
+
+    await daemon.worker_svc.spawn(WorkerConfig(name="carol", path="/tmp/carol"))
+
+    assert seen == [("carol", "/tmp/carol")], (
+        "the identity writer never reached add_worker_live — a worker spawned "
+        "this way would inherit a parent directory's identity"
+    )
+
+
+@pytest.mark.asyncio
+async def test_launch_supplies_the_identity_writer_on_the_fresh_branch(daemon, monkeypatch):
+    """``launch`` has two branches and they call DIFFERENT helpers. This is the
+    no-existing-workers branch -> ``launch_workers``."""
+    seen: list[tuple[str, str]] = []
+    daemon.pool = _recording_pool(monkeypatch)
+    daemon.workers = []  # force the `else:` branch
+    daemon.worker_svc._write_identity = lambda wc, path: seen.append((wc.name, path))
+
+    await daemon.worker_svc.launch([WorkerConfig(name="dave", path="/tmp/dave")])
+
+    assert seen == [("dave", "/tmp/dave")]
+
+
+@pytest.mark.asyncio
+async def test_launch_supplies_the_identity_writer_on_the_resume_branch(daemon, monkeypatch):
+    """The with-existing-workers branch -> ``add_worker_live`` with resume=True.
+    Covered separately because a fix applied to one branch is easy to believe
+    covers both."""
+    seen: list[tuple[str, str]] = []
+    daemon.pool = _recording_pool(monkeypatch)
+    assert daemon.workers, "fixture must seed a worker to hit the resume branch"
+    daemon.worker_svc._write_identity = lambda wc, path: seen.append((wc.name, path))
+
+    await daemon.worker_svc.launch([WorkerConfig(name="erin", path="/tmp/erin")])
+
+    assert seen == [("erin", "/tmp/erin")]

@@ -10,6 +10,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.2.5] - 2026-08-02
+
+### Features
+
+### Changes
+
+- **Test coverage for the identity writer's production call sites, which two safety nets both missed.** #1195 made `add_worker_live` / `launch_workers` refuse to run without a `write_identity` — a runtime guarantee — but nothing verified the real callers supply one, and the live daemon found that out instead: `POST /api/config/workers` returned 500 with `add_worker_live() missing 1 required keyword-only argument: 'write_identity'`. Both nets were measured, not assumed. **mypy**: deleting the kwarg from a call site in `swarm.server.worker_service` type-checked clean — "Success: no issues found in 286 source files" — because that module is in the `[[tool.mypy.overrides]]` silence list; the identical deletion in `swarm.queen.runtime` (not silenced) *was* caught, and that pair is the discriminator showing the miss is the silencing rather than a mypy limitation. **The suite**: 1195 tests passed with the kwarg deleted, because every test reaching that path patches `add_worker_live`, so the signature is never exercised. Three new tests in `tests/test_worker_service.py` drive `WorkerService.spawn` and both branches of `.launch` through the *real* helper; dropping the kwarg from any one of the three call sites now fails exactly one of them. The `[[tool.mypy.overrides]]` "KNOWN GAP" comment records the measurement so the next person adding a required parameter across modules does not re-derive it — including that un-silencing is not free (`worker_service` = 18 pre-existing errors, `daemon` = 41).
+
+### Fixes
+
 ## [2026.8.2.4] - 2026-08-02
 
 ### Features
