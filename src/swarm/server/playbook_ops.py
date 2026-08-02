@@ -53,6 +53,19 @@ _PLAYBOOK_RECALL_LIMIT = 3
 # per the context-engineering token budget ("just-in-time + some upfront").
 _LEARNING_RECALL_LIMIT = 3
 _LEARNING_MIN_OVERLAP = 2
+# #1185: the recall block is injected into a worker's PTY as ONE PASTE, so it
+# needs a CHARACTER bound and not only an item count — three entries of 10k
+# chars is a 30k-char paste. Measured on the live board when this landed: real
+# resolutions average 2077 chars, p90 3748, max 10539, so an uncapped block of
+# three routinely ran to 6k+ and could reach 31k.
+#
+# Truncation cuts on a LINE boundary. The defect this fixes was a screen scrape
+# that cut at the terminal pane width, leaving 26.6% of stored learnings
+# starting mid-word; a cap that cut mid-line would reintroduce exactly that.
+# Nothing is lost either way — the truncation marker names
+# ``swarm_get_learnings``, the deliberate pull path, which stays uncapped.
+_LEARNING_CHARS_PER_ITEM = 800
+_LEARNING_BLOCK_CHARS = 2400
 # Common >=4-char words that carry no topical signal — excluded from the
 # keyword-overlap relevance so learnings aren't matched on boilerplate.
 _LEARNING_STOPWORDS = frozenset(
@@ -112,6 +125,13 @@ class PlaybookOps:
         self._drone_log = drone_log
         self._task_board = task_board
         self._track_task = track_task
+        # #1185: no production method reads this any more — it existed for
+        # ``consolidate_learnings``' PTY scrape, which is gone. Kept because
+        # removing it is a 7-call-site change to daemon wiring and test
+        # fixtures for no functional gain, and because the #1185 regression
+        # test injects a worker here whose ``get_content`` raises, which is
+        # what actively proves the scrape has not come back. Retire it in a
+        # deliberate cleanup, not as a side effect of a bug fix.
         self._get_worker = get_worker
 
     def fire_synthesis(self, task: SwarmTask, resolution: str) -> None:
@@ -188,6 +208,31 @@ class PlaybookOps:
             return ""
 
     @staticmethod
+    def _clip_learning(text: str, limit: int = _LEARNING_CHARS_PER_ITEM) -> str:
+        """Clip ``text`` to ``limit`` chars on a LINE boundary (#1185).
+
+        Whole lines only: the defect this cap exists alongside was a PTY screen
+        scrape that cut at the pane width, so a cap that cut mid-word would
+        reproduce the same unreadable output from the other direction. A single
+        line longer than the limit is kept whole rather than split — better one
+        oversized line than a sentence severed mid-clause.
+
+        Returns the text unchanged when it already fits, so short learnings
+        carry no marker and read exactly as the author wrote them.
+        """
+        text = text.strip()
+        if len(text) <= limit:
+            return text
+        kept: list[str] = []
+        used = 0
+        for line in text.splitlines():
+            if kept and used + len(line) + 1 > limit:
+                break
+            kept.append(line)
+            used += len(line) + 1
+        return "\n".join(kept) + "\n… (truncated — swarm_get_learnings for the full text)"
+
+    @staticmethod
     def _keywords(text: str) -> set[str]:
         """Significant (>=4-char, non-stopword) lowercase tokens for overlap."""
         return {
@@ -225,8 +270,17 @@ class PlaybookOps:
                 "",
                 "--- Relevant learnings from past tasks (apply if they fit) ---",
             ]
+            # #1185: bound the block, not just the item count. Each entry is
+            # clipped, and we stop adding once the running total is spent — a
+            # dispatch is a single paste into a live PTY, so its size is a
+            # feature of the message, not an afterthought.
+            budget = _LEARNING_BLOCK_CHARS
             for t in chosen:
-                lines.append(f"\n[#{t.number} {t.title}]\n{t.learnings.strip()}")
+                entry = f"\n[#{t.number} {t.title}]\n{self._clip_learning(t.learnings)}"
+                if lines[2:] and len(entry) > budget:
+                    break
+                lines.append(entry)
+                budget -= len(entry)
             lines.append("--- end learnings ---")
             return "\n".join(lines)
         except Exception:
@@ -301,25 +355,30 @@ class PlaybookOps:
             )
 
     def consolidate_learnings(self, task: SwarmTask) -> None:
-        """Capture worker's recent output as task learnings.
+        """Record the worker's resolution as the task's learnings.
 
-        Reads the last 30 lines of the assigned worker's PTY content,
-        strips ANSI, and stashes the tail (~15 meaningful lines) on
-        ``task.learnings``.  Best-effort: silent return if the worker
-        is gone or the PTY read fails.
+        The resolution is the text a worker wrote for *this* audience —
+        ``swarm_complete_task`` tells them so explicitly ("shown to future
+        workers picking up similar tasks — write it for *them*"). It is
+        therefore the right thing to recall, and until #1185 it was thrown
+        away.
+
+        WHAT THIS REPLACED, so nobody restores it: this method used to scrape
+        the worker's PTY — ``get_content(30)``, strip CSI escapes, keep the
+        last 15 non-blank lines — and store THAT as knowledge. A terminal
+        screen is not a writeup. Measured across 951 stored learnings when the
+        bug was found: 37.8% of all lines were Claude Code UI chrome, 96.5% of
+        rows carried the footer tray, and 26.6% began mid-sentence because a
+        screen capture cuts at the pane width. One row's "learnings" ended with
+        the thinking indicator, a box rule, and *the operator's next prompt*.
+        Those rows were then replayed verbatim into other workers' dispatches,
+        which is how the bug surfaced — as a giant paste of somebody else's
+        terminal arriving with a task.
+
+        No resolution → no learnings. A force-complete carries none, and
+        recording nothing is the honest outcome: recall skips the task rather
+        than serving a screenful of chrome as if it were a finding.
         """
         if not task.assigned_worker:
             return
-        worker = self._get_worker(task.assigned_worker)
-        if not worker or not worker.process:
-            return
-        try:
-            content = worker.process.get_content(30)
-        except Exception:
-            return
-        if not content:
-            return
-        clean = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", content)
-        lines = [ln.strip() for ln in clean.strip().splitlines() if ln.strip()]
-        if lines:
-            task.learnings = "\n".join(lines[-15:])
+        task.learnings = (task.resolution or "").strip()

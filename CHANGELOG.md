@@ -10,6 +10,17 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.2.2] - 2026-08-02
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Task dispatches were pasting other sessions' terminal screens into workers.** An operator saw a worker receive its task alongside what was plainly terminal-session data, and had seen it several times. It was exactly that. `PlaybookOps.consolidate_learnings` ran on **every** task completion and built `task.learnings` by scraping the assigned worker's PTY — `get_content(30)`, strip CSI escapes, keep the last 15 non-blank lines — and `recall_learnings_for_task` then injected the top 3 of those, **untruncated**, into the next worker's dispatch. Measured across the 951 stored learnings when this was found: **37.8% of all lines were Claude Code UI chrome** (5382 of 14240), **96.5% of rows carried the footer tray**, 73% carried a token counter, and **26.6% began mid-sentence** because a screen capture cuts at the pane width. Task #1083's "learnings" ended with the thinking indicator, a box rule, and *the operator's next prompt* — filed as knowledge and replayed into other workers. Learnings are now the worker's **resolution**, which is the text `swarm_complete_task` already tells workers to write for exactly this audience ("shown to future workers picking up similar tasks — write it for *them*"). That promise was false: `complete()` writes `resolution` while the scrape overwrote the separate `learnings` field, so the deliberately-authored writeup never reached recall. A task completed with no resolution (a force-complete) now records no learnings rather than a screenful of chrome — recall skips it. The PTY-scrape path is deleted, not filtered: chrome patterns are provider-specific and would rot, and Swarm is multi-provider by design.
+- **The recall block is now size-bounded, which is load-bearing rather than cosmetic.** Capping only the *number* of entries never bounded the paste — three entries of 10k chars is a 30k-char paste. Fixing the source alone would have made the reported symptom **worse**: measured on the live board, resolutions average 2077 chars against the scrape's 1178 (p90 3748, max 10539), so an uncapped block of three routinely ran past 6k and could reach 31k. Entries are clipped to `_LEARNING_CHARS_PER_ITEM` (800) against a `_LEARNING_BLOCK_CHARS` (2400) running budget, always **on a line boundary** — a cap that cut mid-word would reintroduce from the other direction the very defect being fixed. Verified against all 952 real rows on the board: worst single entry 2876 → 1014 chars, worst 3-entry block **7352 → 2584**, and **zero** entries cut mid-line. Truncated entries name `swarm_get_learnings`, which stays uncapped, so nothing is lost — only deferred to a deliberate pull. The cap applies to the pre-existing scraped rows too, which is what limits their reach now that they are being left in place rather than migrated.
+
 ## [2026.8.2] - 2026-08-02
 
 ### Features
