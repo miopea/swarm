@@ -168,6 +168,15 @@ class InterWorkerMessageWatcher:
         # fan-out shares one float timestamp because ``send`` stamps ``now``
         # once. Keys on neither content nor recipient, so two genuinely
         # distinct sends — even with identical text — still spawn separately.
+        #
+        # #1182: BOTH sets above are an in-process FAST PATH ONLY. They are
+        # recorded on the success path, so a spawn whose PTY dispatch failed
+        # (task row created and kept ASSIGNED, ``ok`` False) records nothing —
+        # and they are wiped by every daemon reload besides. The authoritative,
+        # restart-durable guard is the source-key TAG that
+        # ``TaskCoordinator.spawn_handoff_task`` writes at ``board.create``
+        # time. Keep these in sync with ``_source_key``; do not treat them as
+        # the dedup.
         self._spawned_sources: set[tuple[str, float]] = set()
         # worker_name → last-nudge monotonic timestamp
         self._last_nudge: dict[str, float] = {}

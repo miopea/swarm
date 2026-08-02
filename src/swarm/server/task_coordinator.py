@@ -43,6 +43,8 @@ methods moved.
 from __future__ import annotations
 
 import asyncio
+import re
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
@@ -58,6 +60,91 @@ if TYPE_CHECKING:
 
 
 _log = get_logger("server.task_coordinator")
+
+# #1182: the DURABLE handoff-dedup key, carried as a tag on the spawned task.
+#
+# Why a tag and not the in-memory set the watcher already keeps: spawning is
+# NOT atomic. ``board.create`` + ``assign`` persist a task row, and only then
+# does the PTY write happen — so a delivery failure leaves a durable task on
+# the board while ``spawn_handoff_task`` returns False and the watcher's
+# ``if not ok`` branch records nothing. Measured on hub → platform message
+# #3151: two TASK_SEND_FAILED entries 19 minutes apart, two tracked tasks
+# (#1180 / #1181) for one message. A key written at ``create`` time cannot
+# miss that window, and being on the board it survives a daemon reload for
+# free — no new table, no migration, no in-memory state to rebuild.
+_HANDOFF_SRC_TAG = "handoff-src:"
+_HANDOFF_MSG_TAG = "handoff-msg:"
+
+# ``Handoff from <sender> (msg #N, sent <ts>): <first line>`` — the
+# parenthetical is provenance (#1182 AC-5), not part of the work's identity,
+# so #647's same-title collapse compares the title WITHOUT it.
+_PROVENANCE_RE = re.compile(r" \(msg #[^)]*\)(?=:)")
+
+
+def _handoff_source_tag(sender: str, created_at: float, msg_id: object) -> str:
+    """Durable dedup key for the SEND a handoff message came from.
+
+    Mirrors :func:`swarm.drones.inter_worker_watcher._source_key` — a
+    broadcast is one ``send`` fanned into one row per recipient, all sharing
+    the single ``created_at`` stamped for the call, so ``(sender, created_at)``
+    collapses the fan-out while leaving two genuinely distinct sends apart.
+
+    Falls back to the message id when there is no usable timestamp: without
+    one, every timestamp-less message from a sender would land in a single
+    bucket and dedup would become silence — the failure mode #1116 explicitly
+    ruled worse than the duplication it was fixing.
+    """
+    try:
+        ts = float(created_at or 0.0)
+    except (TypeError, ValueError):
+        ts = 0.0
+    if ts > 0:
+        return f"{_HANDOFF_SRC_TAG}{sender}:{ts:.5f}"
+    return f"{_HANDOFF_MSG_TAG}{sender}:{msg_id}"
+
+
+def _dedup_title(title: str) -> str:
+    """Strip the provenance segment so #647's same-title check still matches.
+
+    Titles gained ``(msg #N, sent …)`` in #1182 so a worker can see how stale
+    a handoff is before starting it. That segment differs per message, which
+    would have quietly retired the #647 collapse — a dedup that stops matching
+    is indistinguishable from one that never fires.
+    """
+    return _PROVENANCE_RE.sub("", title, count=1)
+
+
+def _sent_stamp(created_at: float) -> str:
+    """UTC minute-precision stamp for a handoff title, '' when unknown."""
+    try:
+        ts = float(created_at or 0.0)
+    except (TypeError, ValueError):
+        return ""
+    if ts <= 0:
+        return ""
+    return datetime.fromtimestamp(ts, tz=UTC).strftime("%Y-%m-%dT%H:%MZ")
+
+
+def _handoff_title(sender: str, msg_id: object, created_at: float, first_line: str) -> str:
+    """``Handoff from <sender> (msg #N, sent <ts>): <first line>``.
+
+    #1182 AC-5: the id and SEND time make staleness visible before a worker
+    spends a turn discovering it. #1180's title read as fresh work while the
+    message it wrapped was already 18 minutes old and partly overtaken by
+    #1179 — nothing in the title said so.
+
+    NO TIMESTAMP → NO PROVENANCE, deliberately. Staleness is the whole point
+    of the segment, and without a send time there is none to report. It also
+    keeps the two guards coherent: without a timestamp
+    :func:`_handoff_source_tag` cannot tell a fan-out sibling from a distinct
+    re-send, so the title must stay in its legacy form for #647's same-title
+    collapse to go on covering that case. Every real ``Message`` carries a
+    ``created_at`` stamped by ``MessageStore.send``, so this is the degraded
+    path, not the normal one.
+    """
+    stamp = _sent_stamp(created_at)
+    provenance = f" (msg #{msg_id}, sent {stamp})" if msg_id is not None and stamp else ""
+    return f"Handoff from {sender}{provenance}: {first_line[:70]}"
 
 
 class TaskCoordinator:
@@ -258,8 +345,16 @@ class TaskCoordinator:
             # failed). KEEP the task ASSIGNED to the original recipient
             # so the IdleWatcher's nudge-on-RESTING-with-ASSIGNED path
             # retries delivery once the recipient's PTY recovers. The
-            # auto-spawn's _spawned_msg_ids dedup prevents re-spawning
-            # the same handoff in the interim.
+            # auto-spawn's dedup prevents re-spawning the same handoff in
+            # the interim.
+            #
+            # #1182 CORRECTION: that last sentence was false when written and
+            # it is why #1180/#1181 happened. The watcher recorded its dedup
+            # only when this function returned True, and this branch returns
+            # False — so a send failure left a durable ASSIGNED task with
+            # NOTHING marking the source send as spawned. The guarantee is now
+            # real: ``spawn_handoff_task`` writes the source key as a task tag
+            # at ``board.create`` time, before any of this can run.
             # #1045 generalises that from auto-handoffs to EVERY assignment.
             # A send failure is a DELIVERY failure, not an assignment
             # decision: the assignment already succeeded and was logged, and
@@ -411,6 +506,64 @@ class TaskCoordinator:
         except Exception:
             _log.debug("spawn_handoff: suppression buzz-log failed", exc_info=True)
 
+    def _handoff_already_tracked(
+        self, board: object, src_tag: str, title: str, recipient: str
+    ) -> bool:
+        """True when this handoff is already on the board — do not re-spawn.
+
+        Two guards, in order of strength:
+
+        1. **#1182, durable** — a task tagged with this send's key, at ANY
+           status. Written at ``board.create`` time, so it holds even when the
+           PTY dispatch that follows fails, and it lives in SQLite so a daemon
+           reload cannot forget it. #1181 spawned 166 seconds AFTER #1180 was
+           completed, which is exactly the window guard 2 cannot see.
+        2. **#647, open only** — same title, still open. The #638-645 incident
+           was ONE directive rendering as 8 tasks, and #1116 later measured why:
+           ``MessageStore.send`` fans out into one row per recipient sharing a
+           single ``created_at``. Guard 1 keys on exactly that, so it now covers
+           the fan-out strictly better. What remains here is the TRANSITIONAL
+           case — handoff tasks spawned before #1182 carry no ``src_tag``, so a
+           still-open one is matched on its legacy (provenance-free) title.
+
+           It deliberately does NOT collapse two titles that both carry
+           provenance. Those differ only when the messages differ, and a
+           genuinely distinct second warning from the same sender must still
+           spawn — stated as AC-3 in #1116 and AC-6 in #1182. Dedup becoming
+           silence is the worse failure of the two.
+
+        The skipped recipient still gets the watcher's nudge, so a deduped
+        handoff is not a dropped one.
+        """
+        tasks = list(getattr(board, "all_tasks", []) or [])
+        already = next((t for t in tasks if src_tag in (getattr(t, "tags", None) or [])), None)
+        if already is not None:
+            _log.info(
+                "spawn_handoff_task: dedup — send %s already spawned task #%s (%s), skipping %s",
+                src_tag,
+                getattr(already, "number", "?"),
+                getattr(getattr(already, "status", None), "value", "?"),
+                recipient,
+            )
+            return True
+        # A legacy title equals its own stripped form, so ``t.title == legacy``
+        # matches only pre-#1182 rows; ``t.title == title`` still catches an
+        # exact re-offer of this same message.
+        legacy = _dedup_title(title)
+        open_same_title = [
+            t
+            for t in tasks
+            if t.title in (title, legacy) and t.status not in (TaskStatus.DONE, TaskStatus.FAILED)
+        ]
+        if open_same_title:
+            _log.info(
+                "spawn_handoff_task: dedup — open handoff '%s' exists, skipping %s",
+                legacy[:60],
+                recipient,
+            )
+            return True
+        return False
+
     async def spawn_handoff_task(self, recipient: str, message: object) -> bool:
         """task #442: turn an actionable cross-worker handoff to an idle,
         task-less recipient into a *tracked* task assigned to that
@@ -421,11 +574,22 @@ class TaskCoordinator:
         the need for).
 
         Wired into ``InterWorkerMessageWatcher`` via
-        ``set_idle_nudge_sender``. Returns True when a task was created
-        and assigned. Idempotency is handled upstream: the watcher
-        de-dupes per message id, and once this assignment lands the
-        recipient has an active task so the watcher's ``has_task`` gate
-        stops it re-firing.
+        ``set_idle_nudge_sender``. Returns True when a task was created,
+        assigned AND dispatched.
+
+        IDEMPOTENCY IS THIS FUNCTION'S JOB, not the caller's (#1182). It used
+        to be described as "handled upstream: the watcher de-dupes per message
+        id, and once this assignment lands the recipient has an active task so
+        the ``has_task`` gate stops it re-firing". Both halves leak:
+
+        * the watcher only records its dedup when this returns True, and this
+          returns False whenever the PTY write fails — after the task row is
+          already on the board;
+        * the ``has_task`` gate reopens the moment that task completes, which
+          is when #1181 spawned, 166 seconds after #1180 went DONE.
+
+        So the guard lives here and is written at ``board.create`` time. See
+        :meth:`_handoff_already_tracked`.
         """
         d = self._d
         board = getattr(d, "task_board", None)
@@ -436,26 +600,10 @@ class TaskCoordinator:
         msg_id = getattr(message, "id", None)
         content = (getattr(message, "content", "") or "").strip()
         first_line = content.splitlines()[0] if content else "(no content)"
-        title = f"Handoff from {sender}: {first_line[:70]}"
-        # task #647: a broadcast fanned to N idle recipients arrives as N
-        # near-identical handoff messages (different ids, same sender+content),
-        # and the per-recipient watcher sweep would spawn one task row each —
-        # the #638-645 incident where ONE directive rendered as 8 "tasks on
-        # many workers". A directive is not N tasks: collapse to a single
-        # tracked task by skipping when an open handoff with the same title
-        # already exists. The deduped recipient still gets a watcher nudge, so
-        # the broadcast isn't lost — it just isn't re-tracked N times.
-        existing = [
-            t
-            for t in board.all_tasks
-            if t.title == title and t.status not in (TaskStatus.DONE, TaskStatus.FAILED)
-        ]
-        if existing:
-            _log.info(
-                "spawn_handoff_task: dedup — open handoff '%s' exists, skipping %s",
-                title[:60],
-                recipient,
-            )
+        created_at = getattr(message, "created_at", 0.0)
+        title = _handoff_title(sender, msg_id, created_at, first_line)
+        src_tag = _handoff_source_tag(sender, created_at, msg_id)
+        if self._handoff_already_tracked(board, src_tag, title, recipient):
             return False
         # #913: duplicate-work suppression. Beyond the exact-title dedup above,
         # skip the spawn if the recipient is ALREADY engaged on equivalent work
@@ -477,7 +625,11 @@ class TaskCoordinator:
             similarity = float(getattr(drones_cfg, "duplicate_title_similarity", 0.8))
             try:
                 dup = is_duplicate_work(
-                    incoming, board.active_tasks_for_worker(recipient), similarity=similarity
+                    incoming,
+                    board.active_tasks_for_worker(recipient),
+                    similarity=similarity,
+                    # #1182: compare the work, not the provenance segment.
+                    normalize=_dedup_title,
                 )
             except Exception:
                 dup = None
@@ -499,7 +651,13 @@ class TaskCoordinator:
             task = board.create(
                 title=title,
                 description=description,
-                tags=["auto-handoff"],
+                # #1182: ``src_tag`` is the durable dedup key and it MUST be
+                # written here, in the same call that creates the row. Anything
+                # recorded after dispatch is lost exactly when it matters — a
+                # send failure keeps the task ASSIGNED for retry (#1045) while
+                # returning False, and the caller's failure branch records
+                # nothing.
+                tags=["auto-handoff", src_tag],
             )
         except Exception:
             _log.warning("spawn_handoff_task: create failed for %s", recipient, exc_info=True)

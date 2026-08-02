@@ -185,6 +185,38 @@ async def test_handoff_suppressed_when_recipient_already_engaged(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_suppression_survives_1182_provenance_on_both_titles(monkeypatch):
+    """#1182 put ``(msg #N, sent …)`` in handoff titles. Those tokens are per-
+    message, so with provenance on the existing task AND the incoming one they
+    count against the Jaccard score twice — #913's suppression would silently
+    stop matching work it matched the day before."""
+    d = make_daemon()
+    monkeypatch.setattr(d.tasks_coord, "assign_and_start_task", AsyncMock(return_value=True))
+    monkeypatch.setattr(d, "edit_task", MagicMock())
+    d.message_store = MagicMock(mark_read=MagicMock(return_value=1))
+
+    existing = d.task_board.create(
+        title="Handoff from api (msg #40, sent 2026-08-01T09:15Z): please fix the foo bug now"
+    )
+    existing.source_worker = "api"
+    d.task_board.assign(existing.id, "web")
+    d.task_board.activate(existing.id)
+
+    msg = SimpleNamespace(
+        sender="api",
+        msg_type="dependency",
+        id=99,
+        content="please fix the foo bug",
+        created_at=1785642598.47355,
+    )
+    before = len(list(d.task_board.all_tasks))
+    result = await d.tasks_coord.spawn_handoff_task("web", msg)
+
+    assert result is False
+    assert len(list(d.task_board.all_tasks)) == before
+
+
+@pytest.mark.asyncio
 async def test_non_duplicate_handoff_still_spawns(monkeypatch):
     """Don't regress #442/#894 — an unrelated handoff still spawns."""
     d = make_daemon()

@@ -26,6 +26,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from swarm.messages.store import Message, MessageStore
     from swarm.tasks.board import TaskBoard
     from swarm.tasks.task import SwarmTask
@@ -169,6 +171,7 @@ def is_duplicate_work(
     existing: list[SwarmTask] | None,
     *,
     similarity: float = 0.8,
+    normalize: Callable[[str], str] | None = None,
 ) -> SwarmTask | None:
     """Return the first task in ``existing`` that ``incoming`` duplicates, or
     ``None``. CONSERVATIVE + deterministic — matches ONLY on structured fields,
@@ -180,13 +183,21 @@ def is_duplicate_work(
 
     Never matches on freeform content. ``incoming`` only needs the attributes
     ``number`` / ``jira_key`` / ``source_worker`` / ``title`` (a not-yet-created
-    handoff descriptor is fine)."""
+    handoff descriptor is fine).
+
+    ``normalize`` is applied to BOTH titles before the similarity comparison,
+    for callers whose titles carry per-instance metadata that isn't part of the
+    work's identity. #1182 added a ``(msg #N, sent …)`` provenance segment to
+    auto-handoff titles; left in, those tokens count against the Jaccard score
+    on both sides and quietly stopped #913's suppression from matching work it
+    had matched the day before."""
     if not existing:
         return None
+    norm = normalize or (lambda s: s)
     in_num = getattr(incoming, "number", 0) or 0
     in_jira = (getattr(incoming, "jira_key", "") or "").strip()
     in_src = (getattr(incoming, "source_worker", "") or "").strip()
-    in_title = getattr(incoming, "title", "") or ""
+    in_title = norm(getattr(incoming, "title", "") or "")
     for t in existing:
         if in_num and (getattr(t, "number", 0) or 0) == in_num:
             return t
@@ -194,6 +205,6 @@ def is_duplicate_work(
             return t
         t_src = (getattr(t, "source_worker", "") or "").strip()
         if in_src and t_src and in_src == t_src:
-            if _title_similarity(in_title, getattr(t, "title", "") or "") >= similarity:
+            if _title_similarity(in_title, norm(getattr(t, "title", "") or "")) >= similarity:
                 return t
     return None

@@ -10,6 +10,19 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.2] - 2026-08-02
+
+### Features
+
+### Changes
+
+- **Auto-handoff task titles carry the source message id and its send time** — `Handoff from hub (msg #3151, sent 2026-08-02T03:49Z): …`. #1180's title read as fresh work while the message it wrapped was already 18 minutes old and partly overtaken by another task; nothing in the title said so, and the worker only found out after spending a turn on it. Omitted when the message has no timestamp: staleness is the whole point of the segment, and without a send time there is none to report — the title stays in its legacy form so #647's same-title collapse goes on covering the case the source key cannot discriminate.
+
+### Fixes
+
+- **One inter-worker handoff could still spawn two tracked tasks, and a daemon reload was never involved.** #1180 and #1181 both cite the *same* message row (#3151, hub → platform — a direct message with no fan-out siblings), so #1116's `(sender, created_at)` key was not at fault; it would have collapsed them correctly. The buzz log names the real cause: `TASK_ASSIGNED` followed 0.2 s later by `TASK_SEND_FAILED`, twice. **Spawning is not atomic** — `board.create` + `assign` persist a task row, and only then does the PTY write happen. A delivery failure makes `assign_and_start_task` return False, so `spawn_handoff_task` returns False, so the watcher takes its `if not ok: return False` branch and records *neither* the in-memory dedup *nor* the #894 `mark_read`. The source message stayed unread (`read_at` was stamped only after the second spawn). #1180 then held the recipient's `has_task` gate shut for 19 minutes; the moment it completed, the worker was task-less with the message still unread, and the #647 guard checks only **open** tasks, so it could not see the now-DONE #1180. #1181 spawned 166 seconds later. The guard is now a task tag written at `board.create` time (`handoff-src:<sender>:<created_at>`) and checked against tasks at **any status**, so it cannot miss the create-succeeded/dispatch-failed window and is restart-durable with no migration. The comment asserting the old dedup "prevents re-spawning the same handoff in the interim" was false when written and has been corrected in place. Verified by replaying a real 23-recipient broadcast and the real #3151 sequence from a copy of the live DB across a genuine board reopen; a positive control against the pre-fix code isolates the re-offer-after-completion case as the one that actually flipped.
+- **`is_duplicate_work` compared provenance as if it were work.** The new title segment is per-message, so with it on both the existing task and the incoming handoff those tokens count against the Jaccard score twice — #913's duplicate-handoff suppression would have silently stopped matching work it matched the day before. It now takes an optional `normalize` applied to both titles; the handoff spawner passes the provenance stripper.
+
 ## [2026.8.1.4] - 2026-08-01
 
 ### Features
