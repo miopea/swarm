@@ -401,7 +401,16 @@ class WorkerService:
         return launched
 
     async def spawn(self, worker_config: WorkerConfig) -> Worker:
-        """Spawn a single worker into the running session."""
+        """Spawn a single worker into the running session.
+
+        NOT the public entry point — call ``daemon.spawn_worker``. It writes the
+        worker's ``.mcp.json`` identity file first, and a session reads that at
+        STARTUP, so anything reaching this method directly produces a live
+        worker that transmits a PARENT directory's identity to the MCP server
+        (#1187). Every ownership guard is an exact comparison against the
+        canonicalised name, so such a worker silently *is* whichever worker owns
+        the inherited file.
+        """
         from swarm.server.daemon import SwarmOperationError
         from swarm.worker.manager import add_worker_live
 

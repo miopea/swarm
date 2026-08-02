@@ -1520,56 +1520,119 @@ class SwarmDaemon(EventEmitter):
             targets.setdefault(d, (w.name, d, w.provider_name or default_prov))
         return list(targets.values())
 
-    def _write_worker_mcp_configs(self) -> None:
-        """Write per-worker .mcp.json files with worker identity in the URL.
+    def _write_identity_file(self, name: str, worker_dir: Path, provider_name: str) -> None:
+        """Write ONE worker's ``.mcp.json``, naming that worker in the URL.
 
-        Each worker gets ``?worker=<name>`` in the MCP URL so the daemon
-        can identify which worker is calling MCP tools.
+        Extracted from the startup sweep (#1187) so the spawn path can write a
+        single worker's file without sweeping every configured worker. The
+        sweep and the spawn path must stay one implementation: two generators
+        of the same file drift, and the failure is silent because a wrong
+        identity resolves to a real registered worker.
         """
         import json as _json
 
         from swarm.auth.mcp_token import get_or_create_mcp_token
         from swarm.providers import get_provider
 
-        port = self.config.port
+        if not worker_dir.is_dir():
+            return
+        # ``.mcp.json`` is Claude Code's config format. Non-hooks providers
+        # don't read it — Codex reaches the same MCP server via
+        # ``~/.codex/config.toml`` (codex-team-config) — so don't drop an
+        # inert file into their worktrees.
+        try:
+            if not get_provider(provider_name).supports_hooks:
+                return
+        except Exception:
+            # A typo'd provider in config must not abort the whole sweep and
+            # silently strand every worker after it in the iteration.
+            _log.warning(
+                "unknown provider %r for worker %s — skipping its .mcp.json",
+                provider_name,
+                name,
+                exc_info=True,
+            )
+            return
         # Local workers authenticate to the (now token-gated) /mcp endpoint via
         # an injected Authorization header. This is transparent to the worker —
-        # Claude Code reads headers from .mcp.json on connect.
-        token = get_or_create_mcp_token()
-        for name, worker_dir, provider_name in self._identity_targets():
-            if not worker_dir.is_dir():
-                continue
-            # ``.mcp.json`` is Claude Code's config format. Non-hooks providers
-            # don't read it — Codex reaches the same MCP server via
-            # ``~/.codex/config.toml`` (codex-team-config) — so don't drop an
-            # inert file into their worktrees.
-            try:
-                if not get_provider(provider_name).supports_hooks:
-                    continue
-            except Exception:
-                # A typo'd provider in config must not abort the whole sweep and
-                # silently strand every worker after it in the iteration.
-                _log.warning(
-                    "unknown provider %r for worker %s — skipping its .mcp.json",
-                    provider_name,
-                    name,
-                    exc_info=True,
-                )
-                continue
-            mcp_path = worker_dir / ".mcp.json"
-            mcp_config = {
-                "mcpServers": {
-                    "swarm": {
-                        "type": "http",
-                        "url": f"http://localhost:{port}/mcp?worker={name}",
-                        "headers": {"Authorization": f"Bearer {token}"},
-                    }
+        # Claude Code reads headers from .mcp.json on connect. Always minted by
+        # the helper, never copied from a sibling worker's file.
+        mcp_config = {
+            "mcpServers": {
+                "swarm": {
+                    "type": "http",
+                    "url": f"http://localhost:{self.config.port}/mcp?worker={name}",
+                    "headers": {"Authorization": f"Bearer {get_or_create_mcp_token()}"},
                 }
             }
-            try:
-                mcp_path.write_text(_json.dumps(mcp_config, indent=2) + "\n")
-            except OSError:
-                _log.warning("failed to write .mcp.json for %s", name, exc_info=True)
+        }
+        try:
+            (worker_dir / ".mcp.json").write_text(_json.dumps(mcp_config, indent=2) + "\n")
+        except OSError:
+            _log.warning("failed to write .mcp.json for %s", name, exc_info=True)
+
+    def _write_worker_mcp_configs(self) -> None:
+        """Write per-worker .mcp.json files with worker identity in the URL.
+
+        Each worker gets ``?worker=<name>`` in the MCP URL so the daemon
+        can identify which worker is calling MCP tools.
+
+        This is the STARTUP sweep. It is not the only writer any more — see
+        :meth:`ensure_worker_identity`, which the spawn path calls, because a
+        worker created after boot never reaches this code (#1187).
+        """
+        for name, worker_dir, provider_name in self._identity_targets():
+            self._write_identity_file(name, worker_dir, provider_name)
+
+    def ensure_worker_identity(self, worker_config: WorkerConfig) -> None:
+        """Give ONE worker its identity file + Swarm artifacts before it spawns.
+
+        #1187: ``_write_worker_mcp_configs`` had a single call site — the
+        startup sweep in :meth:`start`. Nothing on the create path invoked it,
+        so ``POST /api/config/workers`` (what the dashboard's Add Worker button
+        posts to) returned 201 with a live, RESTING worker that had NO
+        ``.mcp.json``. Claude Code then walks up the tree and loads the nearest
+        parent's file; under ``~/projects/*`` that is ``project-root``'s. Every
+        ownership guard is an exact comparison against the canonicalised name,
+        so the new worker *was* project-root to the board — able to read and
+        close its tasks.
+
+        That is #1055's failure mode in its non-recoverable form. Wrong-CASE is
+        rescued by case-insensitive canonicalisation; wrong-IDENTITY resolves
+        cleanly to a different real worker and nothing detects it.
+
+        MUST be called BEFORE the process starts. A session reads ``.mcp.json``
+        at STARTUP, so writing it afterwards does not reach the running session
+        — the file lands, the session keeps transmitting the inherited name, and
+        only a respawn fixes it. That ordering is the whole point of doing this
+        here rather than after ``spawn`` returns.
+
+        Best-effort by design: a worker that spawns without its artifacts is
+        recoverable, but refusing to spawn because a directory is read-only is
+        not an improvement.
+        """
+        default_prov = self.config.provider or "claude"
+        worker_dir = worker_config.resolved_path
+        provider_name = worker_config.provider or default_prov
+        try:
+            self._write_identity_file(worker_config.name, worker_dir, provider_name)
+        except Exception:
+            _log.warning(
+                "identity file write failed for %s — it may inherit a parent's",
+                worker_config.name,
+                exc_info=True,
+            )
+        # The startup sweep installs these over the same target set, so a
+        # post-boot worker was missing its /swarm-* commands and Skills for the
+        # same reason and until the same restart.
+        try:
+            self._install_worker_artifacts_for(worker_config.name, worker_dir, provider_name)
+        except Exception:
+            _log.warning(
+                "artifact install failed for %s — continuing",
+                worker_config.name,
+                exc_info=True,
+            )
 
     def _install_worker_artifacts(self) -> None:
         """Install Swarm slash commands and Skills into each worker's workdir.
@@ -1580,6 +1643,24 @@ class SwarmDaemon(EventEmitter):
         behaviors (``/swarm-checkpoint``, ``/swarm-coordinate``) have a
         structured home.  Both are idempotent and overwrite on every daemon
         start so updates propagate via Reload.
+
+        This is the STARTUP sweep; :meth:`_install_worker_artifacts_for` does
+        one worker and is what the spawn path calls (#1187).
+        """
+        # #1055: same target set as the identity files — a configured worker
+        # that happened to be down at daemon start was skipped here too, so it
+        # silently lost its ``/swarm-*`` commands and Skills as well.
+        for name, worker_dir, provider_name in self._identity_targets():
+            self._install_worker_artifacts_for(name, worker_dir, provider_name)
+
+    def _install_worker_artifacts_for(
+        self, name: str, worker_dir: Path, provider_name: str
+    ) -> None:
+        """Install ``/swarm-*`` commands, Skills and playbooks for ONE worker.
+
+        Extracted from the sweep (#1187) so the spawn path can serve a single
+        post-boot worker. Kept as one implementation for the same reason as
+        :meth:`_write_identity_file` — a second copy drifts silently.
         """
         from swarm.hooks.install import (
             install_worker_commands,
@@ -1587,47 +1668,43 @@ class SwarmDaemon(EventEmitter):
         )
         from swarm.providers import get_provider
 
+        if not worker_dir.is_dir():
+            return
+        # ``.claude/commands`` + ``.claude/skills`` are Claude Code paths.
+        # Non-hooks providers (Codex, Gemini, OpenCode) don't read them —
+        # Codex's skills live globally in ``~/.agents/skills`` via
+        # codex-team-config — so skip the writes rather than litter their
+        # worktrees with inert dirs.
+        try:
+            if not get_provider(provider_name).supports_hooks:
+                return
+        except Exception:
+            _log.warning(
+                "unknown provider %r for worker %s — skipping its artifacts",
+                provider_name,
+                name,
+                exc_info=True,
+            )
+            return
+        try:
+            install_worker_commands(worker_dir)
+        except Exception:
+            _log.debug("failed to install slash commands for %s", name, exc_info=True)
+        try:
+            install_worker_skills(worker_dir)
+        except Exception:
+            _log.debug("failed to install skills for %s", name, exc_info=True)
+        # Phase 3: render ACTIVE in-scope playbooks as native Skills —
+        # other providers reach playbooks via swarm_get_playbooks.
         store = getattr(self, "playbook_store", None)
-        # #1055: same target set as the identity files — a configured worker
-        # that happened to be down at daemon start was skipped here too, so it
-        # silently lost its ``/swarm-*`` commands and Skills as well.
-        for name, worker_dir, provider_name in self._identity_targets():
-            if not worker_dir.is_dir():
-                continue
-            # ``.claude/commands`` + ``.claude/skills`` are Claude Code paths.
-            # Non-hooks providers (Codex, Gemini, OpenCode) don't read them —
-            # Codex's skills live globally in ``~/.agents/skills`` via
-            # codex-team-config — so skip the writes rather than litter their
-            # worktrees with inert dirs.
-            try:
-                if not get_provider(provider_name).supports_hooks:
-                    continue
-            except Exception:
-                _log.warning(
-                    "unknown provider %r for worker %s — skipping its artifacts",
-                    provider_name,
-                    name,
-                    exc_info=True,
-                )
-                continue
-            try:
-                install_worker_commands(worker_dir)
-            except Exception:
-                _log.debug("failed to install slash commands for %s", name, exc_info=True)
-            try:
-                install_worker_skills(worker_dir)
-            except Exception:
-                _log.debug("failed to install skills for %s", name, exc_info=True)
-            # Phase 3: render ACTIVE in-scope playbooks as native Skills —
-            # other providers reach playbooks via swarm_get_playbooks.
-            if store is None:
-                continue
-            try:
-                from swarm.playbooks.installer import install_worker_playbooks
+        if store is None:
+            return
+        try:
+            from swarm.playbooks.installer import install_worker_playbooks
 
-                install_worker_playbooks(worker_dir, store, worker_name=name)
-            except Exception:
-                _log.debug("failed to install playbooks for %s", name, exc_info=True)
+            install_worker_playbooks(worker_dir, store, worker_name=name)
+        except Exception:
+            _log.debug("failed to install playbooks for %s", name, exc_info=True)
 
     def _cleanup_file_locks(self) -> None:
         """Remove expired file locks."""
@@ -2138,7 +2215,21 @@ class SwarmDaemon(EventEmitter):
         return await self.worker_svc.launch(worker_configs)
 
     async def spawn_worker(self, worker_config: WorkerConfig) -> Worker:
-        """Spawn a single worker into the running session."""
+        """Spawn a single worker into the running session.
+
+        #1187: the identity file is written HERE, before the process starts,
+        because this is the one path every spawn route funnels through —
+        ``POST /api/config/workers`` (and so the dashboard's Add Worker
+        button), ``POST /api/workers/spawn``, and the web route. Putting it in
+        the create handler would have left the other two broken, and the next
+        route to spawn a worker would inherit the bug rather than the fix.
+
+        Ordering is load-bearing: a session reads ``.mcp.json`` at STARTUP, so
+        writing it after ``spawn`` returns lands the file but leaves the live
+        session transmitting a parent directory's identity until it is
+        respawned.
+        """
+        self.ensure_worker_identity(worker_config)
         return await self.worker_svc.spawn(worker_config)
 
     async def sleep_worker(self, name: str) -> None:
@@ -2150,7 +2241,30 @@ class SwarmDaemon(EventEmitter):
         await self.worker_svc.kill(name)
 
     async def revive_worker(self, name: str) -> None:
-        """Revive a STUNG worker."""
+        """Revive a STUNG worker, respawning it if the roster already dropped it.
+
+        #1187: ``kill`` marks a worker STUNG without removing it, but
+        ``WorkerService.discover`` rebuilds the roster from LIVE pool processes
+        only — so once the PTY is gone the worker is erased from
+        ``daemon.workers`` and the documented recovery answered 404 "Worker not
+        found". Kill was effectively irreversible through the API.
+
+        A worker that is absent from the roster but still in config is exactly
+        that case, and respawning it is what the operator meant. Routed through
+        :meth:`spawn_worker` rather than ``worker_svc.spawn`` so the recreated
+        worker gets its identity file — a recovery path that resurrects a
+        worker without one would reintroduce the borrowed-identity bug this
+        task exists to close.
+
+        An unconfigured name still raises through the normal path: the fallback
+        must not turn a typo into a silent spawn.
+        """
+        if self.get_worker(name) is None:
+            wc = self.config.get_worker(name)
+            if wc is not None:
+                _log.info("revive: %s absent from roster — respawning from config", name)
+                await self.spawn_worker(wc)
+                return
         await self.worker_svc.revive(name)
 
     async def kill_session(self, *, all_sessions: bool = False) -> None:

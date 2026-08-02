@@ -10,6 +10,19 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.2.3] - 2026-08-02
+
+### Features
+
+### Changes
+
+- **`POST /api/workers/spawn` resolves a configured worker's path from config.** Given only `{"name": …}` it returned 400 "path is required" even though the daemon already knew the path — which turned the documented recovery for a killed worker into a dead end. When the name is not in config the error now says so, rather than a bare "path is required" that reads as the caller's mistake.
+
+### Fixes
+
+- **A worker created after boot never got its own `.mcp.json`, so it transmitted a PARENT directory's identity.** `_write_worker_mcp_configs` had exactly one call site — the startup sweep in `daemon.start()`. Nothing on the create path invoked it, so `POST /api/config/workers` returned 201 with a live, RESTING worker that had no identity file; Claude Code then walks up the tree and loads the nearest parent's, which under `~/projects/*` carries `?worker=project-root`. Every ownership guard is an exact comparison against the canonicalised name, so the new worker **was** project-root to the board — able to read and close its tasks. This is #1055's failure mode in its non-recoverable form: wrong-CASE is rescued by case-insensitive canonicalisation, while wrong-IDENTITY resolves cleanly to a different real worker and nothing detects it. **Not an API-only edge case** — the dashboard's Add Worker button posts the same endpoint, so the operator's normal path produced the same broken worker, silently. The write now happens in `daemon.spawn_worker`, the one path every spawn route funnels through, **before** the process starts: a session reads `.mcp.json` at STARTUP, so writing it afterwards lands the file while the running session keeps transmitting the inherited name until a respawn. A post-boot worker was missing its `/swarm-*` commands and Skills for the same reason and until the same restart, so those are installed on the same path.
+- **`kill` then `revive` was a dead end — kill was effectively irreversible through the API.** `kill` marks a worker STUNG without removing it, but `WorkerService.discover` rebuilds the roster from LIVE pool processes only, so once the PTY is gone the worker is erased from `daemon.workers` and `POST /api/workers/{name}/revive` answered 404 "Worker not found". Revive now respawns a worker that is absent from the roster but still in config, routed through `spawn_worker` so the recreated worker gets its identity file — a recovery path that resurrected a worker without one would have reintroduced the borrowed-identity bug above. An unconfigured name still 404s, so the fallback cannot turn a typo into a silent spawn.
+
 ## [2026.8.2.2] - 2026-08-02
 
 ### Features

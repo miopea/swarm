@@ -403,8 +403,20 @@ async def handle_workers_spawn(request: web.Request) -> web.Response:
         return json_error("name is required")
     if err := validate_worker_name(name):
         return json_error(err)
+    # #1187: an already-configured worker's path is known to the daemon, so
+    # demanding the caller repeat it turned the documented recovery for a
+    # killed worker ("respawn it") into a 400. Fall back to config, and when
+    # that misses, say so — a bare "path is required" reads as a mistake by
+    # the caller rather than "this worker isn't configured".
+    existing = d.config.get_worker(name)
+    if not path and existing:
+        path = existing.path
+        provider = provider or (existing.provider or "")
     if not path:
-        return json_error("path is required")
+        return json_error(
+            f"path is required — '{name}' is not in config, so its path "
+            "could not be resolved from there"
+        )
     from swarm.providers import get_valid_providers
 
     if provider and provider not in get_valid_providers():

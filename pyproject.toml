@@ -1,6 +1,6 @@
 [project]
 name = "swarm-ai"
-version = "2026.8.2.2"
+version = "2026.8.2.3"
 description = "A hive-mind for Claude Code agents — web orchestrator"
 readme = "README.md"
 license = "MIT"
@@ -254,6 +254,10 @@ max-complexity = 12
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["RUF059"]  # unused unpacked vars in test fixtures are intentional
+# Importing a pytest fixture and then naming it as a test parameter is the
+# standard way to share one, and ruff reads the parameter as redefining the
+# import. Scoped to the one file that does it rather than blanketing tests/**.
+"tests/test_worker_create_identity.py" = ["F811"]
 
 [dependency-groups]
 dev = [
