@@ -157,6 +157,7 @@ def daemon(monkeypatch):
         set_workers=lambda ws: setattr(d, "workers", ws),
         worker_lock=d._worker_lock,
         init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
+        write_identity=lambda wc, path: None,
     )
     return d
 

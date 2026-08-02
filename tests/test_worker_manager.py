@@ -13,6 +13,14 @@ from swarm.worker.worker import Worker, WorkerState
 from tests.fakes.process import FakeWorkerProcess
 
 
+# #1195: the spawn helpers REQUIRE an identity writer. These tests exercise
+# process wiring, not identity, so they pass an explicit no-op — the whole
+# point of the required argument is that skipping it has to be a deliberate,
+# visible act rather than an omission nobody notices.
+def _NO_IDENTITY(wc, spawn_path):
+    return None
+
+
 def _make_fake_pool(workers_dict: dict | None = None):
     """Create a mock ProcessPool that returns FakeWorkerProcess instances."""
     pool = AsyncMock()
@@ -67,7 +75,7 @@ async def test_launch_workers_spawns_all():
         WorkerConfig(name="api", path="/tmp/api"),
         WorkerConfig(name="web", path="/tmp/web"),
     ]
-    result = await launch_workers(pool, configs, stagger_seconds=0)
+    result = await launch_workers(pool, configs, stagger_seconds=0, write_identity=_NO_IDENTITY)
 
     assert pool.spawn.call_count == 2
     assert len(result) == 2
@@ -81,7 +89,7 @@ async def test_launch_workers_spawns_all():
 async def test_launch_workers_sets_initial_state():
     pool = _make_fake_pool()
     configs = [WorkerConfig(name="api", path="/tmp/api")]
-    result = await launch_workers(pool, configs, stagger_seconds=0)
+    result = await launch_workers(pool, configs, stagger_seconds=0, write_identity=_NO_IDENTITY)
 
     assert result[0].state == WorkerState.BUZZING
     assert result[0].provider_name == "claude"
@@ -91,7 +99,7 @@ async def test_launch_workers_sets_initial_state():
 async def test_launch_workers_passes_paths():
     pool = _make_fake_pool()
     configs = [WorkerConfig(name="api", path="/tmp/api")]
-    result = await launch_workers(pool, configs, stagger_seconds=0)
+    result = await launch_workers(pool, configs, stagger_seconds=0, write_identity=_NO_IDENTITY)
 
     assert result[0].path == "/tmp/api"
     assert result[0].process.cwd == "/tmp/api"
@@ -105,7 +113,7 @@ async def test_launch_workers_per_worker_provider():
         WorkerConfig(name="claude-worker", path="/tmp/c", provider="claude"),
         WorkerConfig(name="gemini-worker", path="/tmp/g", provider="gemini"),
     ]
-    result = await launch_workers(pool, configs, stagger_seconds=0)
+    result = await launch_workers(pool, configs, stagger_seconds=0, write_identity=_NO_IDENTITY)
 
     assert result[0].provider_name == "claude"
     assert result[1].provider_name == "gemini"
@@ -120,7 +128,9 @@ async def test_launch_workers_inherits_default():
     """Workers with no explicit provider inherit the passed default."""
     pool = _make_fake_pool()
     configs = [WorkerConfig(name="api", path="/tmp/api")]
-    result = await launch_workers(pool, configs, stagger_seconds=0, default_provider="gemini")
+    result = await launch_workers(
+        pool, configs, stagger_seconds=0, default_provider="gemini", write_identity=_NO_IDENTITY
+    )
 
     assert result[0].provider_name == "gemini"
 
@@ -182,7 +192,9 @@ async def test_add_worker_live_with_auto_start():
     workers: list[Worker] = []
     config = WorkerConfig(name="api", path="/tmp/api")
 
-    worker = await add_worker_live(pool, config, workers, auto_start=True)
+    worker = await add_worker_live(
+        pool, config, workers, auto_start=True, write_identity=_NO_IDENTITY
+    )
 
     assert worker.name == "api"
     assert worker.state == WorkerState.BUZZING
@@ -204,7 +216,9 @@ async def test_add_worker_live_without_auto_start():
     workers: list[Worker] = []
     config = WorkerConfig(name="api", path="/tmp/api")
 
-    worker = await add_worker_live(pool, config, workers, auto_start=False)
+    worker = await add_worker_live(
+        pool, config, workers, auto_start=False, write_identity=_NO_IDENTITY
+    )
 
     assert worker.state == WorkerState.RESTING
     assert worker.provider_name == "claude"
@@ -219,7 +233,12 @@ async def test_add_worker_live_inherits_default_provider():
     config = WorkerConfig(name="api", path="/tmp/api")
 
     worker = await add_worker_live(
-        pool, config, workers, auto_start=True, default_provider="gemini"
+        pool,
+        config,
+        workers,
+        auto_start=True,
+        default_provider="gemini",
+        write_identity=_NO_IDENTITY,
     )
 
     assert worker.provider_name == "gemini"
@@ -290,6 +309,6 @@ async def test_launch_workers_cleans_up_worktree_on_spawn_failure(monkeypatch):
 
     configs = [WorkerConfig(name="api", path="/tmp/api")]
     with pytest.raises(ProcessError):
-        await launch_workers(pool, configs, stagger_seconds=0)
+        await launch_workers(pool, configs, stagger_seconds=0, write_identity=_NO_IDENTITY)
 
     assert "api" in cleanup_calls

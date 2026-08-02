@@ -10,6 +10,20 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.2.4] - 2026-08-02
+
+### Features
+
+### Changes
+
+- **The worker identity-file write is now enforced by construction, not by a docstring.** #1187 fixed the bug by calling `ensure_worker_identity` in `daemon.spawn_worker` and held the rest of the invariant with a comment on `WorkerService.spawn` reading "NOT the public entry point". That is a convention, and a convention is exactly what the original bug *was*: `_write_worker_mcp_configs` existed, worked, and the create path simply never called it. Both spawn helpers in `swarm/worker/manager.py` — `add_worker_live` and `launch_workers`, the only two functions that call `pool.spawn` for a worker — now take a **required keyword-only `write_identity`** and invoke it after worktree resolution and before the process starts. Omitting it is a `TypeError` at the call site rather than a live worker that silently inherits a parent directory's identity. `WorkerService` takes the writer as a required constructor argument and forwards it; `ensure_queen_running` takes one too.
+
+  **`WorkerService.spawn` was the wrong chokepoint**, and measuring it is what showed why: it is only *one* of the four production paths that bring a worker to life. `WorkerService.launch` reaches `add_worker_live` on its resume branch and `launch_workers` on its fresh branch, and `queen.runtime.ensure_queen_running` calls `add_worker_live` directly — all three route around `WorkerService.spawn`. Injecting there would have closed a quarter of the door. `add_worker_live` is also the only layer that knows `spawn_path`, the directory the session is actually started in, which differs from the configured path under `isolation: worktree`; today the worktree nests inside the repo so an inherited file still resolves to the right name, but that is a property of the layout rather than a guarantee, and the writer no longer depends on it.
+
+  `daemon.spawn_worker` keeps its own `ensure_worker_identity` call — not as duplication, but because it additionally installs the worker's `/swarm-*` commands and Skills, which the spawn-time writer deliberately does not (it runs on every re-launch and on the Queen, where reinstalling buys nothing). The `WorkerService.spawn` docstring now states the guarantee instead of asking callers to use a different entry point.
+
+### Fixes
+
 ## [2026.8.2.3] - 2026-08-02
 
 ### Features

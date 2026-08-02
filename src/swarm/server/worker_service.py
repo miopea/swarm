@@ -45,6 +45,7 @@ class WorkerService:
         set_workers: Callable[[list[Worker]], None],
         worker_lock: asyncio.Lock,
         init_pilot: Callable[[bool], None],
+        write_identity: Callable[[WorkerConfig, str], None],
     ) -> None:
         self._broadcast_ws = broadcast_ws
         self._drone_log = drone_log
@@ -56,6 +57,9 @@ class WorkerService:
         self._set_workers = set_workers
         self._worker_lock = worker_lock
         self._init_pilot = init_pilot
+        # #1195: required, not optional. Forwarded to the manager spawn
+        # helpers, which refuse to start a process without it.
+        self._write_identity = write_identity
         # Per-worker write locks to serialize PTY writes
         self._pty_locks: dict[str, asyncio.Lock] = {}
 
@@ -377,6 +381,7 @@ class WorkerService:
                     auto_start=True,
                     default_provider=default_prov,
                     resume=True,
+                    write_identity=self._write_identity,
                 )
                 launched.append(worker)
             async with self._worker_lock:
@@ -388,6 +393,7 @@ class WorkerService:
                 pool,
                 worker_configs,
                 default_provider=default_prov,
+                write_identity=self._write_identity,
             )
             async with self._worker_lock:
                 self._get_workers().extend(launched)
@@ -403,13 +409,19 @@ class WorkerService:
     async def spawn(self, worker_config: WorkerConfig) -> Worker:
         """Spawn a single worker into the running session.
 
-        NOT the public entry point — call ``daemon.spawn_worker``. It writes the
-        worker's ``.mcp.json`` identity file first, and a session reads that at
-        STARTUP, so anything reaching this method directly produces a live
-        worker that transmits a PARENT directory's identity to the MCP server
-        (#1187). Every ownership guard is an exact comparison against the
-        canonicalised name, so such a worker silently *is* whichever worker owns
-        the inherited file.
+        GUARANTEE (#1195): the worker's ``.mcp.json`` identity file is on disk,
+        naming this worker, before its process starts. That does not depend on
+        callers reaching this method through a particular entry point — the
+        ``write_identity`` this service was constructed with is forwarded to
+        ``add_worker_live``, which requires it and calls it before
+        ``pool.spawn``.
+
+        This used to be a request that callers go through
+        ``daemon.spawn_worker`` instead. #1187 was caused by exactly that shape:
+        a writer that existed, worked, and simply was not called. A worker
+        without its own file inherits the nearest parent directory's, and since
+        ownership guards compare canonicalised names exactly, it silently *is*
+        whichever worker owns that file.
         """
         from swarm.server.daemon import SwarmOperationError
         from swarm.worker.manager import add_worker_live
@@ -427,6 +439,7 @@ class WorkerService:
                 workers,
                 auto_start=True,
                 default_provider=config.provider,
+                write_identity=self._write_identity,
             )
         pilot = self._get_pilot()
         if pilot:

@@ -12,7 +12,28 @@ from swarm.pty.process import ProcessError
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from swarm.pty.provider import WorkerProcessProvider
+
+    # #1195: called with ``(worker_config, spawn_path)`` immediately before the
+    # process starts, to write that worker's ``.mcp.json`` identity file into
+    # the directory the session will actually run in.
+    #
+    # It is a REQUIRED keyword-only argument on both spawn helpers below, never
+    # an optional one, because the invariant it protects already failed once by
+    # being optional in practice: in #1187 the writer existed, worked, and the
+    # create path simply never called it — producing live workers that
+    # transmitted a PARENT directory's identity. Ownership guards are exact
+    # comparisons against the canonicalised name, so such a worker silently IS
+    # whichever worker owns the inherited file. Giving this a default would
+    # restore that exact failure mode, so omitting it is a TypeError at the
+    # call site.
+    #
+    # ``spawn_path`` is passed rather than derived from the config because
+    # under ``isolation: worktree`` the two differ, and this layer is the only
+    # one that knows which directory the session is started in.
+    IdentityWriter = Callable[[WorkerConfig, str], None]
 
 _log = get_logger("worker.manager")
 
@@ -68,17 +89,27 @@ async def launch_workers(
     worker_configs: list[WorkerConfig],
     stagger_seconds: float = 2.0,
     default_provider: str = "claude",
+    *,
+    write_identity: IdentityWriter,
 ) -> list[Worker]:
     """Spawn all workers via the pool and return Worker objects.
 
     Each worker gets its own provider-specific command based on its
     ``provider`` config (or the *default_provider* fallback).
+
+    ``write_identity`` is required (#1195) — see :data:`IdentityWriter`. Each
+    worker's identity file is written before ITS process starts, inside the
+    loop, so a failure partway through still leaves every already-started
+    worker correctly identified.
     """
     launched: list[Worker] = []
     for i, wc in enumerate(worker_configs):
         prov_name = _resolve_provider_name(wc, default_provider)
         prov = get_provider(prov_name)
         spawn_path, repo_path, wt_branch = await _resolve_worktree(wc)
+        # BEFORE pool.spawn: a session reads .mcp.json at STARTUP, so a write
+        # that lands after the process is up does not reach it (#1187/#1195).
+        write_identity(wc, spawn_path)
         try:
             cmd = prov.worker_command()
             proc = await pool.spawn(wc.name, spawn_path, command=cmd, shell_wrap=True)
@@ -143,6 +174,8 @@ async def add_worker_live(
     default_provider: str = "claude",
     kind: str = "worker",
     resume: bool = False,
+    *,
+    write_identity: IdentityWriter,
 ) -> Worker:
     """Add a new worker to a running swarm.
 
@@ -153,10 +186,20 @@ async def add_worker_live(
     as the swarm's coordinator — task assignment and SLEEPING are
     skipped for her.  *resume* forwards to the provider's
     ``worker_command`` (the Queen resumes her prior session).
+
+    ``write_identity`` is required (#1195) — see :data:`IdentityWriter`. This
+    function and :func:`launch_workers` are the only two places that call
+    ``pool.spawn`` for a worker, so requiring it here is what makes "a live
+    worker has an identity file naming IT" true by construction rather than by
+    convention.
     """
     prov_name = _resolve_provider_name(worker_config, default_provider)
     prov = get_provider(prov_name)
     spawn_path, repo_path, wt_branch = await _resolve_worktree(worker_config)
+    # BEFORE pool.spawn — see the note in launch_workers. Also AFTER
+    # _resolve_worktree, so an isolated worker's file lands in the worktree the
+    # session actually starts in rather than the configured repo path.
+    write_identity(worker_config, spawn_path)
     if auto_start:
         command = prov.worker_command(resume=resume)
     else:

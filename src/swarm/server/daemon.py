@@ -414,6 +414,7 @@ class SwarmDaemon(EventEmitter):
             set_workers=lambda ws: setattr(self, "workers", ws),
             worker_lock=self._worker_lock,
             init_pilot=lambda enabled: self.init_pilot(enabled=enabled),
+            write_identity=self.write_identity_for_spawn,
         )
         self.tunnel = TunnelManager(
             port=config.port,
@@ -849,7 +850,12 @@ class SwarmDaemon(EventEmitter):
             try:
                 from swarm.queen.runtime import ensure_queen_running
 
-                await ensure_queen_running(self.pool, self.workers, self.config)
+                await ensure_queen_running(
+                    self.pool,
+                    self.workers,
+                    self.config,
+                    write_identity=self.write_identity_for_spawn,
+                )
             except Exception:
                 _log.warning("queen startup failed — continuing without her", exc_info=True)
 
@@ -1584,6 +1590,33 @@ class SwarmDaemon(EventEmitter):
         for name, worker_dir, provider_name in self._identity_targets():
             self._write_identity_file(name, worker_dir, provider_name)
 
+    def write_identity_for_spawn(self, worker_config: WorkerConfig, spawn_path: str) -> None:
+        """The :data:`~swarm.worker.manager.IdentityWriter` injected into the
+        spawn helpers (#1195).
+
+        Identity file ONLY, at the directory the session is actually started in
+        — ``spawn_path``, which differs from the configured path under
+        ``isolation: worktree``. Artifacts (``/swarm-*`` commands, Skills) are
+        deliberately not installed here: this runs on every spawn including
+        re-launches and the Queen, where reinstalling them each time buys
+        nothing. :meth:`ensure_worker_identity` covers those on the create path.
+
+        Never raises into the spawn path — a directory that cannot be written
+        is a worker with a borrowed identity, which is bad, but refusing to
+        spawn is worse and gives the operator nothing to act on. The warning is
+        the signal.
+        """
+        provider_name = worker_config.provider or self.config.provider or "claude"
+        try:
+            self._write_identity_file(worker_config.name, Path(spawn_path), provider_name)
+        except Exception:
+            _log.warning(
+                "identity write failed for %s at %s — it may inherit a parent's identity",
+                worker_config.name,
+                spawn_path,
+                exc_info=True,
+            )
+
     def ensure_worker_identity(self, worker_config: WorkerConfig) -> None:
         """Give ONE worker its identity file + Swarm artifacts before it spawns.
 
@@ -2228,6 +2261,14 @@ class SwarmDaemon(EventEmitter):
         writing it after ``spawn`` returns lands the file but leaves the live
         session transmitting a parent directory's identity until it is
         respawned.
+
+        #1195 moved the GUARANTEE one layer down — ``add_worker_live`` and
+        ``launch_workers`` now require a ``write_identity`` callable and invoke
+        it before ``pool.spawn``, so no spawn path can skip it. The call here
+        is still doing work rather than duplicating that one: it also installs
+        the worker's ``/swarm-*`` commands and Skills, which the spawn-time
+        writer deliberately does not (it runs on every re-launch and on the
+        Queen, where reinstalling buys nothing).
         """
         self.ensure_worker_identity(worker_config)
         return await self.worker_svc.spawn(worker_config)

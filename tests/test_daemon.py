@@ -222,6 +222,7 @@ def daemon(monkeypatch):
         set_workers=lambda ws: setattr(d, "workers", ws),
         worker_lock=d._worker_lock,
         init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
+        write_identity=lambda wc, path: None,
     )
 
     from swarm.server.jira_service import JiraService
@@ -907,6 +908,7 @@ def test_task_board_on_change_broadcasts(monkeypatch):
         set_workers=lambda ws: setattr(d, "workers", ws),
         worker_lock=d._worker_lock,
         init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
+        write_identity=lambda wc, path: None,
     )
     d.pipeline_engine = MagicMock()
     d.pipeline_engine.list_all.return_value = []
@@ -1717,6 +1719,7 @@ async def testbroadcast_ws_dead_client(monkeypatch):
         set_workers=lambda ws: setattr(d, "workers", ws),
         worker_lock=d._worker_lock,
         init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
+        write_identity=lambda wc, path: None,
     )
 
     # Create a mock WS that is "closed"

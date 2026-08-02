@@ -28,6 +28,8 @@ from swarm.logging import get_logger
 from swarm.worker.worker import QUEEN_WORKER_NAME, WORKER_KIND_QUEEN, Worker
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from swarm.config.models import HiveConfig
     from swarm.pty.provider import WorkerProcessProvider
 
@@ -502,6 +504,8 @@ async def ensure_queen_running(
     pool: WorkerProcessProvider,
     workers: list[Worker],
     config: HiveConfig,
+    *,
+    write_identity: Callable[[WorkerConfig, str], None],
 ) -> Worker | None:
     """Spawn the Queen if she isn't already in the worker list.
 
@@ -544,6 +548,7 @@ async def ensure_queen_running(
         default_provider=config.provider or "claude",
         kind=WORKER_KIND_QUEEN,
         resume=True,
+        write_identity=write_identity,
     )
     _log.info("spawned queen (pid=%s)", _pid_of(worker))
     return worker
