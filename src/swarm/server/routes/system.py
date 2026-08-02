@@ -170,6 +170,12 @@ async def handle_health(request: web.Request) -> web.Response:
         pilot_info = d.pilot.get_diagnostics()
     pool = getattr(d, "pool", None)
     holder_drift = getattr(pool, "holder_drift", None) if pool is not None else None
+    # #1203: ``build_sha`` fingerprints the tree but cannot say WHY it differs —
+    # "last release" and "code from no commit" produce equally opaque hashes.
+    # These fields answer that directly, and being status fields rather than log
+    # lines they cost nothing on a clean reload. ``source_checked`` keeps "we
+    # could not tell" distinct from "it is clean".
+    src = getattr(d, "source_tree_state", None)
     return web.json_response(
         {
             "status": "ok",
@@ -181,6 +187,9 @@ async def handle_health(request: web.Request) -> web.Response:
             "build_sha": build_sha(),
             "mcp_schema_drift": tools_source_drift()["drift"],
             "holder_drift": holder_drift,
+            "source_checked": bool(src.checked) if src else False,
+            "source_dirty": bool(src.is_dirty) if src else False,
+            "source_dirty_files": list(src.dirty_files) if src else [],
         }
     )
 

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from swarm.pty.provider import WorkerProcessProvider
     from swarm.queen.oversight import OversightResult, OversightSignal
     from swarm.resources.monitor import ResourceSnapshot
-    from swarm.update import UpdateResult
+    from swarm.update import SourceTreeState, UpdateResult
 
 from swarm.config import HiveConfig, WorkerConfig
 from swarm.drones.log import DroneLog, LogCategory, SystemAction, SystemEntry
@@ -315,6 +315,9 @@ class SwarmDaemon(EventEmitter):
         self._heartbeat_snapshot: dict[str, str] = {}
         # In-flight Queen analysis tracking lives on self.analyzer
         self.start_time = time.time()
+        # #1203: set at startup by record_source_tree_state(). None means the
+        # probe has not run (or failed) — distinct from "clean".
+        self.source_tree_state: SourceTreeState | None = None
         self._bg_tasks: set[asyncio.Task[object]] = set()
         # --- EscalationHandler: escalation, oversight, notifications ---
         from swarm.server.escalation_handler import EscalationHandler
@@ -858,6 +861,10 @@ class SwarmDaemon(EventEmitter):
                 )
             except Exception:
                 _log.warning("queen startup failed — continuing without her", exc_info=True)
+
+        # #1203: record what this process actually loaded, before anything
+        # else can fail confusingly because of it.
+        await self.record_source_tree_state()
 
         # Write per-worker .mcp.json so each worker's MCP calls include identity
         self._write_worker_mcp_configs()
@@ -1525,6 +1532,52 @@ class SwarmDaemon(EventEmitter):
             d = _worker_dir(w).resolve()
             targets.setdefault(d, (w.name, d, w.provider_name or default_prov))
         return list(targets.values())
+
+    async def record_source_tree_state(self) -> None:
+        """Record whether the code THIS PROCESS is running was committed (#1203).
+
+        Runs at startup, deliberately — not when the restart is requested.
+        Recording at request time would capture INTENT: the tree can change
+        between the click and the ``os.execv``, and the whole failure mode here
+        is a snapshot taken mid-edit. Only the process that actually imported
+        the modules can say what got loaded.
+
+        Dev-mode Reload loading the working tree is the POINT of the button —
+        edit, Reload, test — so nothing here blocks or changes it. What was
+        missing was the signal. Measured 2026-08-02: a Reload at ~15:06Z picked
+        up a half-finished refactor and worker creation began failing fleet-wide
+        with a TypeError from a function signature that existed in no commit.
+        origin/main was self-consistent throughout, so the natural first read —
+        "the thing that just shipped is broken" — pointed at innocent code, and
+        the source on disk had already moved on.
+
+        Silent on a clean tree. Reload is routine; a line every time would train
+        the operator to skip the one that matters.
+
+        Never raises: a startup probe that can break startup is worse than the
+        ambiguity it removes.
+        """
+        from swarm.update import get_source_tree_state
+
+        try:
+            state = await get_source_tree_state()
+        except Exception:
+            _log.debug("source tree state probe failed — continuing", exc_info=True)
+            return
+        self.source_tree_state = state
+        if not state.is_dirty:
+            return
+        _log.warning("daemon started on an UNCOMMITTED source tree: %s", state.summary())
+        try:
+            self.drone_log.add(
+                SystemAction.SOURCE_TREE_DIRTY,
+                "system",
+                f"daemon loaded an uncommitted source tree — {state.summary()}",
+                category=LogCategory.SYSTEM,
+                is_notification=True,
+            )
+        except Exception:
+            _log.debug("source tree buzz entry failed", exc_info=True)
 
     def _write_identity_file(self, name: str, worker_dir: Path, provider_name: str) -> None:
         """Write ONE worker's ``.mcp.json``, naming that worker in the URL.

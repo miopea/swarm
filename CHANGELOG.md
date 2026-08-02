@@ -10,6 +10,18 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.2.6] - 2026-08-02
+
+### Features
+
+- **A reload that loaded uncommitted code is now diagnosable after the fact.** Dev-mode Reload re-execs the daemon, which imports `src/swarm/` from the **working tree** — that is the point of the button (edit, Reload, test) and it is unchanged. The hazard is that in this fleet the editor is usually the *swarm worker*, and the operator has no visible connection between "I clicked Reload" and "a worker is mid-refactor". Measured 2026-08-02: a Reload at ~15:06Z picked up a half-finished #1195 and worker creation began failing with a `TypeError` naming a function signature that existed **in no commit**; `origin/main` was self-consistent throughout, so the natural first read — "the thing that just shipped is broken" — pointed at innocent code, and the source on disk had already moved on. The daemon now determines at **startup** whether the code it actually imported was committed, and when it was not, writes a `SOURCE_TREE_DIRTY` buzz entry **naming the files** (an investigator needs to know which subsystem to suspect, and by then the tree has changed again). `/api/health` gains `source_checked` / `source_dirty` / `source_dirty_files` so the question is answerable live rather than only by grepping a log. Silent on a clean tree: Reload is routine, and a line every time would train the operator to skip the one that matters.
+
+  Recorded at **startup rather than at restart-request time** deliberately — request time captures *intent*, and the tree can change between the click and the `os.execv`; only the process that imported the modules can say what got loaded. Two things this could not rest on, both measured: `os.execv` preserves PID **and** process start time (`ps -o lstart=` reported a Jul 31 start for a daemon that had just reloaded), and `build_sha()`'s `<git sha>+<source hash>` is a fingerprint rather than a diagnosis — it cannot say whether the hash is what the SHA checks out to or the result of uncommitted edits, so "running the last release" and "running code from no commit" look identical. `checked=False` is kept distinct from `is_dirty=False` so "we could not tell" never reads as "it is clean".
+
+### Changes
+
+### Fixes
+
 ## [2026.8.2.5] - 2026-08-02
 
 ### Features

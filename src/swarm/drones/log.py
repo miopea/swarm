@@ -139,6 +139,12 @@ class SystemAction(Enum):
     AUTO_NUDGE_SKIPPED = "AUTO_NUDGE_SKIPPED"
     # MCP-session events (task #257: client-side tools-dropped recovery)
     MCP_TOOLS_STALE = "MCP_TOOLS_STALE"
+    # #1203: this daemon started on a source tree with uncommitted changes —
+    # dev-mode Reload re-execs into the WORKING TREE, so the running code may
+    # exist in no commit. Emitted at startup ONLY when dirty, and it names the
+    # files: an investigator arriving later needs to know which subsystem to
+    # suspect, and by then the tree has moved on again.
+    SOURCE_TREE_DIRTY = "SOURCE_TREE_DIRTY"
     # Oversight events
     OVERSIGHT_SIGNAL = "OVERSIGHT_SIGNAL"
     OVERSIGHT_INTERVENTION = "OVERSIGHT_INTERVENTION"

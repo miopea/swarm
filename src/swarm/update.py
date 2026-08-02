@@ -459,6 +459,27 @@ async def reinstall_from_local_source(
     return True, "\n".join(output_lines)
 
 
+def _find_source_repo_root() -> Path | None:
+    """The git checkout the RUNNING swarm code was imported from, or None.
+
+    Walks up from ``swarm.__file__`` (works for editable installs) and falls
+    back to ``get_local_source_path()`` (works for local-path installs).
+
+    Deliberately anchored on the imported package rather than on a configured
+    path: the question this answers is "what code is this process running",
+    and the only honest source for that is where the modules came from.
+    """
+    import swarm
+
+    candidate = Path(swarm.__file__).resolve().parent
+    while candidate != candidate.parent:
+        if (candidate / ".git").exists():
+            return candidate
+        candidate = candidate.parent
+    source = get_local_source_path()
+    return Path(source) if source else None
+
+
 def get_source_git_sha() -> str:
     """Return 8-char git HEAD SHA of the source tree (synchronous).
 
@@ -469,21 +490,10 @@ def get_source_git_sha() -> str:
     """
     import subprocess
 
-    import swarm
-
-    # Walk up from the package directory to find the .git root
-    pkg_dir = Path(swarm.__file__).resolve().parent
-    candidate = pkg_dir
-    while candidate != candidate.parent:
-        if (candidate / ".git").exists():
-            break
-        candidate = candidate.parent
-    else:
-        # No .git found — try get_local_source_path() as fallback
-        source = get_local_source_path()
-        if not source:
-            return ""
-        candidate = Path(source)
+    root = _find_source_repo_root()
+    if root is None:
+        return ""
+    candidate = root
 
     try:
         result = subprocess.run(
@@ -497,6 +507,91 @@ def get_source_git_sha() -> str:
         return result.stdout.strip()
     except Exception:
         return ""
+
+
+@dataclass
+class SourceTreeState:
+    """What the running daemon's source checkout looked like when it started.
+
+    #1203. ``build_sha()`` already fingerprints the tree as
+    ``<git sha>+<source hash>``, but a fingerprint is not a diagnosis: it
+    cannot tell you whether the hash is what the SHA checks out to, or the
+    result of uncommitted edits. "Running the last release" and "running code
+    that exists in no commit" look identical from inside, which is exactly the
+    shape of check this fleet's standard exists to catch.
+
+    ``checked=False`` means the probe could not answer — no git checkout, git
+    missing, or the call failed. That is deliberately distinct from
+    ``is_dirty=False``: "we could not tell" and "it is clean" are different
+    answers and must not collapse into one.
+    """
+
+    repo_root: str = ""
+    head: str = ""
+    dirty_files: list[str] = field(default_factory=list)
+    checked: bool = False
+
+    @property
+    def is_dirty(self) -> bool:
+        return bool(self.dirty_files)
+
+    def summary(self) -> str:
+        """One line naming HEAD, the count, and the files themselves.
+
+        Names files rather than just counting them: the incident that motivated
+        this cost a round trip precisely because "something is uncommitted" does
+        not tell an investigator which subsystem to suspect.
+        """
+        shown = self.dirty_files[:_DIRTY_FILES_IN_SUMMARY]
+        more = len(self.dirty_files) - len(shown)
+        tail = f" (+{more} more)" if more > 0 else ""
+        return (
+            f"HEAD {self.head or '?'} with {len(self.dirty_files)} uncommitted "
+            f"file(s): {', '.join(shown)}{tail}"
+        )
+
+
+# Cap the buzz-log detail so one messy tree can't flood the operator's feed;
+# the count is always exact even when the list is elided.
+_DIRTY_FILES_IN_SUMMARY = 12
+
+
+async def _git_porcelain(root: Path) -> str:
+    """``git status --porcelain`` for *root*. Async so startup never blocks."""
+    proc = await asyncio.create_subprocess_exec(
+        "git",
+        "-C",
+        str(root),
+        "status",
+        "--porcelain",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    stdout_b, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+    return stdout_b.decode(errors="replace")
+
+
+async def get_source_tree_state() -> SourceTreeState:
+    """Determine whether the code this process is RUNNING was committed.
+
+    Never raises — a startup probe that can break startup is worse than the
+    ambiguity it removes.
+    """
+    root = _find_source_repo_root()
+    if root is None:
+        return SourceTreeState()
+    try:
+        porcelain = await _git_porcelain(root)
+    except Exception:
+        _log.debug("source tree probe failed for %s", root, exc_info=True)
+        return SourceTreeState(repo_root=str(root))
+    files = [line[3:].strip() for line in porcelain.splitlines() if len(line) > 3]
+    return SourceTreeState(
+        repo_root=str(root),
+        head=get_source_git_sha(),
+        dirty_files=files,
+        checked=True,
+    )
 
 
 def _hash_source_tree() -> str:
