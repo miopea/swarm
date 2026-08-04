@@ -10,6 +10,20 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.4.3] - 2026-08-04
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **Open shell now works.** Every click failed with an internal server error: `Spawn failed: invalid worker name: 'shell:swarm'`. The session-name prefix was `shell:`, chosen *because* `:` cannot appear in a worker name and so could never collide with one — and `:` is precisely what the holder forbids. It validates every spawn name against `[a-zA-Z0-9_-]+` and rejects the rest outright, so the property that made the prefix safe on the daemon side made it impossible on the holder side. Prefix is now `swarm_shell_`.
+
+  **Nine unit tests passed over a name production can never spawn**, because they ran against a fake pool that validated nothing — the double encoded an assumption about the boundary rather than the boundary's rule, and a double more permissive than the real thing cannot fail the way production fails. The fake now enforces the holder's actual preconditions (name regex *and* absolute-cwd), importing `WORKER_NAME_RE` from the holder's own command handler so the two cannot drift; that regex was extracted from an inline literal in `_cmd_spawn` for exactly this reason. Verified end-to-end against a real holder on a throwaway socket: the old name is rejected with the production error, the new one spawns a live bash in the worker's directory.
+
+  A legal prefix shares the worker-name charset, so unlike `:` it *could* collide. `WorkerService.discover` therefore defers to configuration — a configured worker always wins over the prefix heuristic. Without that, a worker named `swarm_shell_*` would be silently dropped from the roster, and an absent worker reports as nothing at all.
+
 ## [2026.8.4.2] - 2026-08-04
 
 ### Features

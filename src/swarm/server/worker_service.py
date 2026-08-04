@@ -317,7 +317,13 @@ class WorkerService:
                 # bash prompt in the sidebar, eligible for task assignment and
                 # drone polling — and a task handed to bash is lost silently.
                 # See swarm.server.shell_service.
-                if is_shell_session(proc.name):
+                #
+                # Configuration wins over the prefix. The prefix has to use the
+                # worker-name charset (the holder rejects anything else), so it
+                # can no longer be collision-proof by construction — and a false
+                # positive here is the worst kind: the worker is silently absent
+                # from the roster, which reports as nothing at all.
+                if is_shell_session(proc.name) and config.get_worker(proc.name) is None:
                     continue
                 if proc.name in existing:
                     w = existing[proc.name]

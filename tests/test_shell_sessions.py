@@ -24,6 +24,7 @@ from __future__ import annotations
 import pytest
 
 from swarm.server.shell_service import (
+    SHELL_SESSION_PREFIX,
     ShellService,
     is_shell_session,
     shell_session_name,
@@ -34,7 +35,16 @@ from tests.test_worker_service import daemon  # noqa: F401  (fixture)
 
 
 class _FakePool:
-    """Minimal WorkerProcessProvider: records spawns and kills."""
+    """Minimal WorkerProcessProvider: records spawns and kills.
+
+    ENFORCES THE HOLDER'S SPAWN PRECONDITIONS. The first version of this fake
+    accepted any name and any cwd, so nine tests went green over a session
+    name (``shell:swarm``) the real holder rejects on sight — the fake was
+    encoding my assumption about the boundary rather than the boundary's
+    actual rule. A double that is more permissive than the thing it doubles
+    cannot fail the way production fails, which makes it worse than no test:
+    it reports confidence it never earned.
+    """
 
     def __init__(self) -> None:
         self.procs: dict[str, FakeWorkerProcess] = {}
@@ -42,6 +52,17 @@ class _FakePool:
         self.killed: list[str] = []
 
     async def spawn(self, name, cwd, command=None, cols=200, rows=50, shell_wrap=False):
+        # Mirrors PtyCommandHandler._cmd_spawn, importing the same regex so the
+        # two cannot drift apart.
+        import os
+
+        from swarm.pty.command_handler import WORKER_NAME_RE
+        from swarm.pty.process import ProcessError
+
+        if not name or not WORKER_NAME_RE.fullmatch(name):
+            raise ProcessError(f"Spawn failed: invalid worker name: {name!r}")
+        if not os.path.isabs(cwd):
+            raise ProcessError(f"Spawn failed: cwd must be absolute: {cwd!r}")
         self.spawned.append(
             {"name": name, "cwd": cwd, "command": command, "shell_wrap": shell_wrap}
         )
@@ -83,13 +104,18 @@ def svc():
 
 def test_session_names_are_namespaced_and_recognisable():
     """The prefix is the only thing separating a shell from a worker in the
-    pool's flat namespace, so both directions have to be exact."""
-    assert shell_session_name("alice") == "shell:alice"
-    assert is_shell_session("shell:alice") is True
+    pool's flat namespace, so both directions have to be exact.
+
+    Asserted against the constant rather than a literal — a test that hardcodes
+    the prefix has to be edited in lockstep with it, and an edited assertion is
+    not evidence.
+    """
+    assert shell_session_name("alice") == f"{SHELL_SESSION_PREFIX}alice"
+    assert is_shell_session(shell_session_name("alice")) is True
     assert is_shell_session("alice") is False
-    # A worker legitimately named with the substring must not be mistaken for
+    # A worker legitimately containing the substring must not be mistaken for
     # a shell — the check is a prefix, not a search.
-    assert is_shell_session("my-shell:thing") is False
+    assert is_shell_session(f"my-{SHELL_SESSION_PREFIX}thing") is False
 
 
 # --- the property that matters -----------------------------------------
@@ -121,7 +147,7 @@ async def test_a_shell_is_never_adopted_as_a_worker(daemon):  # noqa: F811
 async def test_open_spawns_a_login_shell_in_the_workers_directory(svc):
     session = await svc.open("alice")
 
-    assert session.name == "shell:alice"
+    assert session.name == shell_session_name("alice")
     assert session.worker_name == "alice"
     spawn = svc._pool.spawned[0]
     assert spawn["cwd"] == "/repos/alice", "shell did not start in the worker's folder"
@@ -150,7 +176,7 @@ async def test_close_kills_bash_and_forgets_it(svc):
     await svc.open("alice")
     await svc.close("alice")
 
-    assert svc._pool.killed == ["shell:alice"]
+    assert svc._pool.killed == [shell_session_name("alice")]
     assert svc.get("alice") is None
 
 
@@ -201,3 +227,55 @@ async def test_killing_a_worker_closes_its_shell(daemon):  # noqa: F811
 
     assert daemon.shell_svc.get("alice") is None
     assert shell_session_name("alice") in pool.killed
+
+
+# --- the contract the fake pool did not enforce -------------------------
+
+
+def test_session_name_is_one_the_HOLDER_will_actually_accept():
+    """THE regression guard for the 2026-08-04 shipped bug.
+
+    The first prefix was ``shell:`` — chosen *because* ``:`` cannot appear in
+    a worker name, so a collision would have to be deliberate. The holder
+    validates spawn names against ``[a-zA-Z0-9_-]+`` and rejects ``:``
+    outright, so every real Open-shell click died with
+    ``Spawn failed: invalid worker name: 'shell:swarm'``.
+
+    Nine unit tests passed against a fake pool that validated nothing. The
+    fake encoded my assumption about the holder rather than the holder's
+    actual rule — the exact shape CLAUDE.md warns about: passing tests are
+    not verification when the change touches an external system.
+
+    So this asserts against ``WORKER_NAME_RE`` imported from the holder's own
+    command handler. If either side moves, this breaks.
+    """
+    from swarm.pty.command_handler import WORKER_NAME_RE
+
+    for worker in ("swarm", "rcg-dev-install", "my-rcg", "d365-solutions", "a_b-c"):
+        name = shell_session_name(worker)
+        assert WORKER_NAME_RE.fullmatch(name), f"holder would reject {name!r}"
+
+
+@pytest.mark.asyncio
+async def test_a_configured_worker_is_never_mistaken_for_a_shell(daemon):  # noqa: F811
+    """The new prefix uses the same charset as worker names, so unlike ``:``
+    it *could* collide. A false positive here is severe and silent: the
+    discover filter would drop a real worker from the roster, and a worker
+    that is simply absent produces no error anywhere to notice.
+
+    So the filter defers to configuration — a configured worker always wins,
+    which turns an unlikely-but-invisible failure into a no-op.
+    """
+    from swarm.config import WorkerConfig
+    from swarm.server.shell_service import SHELL_SESSION_PREFIX
+
+    hostile = f"{SHELL_SESSION_PREFIX}looks_like_a_shell"
+    daemon.config.workers.append(WorkerConfig(name=hostile, path="/repos/x"))
+
+    pool = _FakePool()
+    await pool.spawn(hostile, "/repos/x", command=["claude"])
+    daemon.pool = pool
+
+    workers = await daemon.worker_svc.discover()
+
+    assert hostile in {w.name for w in workers}, "a configured worker was dropped as a shell"

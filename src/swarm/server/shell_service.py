@@ -41,9 +41,17 @@ if TYPE_CHECKING:
 _log = get_logger("server.shell_service")
 
 #: Namespace separating shells from workers in the pool's flat key space.
-#: ``:`` cannot appear in a configured worker name, so a collision would have
-#: to be deliberate.
-SHELL_SESSION_PREFIX = "shell:"
+#:
+#: MUST satisfy the holder's ``WORKER_NAME_RE`` (``[a-zA-Z0-9_-]+``) — the
+#: holder validates every spawn name and rejects the rest outright. This was
+#: originally ``shell:``, chosen because ``:`` cannot appear in a worker name
+#: and so could never collide; that is exactly the character the holder
+#: forbids, and every Open-shell click died with "invalid worker name".
+#:
+#: The tradeoff of a legal prefix is that it shares the worker-name charset
+#: and *could* collide. :meth:`WorkerService.discover` therefore defers to
+#: configuration rather than trusting the prefix alone — see the filter there.
+SHELL_SESSION_PREFIX = "swarm_shell_"
 
 #: A login shell, so the operator gets the same PATH and profile they would in
 #: a normal terminal. NOT spawned with ``shell_wrap``: that re-execs bash after

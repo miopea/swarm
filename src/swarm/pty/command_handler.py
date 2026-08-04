@@ -30,6 +30,15 @@ if TYPE_CHECKING:
 
 _log = get_logger("pty.command_handler")
 
+#: Names the holder will accept for a spawned session. This is the real
+#: boundary — the daemon can generate any name it likes, but a name that
+#: fails here is rejected at ``spawn`` with "invalid worker name" and no
+#: amount of daemon-side validation changes that. Named (rather than
+#: inlined in :meth:`_cmd_spawn`) so callers that synthesise session names
+#: can be TESTED against the actual rule instead of a fake pool's
+#: assumption about it.
+WORKER_NAME_RE = re.compile(r"[a-zA-Z0-9_-]+")
+
 
 class PtyCommandHandler:
     """Translates JSON command dicts → JSON response dicts.
@@ -79,7 +88,7 @@ class PtyCommandHandler:
 
         name = msg.get("name", "")
         cwd = msg.get("cwd", "/tmp")
-        if not name or not re.fullmatch(r"[a-zA-Z0-9_-]+", name):
+        if not name or not WORKER_NAME_RE.fullmatch(name):
             return {"ok": False, "error": f"invalid worker name: {name!r}"}
         if not os.path.isabs(cwd):
             return {"ok": False, "error": f"cwd must be absolute: {cwd!r}"}

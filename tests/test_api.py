@@ -3389,6 +3389,8 @@ async def shell_client(shell_daemon):
 
 @pytest.mark.asyncio
 async def test_shell_open_returns_the_session_name(shell_client, shell_daemon):
+    from swarm.server.shell_service import shell_session_name
+
     """The caller needs the pool key to attach the terminal.
 
     A shell is deliberately absent from the worker roster, so the name cannot
@@ -3398,7 +3400,7 @@ async def test_shell_open_returns_the_session_name(shell_client, shell_daemon):
     resp = await shell_client.post(f"/api/workers/{name}/shell", headers=_API_HEADERS)
     assert resp.status == 200
     data = await resp.json()
-    assert data["session"] == f"shell:{name}"
+    assert data["session"] == shell_session_name(name)
     assert data["path"] == shell_daemon.workers[0].path
 
 
@@ -3410,11 +3412,13 @@ async def test_shell_open_on_unknown_worker_is_404(shell_client):
 
 @pytest.mark.asyncio
 async def test_shell_close_kills_bash(shell_client, shell_daemon):
+    from swarm.server.shell_service import shell_session_name
+
     name = shell_daemon.workers[0].name
     await shell_client.post(f"/api/workers/{name}/shell", headers=_API_HEADERS)
     resp = await shell_client.post(f"/api/workers/{name}/shell/close", headers=_API_HEADERS)
     assert resp.status == 200
-    assert shell_daemon.pool.killed == [f"shell:{name}"]
+    assert shell_daemon.pool.killed == [shell_session_name(name)]
 
 
 @pytest.mark.asyncio
