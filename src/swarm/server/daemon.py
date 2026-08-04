@@ -1956,8 +1956,18 @@ class SwarmDaemon(EventEmitter):
             _log.debug("queen health broadcast failed", exc_info=True)
 
     async def _check_for_updates(self) -> None:
-        """Background update check — runs once after a 5s startup delay."""
-        if os.environ.get("SWARM_DEV"):
+        """Background update check — runs once after a 5s startup delay.
+
+        The dev-mode gate consults ``update.dev_mode_active()`` (env var OR
+        editable-install metadata), not ``SWARM_DEV`` alone. The env var is set
+        nowhere on this box — including the daemon started from the project
+        ``.venv`` — so the old check let the shared-config sync run against a
+        developer's working checkout. ``sync_team_config`` re-checks the same
+        gate itself, so a future caller cannot route around it.
+        """
+        from swarm.update import dev_mode_active
+
+        if dev_mode_active():
             _log.debug("dev mode — skipping update check")
             return
         try:

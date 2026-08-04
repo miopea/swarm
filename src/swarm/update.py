@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import re
+import shlex
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -625,61 +626,246 @@ def update_result_to_dict(result: UpdateResult) -> dict[str, Any]:
     return asdict(result)
 
 
-# --- Team config sync ---------------------------------------------------
+# --- Shared team-config sync --------------------------------------------
+#
+# Distributes the shared agent configuration repos (claude-team-config and
+# codex-team-config) onto this box by running each repo's own installer.
+#
+# THREE PROPERTIES THIS CODE EXISTS TO PRESERVE:
+#
+# 1. INVOKE THE INSTALLER THROUGH ``bash``, NEVER DIRECTLY. Both repos commit
+#    ``install.sh`` as mode 100644 — not executable, in git, in every clone.
+#    Running it directly exits 126 ("found, not executable"), which is what it
+#    did on this box 9 times over ~31h without a single success. ``.rcg.yaml``'s
+#    post_clone hook works only because it says ``bash install.sh --yes``. The
+#    caller is fixed here rather than depending on every clone carrying the
+#    right mode bit; a follow-up chmod in those repos is complementary, not a
+#    substitute.
+#
+# 2. NEVER CHANGE WHAT IS CHECKED OUT. A prompt-ablation experiment runs on
+#    branch ``ablation`` in claude-team-config while ``main`` keeps the full
+#    CLAUDE.md (claude-team-config/docs/specs/prompt-ablation.md). This module
+#    therefore runs ONLY ``rev-parse`` and ``fetch`` — both read-only with
+#    respect to HEAD, the working tree and branch checkout. No checkout, no
+#    reset, no pull of our own. The installer's internal
+#    ``git pull --ff-only origin main`` is left exactly as it is, because it
+#    was verified not to switch branches. A sync that forced the box back to
+#    main would destroy the experiment AND look like a successful sync, which
+#    is precisely the failure class this module is being fixed for.
+#
+# 3. SUCCESS AND FAILURE MUST BE EQUALLY OBSERVABLE. The old code logged
+#    failure at WARNING and success at DEBUG. With the daemon's configured
+#    ``log_level = WARNING`` a success could not appear in swarm.log at all —
+#    so "synced fine" and "never ran" were indistinguishable from the log, and
+#    a grep for the success line returned 0 whether or not it had ever worked.
+#    Outcomes are now logged symmetrically at INFO (installed / already
+#    current / skipped) with failures still at WARNING.
 
-_TEAM_CONFIG_CANDIDATES = (
-    Path.home() / "projects" / "rcg" / "claude-team-config",
-    Path.home() / "projects" / "claude-team-config",
+_SHARED_CONFIG_TIMEOUT = 60  # seconds
+_SHARED_CONFIG_STATE_FILE = _CACHE_DIR / "shared-config-state.json"
+
+
+@dataclass(frozen=True)
+class SharedConfigRepo:
+    """A shared agent-config repo and where to look for it."""
+
+    name: str
+    candidates: tuple[Path, ...]
+    installer: str = "install.sh"
+
+
+_SHARED_CONFIG_REPOS: tuple[SharedConfigRepo, ...] = (
+    SharedConfigRepo(
+        name="claude-team-config",
+        candidates=(
+            Path.home() / "projects" / "rcg" / "claude-team-config",
+            Path.home() / "projects" / "claude-team-config",
+        ),
+    ),
+    # codex-team-config is DOWNSTREAM of claude-team-config by construction:
+    # its scripts/sync-from-claude.sh regenerates AGENTS.md as
+    # ``cat AGENTS.header.md <claude-team-config>/CLAUDE.md > AGENTS.md``.
+    #
+    # DECISION: this updater INSTALLS WHAT IS COMMITTED and does NOT run that
+    # regeneration. Distributing config and authoring it are different jobs.
+    # Regeneration reads whatever branch claude-team-config happens to be on,
+    # so on this box today it would rewrite AGENTS.md from the cut ablation
+    # CLAUDE.md and quietly push the experiment into the codex config — a
+    # successful-looking sync that corrupts what it distributes. Regeneration
+    # is a deliberate authoring step and belongs with a human on a known
+    # branch, not in a daemon's background startup task.
+    SharedConfigRepo(
+        name="codex-team-config",
+        candidates=(
+            Path.home() / "projects" / "rcg" / "codex-team-config",
+            Path.home() / "projects" / "codex-team-config",
+        ),
+    ),
 )
 
-_TEAM_CONFIG_TIMEOUT = 60  # seconds
 
+def dev_mode_active() -> bool:
+    """True when this process is running from a development checkout.
 
-async def sync_team_config() -> None:
-    """Run claude-team-config install.sh if the repo is found locally.
-
-    Searches common checkout locations.  If found, runs ``yes | ./install.sh``
-    so all interactive prompts are auto-accepted (team config is authoritative).
-    install.sh handles its own ``git pull`` internally.
-
-    Never raises — failures are logged at warning level.
+    Checks the ``SWARM_DEV`` env var **and** :func:`_is_dev_install`. The env
+    var alone was the old gate and is not sufficient: neither daemon running on
+    this box sets it, including the one started from the project ``.venv``, so
+    the shared-config sync fired from a dev checkout every time.
     """
-    repo_dir: Path | None = None
-    for candidate in _TEAM_CONFIG_CANDIDATES:
-        if (candidate / "install.sh").is_file():
-            repo_dir = candidate
-            break
+    import os
 
+    return bool(os.environ.get("SWARM_DEV")) or _is_dev_install()
+
+
+def _read_shared_config_state() -> dict[str, str]:
+    """Last-installed fingerprint per repo. Missing/corrupt reads as empty."""
+    try:
+        with open(_SHARED_CONFIG_STATE_FILE) as fh:
+            data = json.load(fh)
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_shared_config_state(state: dict[str, str]) -> None:
+    try:
+        _SHARED_CONFIG_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_SHARED_CONFIG_STATE_FILE, "w") as fh:
+            json.dump(state, fh, indent=2)
+    except OSError:
+        # Losing the cache costs one redundant install, never correctness.
+        _log.debug("could not persist shared-config state", exc_info=True)
+
+
+async def _git_output(repo_dir: Path, *args: str) -> str:
+    """Run a READ-ONLY git command in *repo_dir*; "" on any failure.
+
+    Only ``rev-parse`` and ``fetch`` are ever passed here. Nothing in this
+    module may run a command that changes HEAD, the branch or the working
+    tree — see property 2 in the module comment above.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "git",
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            cwd=str(repo_dir),
+        )
+        async with asyncio.timeout(_SHARED_CONFIG_TIMEOUT):
+            out, _ = await proc.communicate()
+        return out.decode(errors="replace").strip() if proc.returncode == 0 else ""
+    except (OSError, TimeoutError, ValueError):
+        return ""
+
+
+async def _repo_fingerprint(repo_dir: Path) -> str:
+    """Identify the repo's current state as ``branch:HEAD:origin/main``.
+
+    ``fetch`` updates remote-tracking refs only — it cannot move HEAD, switch
+    branches or touch the working tree, which is why it is the safe way to
+    notice upstream commits without running the installer.
+
+    The BRANCH is part of the fingerprint on purpose: checking out ``ablation``
+    must invalidate a fingerprint recorded on ``main`` (and vice versa), or the
+    updater would skip the install that makes the switch take effect.
+
+    Returns "" when anything is unreadable, which callers treat as "unknown" —
+    and unknown must never compare equal to a stored fingerprint, or a broken
+    git would silently look like "already current" forever.
+    """
+    head = await _git_output(repo_dir, "rev-parse", "HEAD")
+    if not head:
+        return ""
+    branch = await _git_output(repo_dir, "rev-parse", "--abbrev-ref", "HEAD")
+    await _git_output(repo_dir, "fetch", "--quiet", "origin")
+    remote = await _git_output(repo_dir, "rev-parse", "origin/main")
+    return f"{branch}:{head}:{remote}"
+
+
+def _find_repo(repo: SharedConfigRepo) -> Path | None:
+    for candidate in repo.candidates:
+        if (candidate / repo.installer).is_file():
+            return candidate
+    return None
+
+
+async def _sync_one_shared_config(repo: SharedConfigRepo, state: dict[str, str]) -> bool:
+    """Install *repo* if it is not already current. Returns True if state changed.
+
+    Never raises — a shared-config problem must not take down the update check.
+    """
+    repo_dir = _find_repo(repo)
     if repo_dir is None:
-        _log.debug("claude-team-config repo not found; skipping team config sync")
-        return
+        _log.debug("%s not found locally; skipping", repo.name)
+        return False
 
-    install_sh = repo_dir / "install.sh"
-    _log.debug("syncing team config from %s", repo_dir)
+    fingerprint = await _repo_fingerprint(repo_dir)
+    # "" means we could not read git. Fall through and install rather than
+    # guessing; an unreadable repo is exactly when a stale skip is worst.
+    if fingerprint and state.get(repo.name) == fingerprint:
+        _log.info("%s already current at %s — install skipped", repo.name, fingerprint)
+        return False
+
+    installer = repo_dir / repo.installer
+    _log.info("syncing %s from %s", repo.name, repo_dir)
 
     try:
+        # ``bash <installer>`` — NOT the installer directly. See property 1.
+        # ``yes |`` auto-accepts the installer's prompts; the shared config is
+        # authoritative, so there is nothing to decide interactively.
         proc = await asyncio.create_subprocess_exec(
             "bash",
             "-c",
-            f"yes | {install_sh}",
+            f"yes | bash {shlex.quote(str(installer))}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
             cwd=str(repo_dir),
         )
         assert proc.stdout is not None
         try:
-            async with asyncio.timeout(_TEAM_CONFIG_TIMEOUT):
+            async with asyncio.timeout(_SHARED_CONFIG_TIMEOUT):
                 output = await proc.stdout.read()
                 await proc.wait()
         except TimeoutError:
             proc.kill()
-            _log.warning("team config install timed out after %ds", _TEAM_CONFIG_TIMEOUT)
-            return
+            _log.warning("%s install timed out after %ds", repo.name, _SHARED_CONFIG_TIMEOUT)
+            return False
 
         text = output.decode(errors="replace").strip()
-        if proc.returncode == 0:
-            _log.debug("team config sync complete:\n%s", text)
-        else:
-            _log.warning("team config install.sh exited %d:\n%s", proc.returncode, text)
+        if proc.returncode != 0:
+            _log.warning("%s install.sh exited %d:\n%s", repo.name, proc.returncode, text)
+            return False
+
+        # Re-read AFTER the install: the installer pulls, so HEAD may have
+        # moved. Recording the pre-install fingerprint would re-run the whole
+        # install on the next start for a change we already have.
+        installed = await _repo_fingerprint(repo_dir) or fingerprint
+        if installed:
+            state[repo.name] = installed
+        _log.info("team config sync complete for %s at %s", repo.name, installed or "unknown")
+        return True
     except Exception:
-        _log.warning("team config sync failed", exc_info=True)
+        _log.warning("%s sync failed", repo.name, exc_info=True)
+        return False
+
+
+async def sync_team_config() -> None:
+    """Sync every shared agent-config repo found on this box.
+
+    Skipped entirely in development mode: a dev checkout is where shared
+    config gets *authored*, and overwriting the author's working copy from
+    origin mid-edit is how you lose work.
+
+    Never raises — this runs from a background startup task.
+    """
+    if dev_mode_active():
+        _log.info("development mode — skipping shared-config sync")
+        return
+
+    state = _read_shared_config_state()
+    changed = False
+    for repo in _SHARED_CONFIG_REPOS:
+        changed |= await _sync_one_shared_config(repo, state)
+    if changed:
+        _write_shared_config_state(state)

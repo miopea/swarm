@@ -10,6 +10,7 @@ import pytest
 
 from swarm.update import (
     _VERSION_RE,
+    SharedConfigRepo,
     UpdateResult,
     _fetch_latest_commit,
     _fetch_remote_version,
@@ -1036,9 +1037,10 @@ def test_hash_source_tree_changes_with_content(tmp_path, monkeypatch):
 async def test_sync_team_config_repo_not_found(tmp_path, monkeypatch):
     """No repo on disk → silent skip, no subprocess."""
     monkeypatch.setattr(
-        "swarm.update._TEAM_CONFIG_CANDIDATES",
-        (tmp_path / "nonexistent",),
+        "swarm.update._SHARED_CONFIG_REPOS",
+        (SharedConfigRepo(name="claude-team-config", candidates=(tmp_path / "nonexistent",)),),
     )
+    monkeypatch.setattr("swarm.update.dev_mode_active", lambda: False)
     with patch("asyncio.create_subprocess_exec") as mock_exec:
         await sync_team_config()
     mock_exec.assert_not_called()
@@ -1046,14 +1048,28 @@ async def test_sync_team_config_repo_not_found(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio()
 async def test_sync_team_config_runs_install_sh(tmp_path, monkeypatch):
-    """Repo found → runs 'yes | install.sh' as async subprocess."""
+    """Repo found → runs the installer THROUGH bash as an async subprocess.
+
+    The interpreter is the assertion. Both shared-config repos commit
+    install.sh as mode 100644, so invoking it directly exits 126 — which it
+    did on the swarm box 9 times with no successes (task #1241). This test
+    deliberately leaves the file non-executable so it cannot pass by accident
+    on a box where someone chmod'd their local copy.
+    """
     repo = tmp_path / "claude-team-config"
     repo.mkdir()
     install_sh = repo / "install.sh"
     install_sh.write_text("#!/bin/bash\necho done")
-    install_sh.chmod(0o755)
+    install_sh.chmod(0o644)  # as committed — NOT executable
 
-    monkeypatch.setattr("swarm.update._TEAM_CONFIG_CANDIDATES", (repo,))
+    monkeypatch.setattr(
+        "swarm.update._SHARED_CONFIG_REPOS",
+        (SharedConfigRepo(name="claude-team-config", candidates=(repo,)),),
+    )
+    monkeypatch.setattr("swarm.update.dev_mode_active", lambda: False)
+    monkeypatch.setattr("swarm.update._repo_fingerprint", AsyncMock(return_value="main:a:a"))
+    monkeypatch.setattr("swarm.update._write_shared_config_state", lambda s: None)
+    monkeypatch.setattr("swarm.update._read_shared_config_state", lambda: {})
 
     mock_proc = AsyncMock()
     mock_proc.returncode = 0
@@ -1069,6 +1085,7 @@ async def test_sync_team_config_runs_install_sh(tmp_path, monkeypatch):
     assert call_args[0][0] == "bash"
     assert call_args[0][1] == "-c"
     assert "yes" in call_args[0][2]
+    assert "bash " in call_args[0][2], "installer invoked without an interpreter"
     assert str(install_sh) in call_args[0][2]
     assert call_args[1]["cwd"] == str(repo)
 
@@ -1079,9 +1096,14 @@ async def test_sync_team_config_nonzero_exit(tmp_path, monkeypatch):
     repo = tmp_path / "claude-team-config"
     repo.mkdir()
     (repo / "install.sh").write_text("#!/bin/bash\nexit 1")
-    (repo / "install.sh").chmod(0o755)
 
-    monkeypatch.setattr("swarm.update._TEAM_CONFIG_CANDIDATES", (repo,))
+    monkeypatch.setattr(
+        "swarm.update._SHARED_CONFIG_REPOS",
+        (SharedConfigRepo(name="claude-team-config", candidates=(repo,)),),
+    )
+    monkeypatch.setattr("swarm.update.dev_mode_active", lambda: False)
+    monkeypatch.setattr("swarm.update._repo_fingerprint", AsyncMock(return_value="main:a:a"))
+    monkeypatch.setattr("swarm.update._read_shared_config_state", lambda: {})
 
     mock_proc = AsyncMock()
     mock_proc.returncode = 1
@@ -1099,9 +1121,14 @@ async def test_sync_team_config_subprocess_exception(tmp_path, monkeypatch):
     repo = tmp_path / "claude-team-config"
     repo.mkdir()
     (repo / "install.sh").write_text("#!/bin/bash\necho ok")
-    (repo / "install.sh").chmod(0o755)
 
-    monkeypatch.setattr("swarm.update._TEAM_CONFIG_CANDIDATES", (repo,))
+    monkeypatch.setattr(
+        "swarm.update._SHARED_CONFIG_REPOS",
+        (SharedConfigRepo(name="claude-team-config", candidates=(repo,)),),
+    )
+    monkeypatch.setattr("swarm.update.dev_mode_active", lambda: False)
+    monkeypatch.setattr("swarm.update._repo_fingerprint", AsyncMock(return_value="main:a:a"))
+    monkeypatch.setattr("swarm.update._read_shared_config_state", lambda: {})
 
     with patch("asyncio.create_subprocess_exec", side_effect=OSError("no bash")):
         await sync_team_config()  # should not raise

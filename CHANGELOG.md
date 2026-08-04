@@ -10,6 +10,26 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.4.6] - 2026-08-04
+
+### Features
+
+- **The shared-config sync now covers codex-team-config as well as claude-team-config**, through the same registry and therefore under the same dev-mode and already-current gates by construction rather than as a parallel implementation that can drift. **Recorded decision: the codex path installs what is committed and does NOT run `scripts/sync-from-claude.sh`.** That script regenerates `AGENTS.md` as `cat AGENTS.header.md <claude-team-config>/CLAUDE.md > AGENTS.md`, so it reads whatever branch claude-team-config happens to be on — on a box running the prompt-ablation experiment it would rewrite `AGENTS.md` from the cut CLAUDE.md and push the experiment into the codex config, a successful-looking sync that corrupts what it distributes. Distributing config and authoring it are different jobs; regeneration belongs with a human on a known branch.
+
+### Changes
+
+- **The shared-config sync skips repos that are already current**, keyed on a `branch:HEAD:origin/main` fingerprint persisted to `~/.swarm/shared-config-state.json`. The branch is part of the fingerprint deliberately, so checking out a different branch invalidates a fingerprint recorded on another one and the install that makes the switch take effect still runs. An unreadable repo yields an empty fingerprint, which never compares equal to a stored value — otherwise a broken git would look "already current" forever and silently stop updating.
+
+- **The sync is skipped in development mode**, gated on `update.dev_mode_active()` — the `SWARM_DEV` env var **or** `_is_dev_install()`. The env var alone was the old gate and is set nowhere on this box, including the daemon started from the project `.venv`, so the sync had been running against developers' working checkouts. The gate lives in `sync_team_config` itself as well as at the daemon call site, so a future caller cannot route around it.
+
+### Fixes
+
+- **The shared-config sync had never been observed to succeed — it exited 126 every time.** `sync_team_config` invoked `install.sh` directly, but both config repos commit it as mode **100644**: not executable, in git, in every clone. Direct invocation exits 126 ("found, not executable"). Measured on the swarm box: 9 × `team config install.sh exited 126` across ~31 h. Developers received the shared config at clone time only, because `.rcg.yaml`'s post_clone hook says `bash install.sh --yes` — an explicit interpreter, which works. The fix is in the caller (`yes | bash <installer>`) rather than a mode bit every clone must carry.
+
+  **A second, quieter defect made the first one unmeasurable.** Failure logged at WARNING; success logged at DEBUG — and the daemon runs at `log_level = WARNING`, so a success could never appear in `swarm.log` at all. The reported "9 failures, 0 successes" overstates what that log can prove: the zero was a grep for a line that could not have been written either way, so "synced fine" and "never ran" produced identical evidence. Outcomes are now logged symmetrically — installed / already-current / skipped at INFO, failures still at WARNING — and a test asserts the success line clears INFO so the asymmetry cannot silently return.
+
+  Verified against the real repos, not mocks: both installers ran to exit 0 and logged `team config sync complete` (`2026-08-04 22:11:19` claude, `22:11:21` codex), a second run skipped both with zero installer invocations, and with claude-team-config checked out on the non-`main` `ablation` branch the branch, HEAD, working tree and every installed artifact were byte-identical before and after. The sync runs only `rev-parse` and `fetch` — read-only with respect to HEAD, branch and working tree — and a test asserts no branch-mutating git verb appears anywhere in the sync path.
+
 ## [2026.8.4.5] - 2026-08-04
 
 ### Features
