@@ -5007,7 +5007,23 @@
         input.style.height = '';  // collapse the auto-grown composer back to one line
         if (inlineTermWs && inlineTermWs.readyState === WebSocket.OPEN) {
             var encoder = new TextEncoder();
-            inlineTermWs.send(encoder.encode(text + '\r'));
+            // Text and Enter MUST be separate writes with a beat between them
+            // — the same rule (and the same 50ms) as WorkerProcess.send_keys
+            // in pty/process.py, which every server-side send already honours.
+            // Delivered as one chunk, `text\r` reaches Claude Code's composer
+            // as pasted content carrying a newline: the text lands in the
+            // input box and just sits there, unsubmitted. This path was the
+            // only one that concatenated them.
+            //
+            // The socket is captured in a local because the send is deferred:
+            // `inlineTermWs` is an alias that gets repointed on worker switch
+            // and terminal reconnect, so reading it again in the callback can
+            // deliver the Enter to a different worker's PTY.
+            var ws = inlineTermWs;
+            ws.send(encoder.encode(text));
+            setTimeout(function() {
+                if (ws.readyState === WebSocket.OPEN) ws.send(encoder.encode('\r'));
+            }, 50);
         } else if (selectedWorker) {
             var form = new FormData();
             form.append('message', text);

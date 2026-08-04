@@ -10,6 +10,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.4.2] - 2026-08-04
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **The mobile composer's Send now actually submits.** Tapping Send delivered the text into the worker's input box and left it sitting there — the operator still had to reach into the terminal and press Enter, which is most of what the composer exists to avoid. Cause: the composer wrote `text + '\r'` as a **single** WebSocket frame. `WorkerProcess.send_keys` (`pty/process.py`) has always split text and Enter into separate writes with a 50 ms drain between them, precisely so an interactive TUI has time to process the input before the carriage return arrives; delivered in one chunk, Claude Code takes `text\r` as pasted content carrying a newline and does not treat it as submit. Every server-side send already honoured that rule — this WebSocket path was the only caller that concatenated, which is why the same text submitted fine when sent through `/action/send/`. The composer now mirrors the backend, and captures the socket in a local first: the second write is deferred, and `inlineTermWs` is an alias that gets repointed on worker switch and terminal reconnect, so re-reading it in the callback could deliver the Enter to a different worker's PTY.
+
 ## [2026.8.4] - 2026-08-04
 
 ### Features
