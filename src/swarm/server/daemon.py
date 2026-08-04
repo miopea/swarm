@@ -2339,7 +2339,11 @@ class SwarmDaemon(EventEmitter):
         await self.worker_svc.sleep_worker(name)
 
     async def kill_worker(self, name: str) -> None:
-        """Kill a worker: mark STUNG, unassign tasks, broadcast.
+        """Operator kill: shut the agent down gracefully and remove the worker.
+
+        Delegates to ``worker_svc.kill``, which takes the worker OUT of the
+        roster first — see there for why that ordering is what stops the drone
+        reviving a worker the operator just killed.
 
         Its shell goes too. A shell is only reachable through its worker's
         context menu, so one left behind is invisible in the UI and can only be
@@ -2359,11 +2363,15 @@ class SwarmDaemon(EventEmitter):
     async def revive_worker(self, name: str) -> None:
         """Revive a STUNG worker, respawning it if the roster already dropped it.
 
-        #1187: ``kill`` marks a worker STUNG without removing it, but
-        ``WorkerService.discover`` rebuilds the roster from LIVE pool processes
-        only — so once the PTY is gone the worker is erased from
+        #1187: ``WorkerService.discover`` rebuilds the roster from LIVE pool
+        processes only — so once the PTY is gone the worker is erased from
         ``daemon.workers`` and the documented recovery answered 404 "Worker not
         found". Kill was effectively irreversible through the API.
+
+        That respawn path became load-bearing rather than defensive when
+        ``kill`` started removing the worker from the roster outright (to stop
+        the drone reviving deliberate kills). Operator kills are now ALWAYS the
+        absent-from-roster case, so this is the only way back.
 
         A worker that is absent from the roster but still in config is exactly
         that case, and respawning it is what the operator meant. Routed through

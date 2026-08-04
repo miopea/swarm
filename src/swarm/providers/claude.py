@@ -376,6 +376,9 @@ class ClaudeProvider(LLMProvider):
     def approval_response(self, approve: bool = True) -> str:
         return "\r" if approve else "\x1b"  # Enter to approve, Esc to reject
 
+    def quit_command(self) -> str:
+        return "/quit"
+
     def session_dir(self, worker_path: str) -> Path | None:
         encoded = worker_path.replace("/", "-")
         return Path.home() / ".claude" / "projects" / encoded

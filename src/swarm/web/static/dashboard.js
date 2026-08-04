@@ -6484,10 +6484,21 @@
         if (!selectedWorker) return;
         showConfirm('Kill worker "' + selectedWorker + '"? This will terminate the process.', function() {
             destroyTermEntry(selectedWorker);
-            actionFetch('/action/kill/' + selectedWorker, { method: 'POST' })
-                .then(r => r.json())
-                .then(function() {
-                    showToast('Killed ' + selectedWorker, true);
+            var victim = selectedWorker;
+            actionFetch('/action/kill/' + victim, { method: 'POST' })
+                .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
+                .then(function(res) {
+                    // Previously this reported "Killed X" from a bare .then()
+                    // with no status check, so a failed kill looked identical
+                    // to a successful one — the operator's only clue was the
+                    // worker still being there, which reads as "the click
+                    // didn't register" and invites clicking again.
+                    if (!res.ok || (res.d && res.d.error)) {
+                        showToast((res.d && res.d.error) || ('Failed to kill ' + victim), true);
+                        refreshWorkers();
+                        return;
+                    }
+                    showToast('Killed ' + victim);
                     selectedWorker = null;
                     var _dt = document.getElementById('detail-title-text') || document.getElementById('detail-title');
                     if (_dt) _dt.textContent = 'Select a worker';

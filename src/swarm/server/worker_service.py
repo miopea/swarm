@@ -20,6 +20,16 @@ if TYPE_CHECKING:
 
 _log = get_logger("server.worker_service")
 
+# --- Operator-kill graceful-shutdown budget (~3s worst case) ---
+# Deliberately short. Kill is an interactive action: an operator who clicked it
+# wants the worker gone, and a long wait reads as the click not working — which
+# is what makes people click again. The force-kill backstop runs regardless, so
+# these bound politeness, not correctness.
+_KILL_INTERRUPT_DELAY = 0.15  # after Esc, before the quit command
+_KILL_QUIT_TIMEOUT = 2.0  # wait for the agent to exit after its quit command
+_KILL_POLL_INTERVAL = 0.1  # how often to check whether it has gone
+_KILL_SHELL_EXIT_DELAY = 0.5  # after `exit`, before signalling the process
+
 
 def _infer_provider_from_name(name: str) -> str:
     """Infer provider from worker name suffix (e.g., foo-codex)."""
@@ -503,12 +513,79 @@ class WorkerService:
         workers = [{"name": w.name, "state": w.display_state.value} for w in self._get_workers()]
         self._broadcast_ws({"type": "workers_changed", "workers": workers})
 
+    async def _graceful_shutdown(self, worker: Worker) -> None:
+        """Ask the agent to exit on its own: Esc, quit command, close the shell.
+
+        Best-effort by design — every step is advisory and the caller force-
+        kills afterwards regardless. Failures here are logged at DEBUG and
+        swallowed, because a worker whose PTY is already gone is precisely the
+        case where a kill must still succeed.
+        """
+        from swarm.providers import get_provider
+
+        proc = worker.process
+        if proc is None:
+            return
+        provider = get_provider(worker.provider_name)
+        try:
+            # Esc first: a quit command typed into a busy prompt is just text.
+            await proc.send_escape()
+            await asyncio.sleep(_KILL_INTERRUPT_DELAY)
+
+            quit_cmd = provider.quit_command()
+            if quit_cmd:
+                await proc.send_keys(quit_cmd, enter=True)
+                # Wait for the agent to actually go. shell_wrap re-execs a login
+                # shell when it exits, so "foreground command is a shell" is the
+                # signal that the agent is down and the shell is what remains.
+                deadline = asyncio.get_running_loop().time() + _KILL_QUIT_TIMEOUT
+                while asyncio.get_running_loop().time() < deadline:
+                    if provider._is_shell_exited(proc.get_foreground_command()):
+                        break
+                    await asyncio.sleep(_KILL_POLL_INTERVAL)
+
+            await proc.send_keys("exit", enter=True)
+            await asyncio.sleep(_KILL_SHELL_EXIT_DELAY)
+        except (ProcessError, OSError):
+            _log.debug("graceful shutdown of %s failed; force-killing", worker.name, exc_info=True)
+
     async def kill(self, name: str) -> None:
-        """Kill a worker: mark STUNG, unassign tasks, broadcast."""
+        """Operator kill: interrupt, quit the agent, close the shell, remove it.
+
+        THE WORKER LEAVES THE ROSTER FIRST, before any shutdown step. That
+        ordering is the whole fix for the auto-revive bug — not a flag.
+
+        ``kill`` used to mark the worker STUNG and leave it in the roster. The
+        drone decision rule (``drones/rules.py``) revives *any* STUNG worker,
+        which is right for a crash and exactly wrong for a deliberate kill, and
+        it had no way to tell them apart. Measured 2026-08-03: rcg-dev-install
+        killed at 16:16:44, revived at 16:16:59 — so the operator had to kill
+        repeatedly until ``revive_count`` exhausted ``max_revive_attempts``.
+
+        Because that rule only ever sees workers in the roster, removing the
+        worker first means there is nothing left to revive. A flag would have
+        worked too, but it would leave a window open for the whole ~3s graceful
+        sequence and would be one more thing a future edit could forget to
+        check. Crash recovery is untouched: a worker that dies on its own is
+        still in the roster, still marked STUNG, still revived.
+
+        Graceful shutdown is an ATTEMPT, never a guarantee — the force-kill
+        below runs unconditionally, so a wedged agent that ignores its quit
+        command still dies. Otherwise "graceful" would be a regression.
+        """
         from swarm.worker.manager import kill_worker as _kill_worker
 
         pool = self._get_pool()
         worker = self.require_worker(name)
+
+        # Out of the roster before anything else can observe it as STUNG.
+        async with self._worker_lock:
+            self._set_workers([w for w in self._get_workers() if w is not worker])
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.workers = self._get_workers()
+
+        await self._graceful_shutdown(worker)
 
         async with self._worker_lock:
             await _kill_worker(worker, pool)

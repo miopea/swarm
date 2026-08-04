@@ -125,6 +125,21 @@ class LLMProvider(ABC):
         """
         return "y\r" if approve else "n\r"
 
+    def quit_command(self) -> str:
+        """Slash command that makes this CLI exit gracefully, or "" if none.
+
+        Used by the operator kill path to let an agent shut itself down — and
+        save its session — before the process is signalled.
+
+        Default is "" (unknown), NOT a guess. A wrong quit string is worse
+        than none: it gets typed into the agent's prompt as literal text and
+        sits there, so the kill both fails to be graceful and leaves junk in
+        the transcript. Providers whose quit command is actually known
+        override this; the rest fall through to closing the shell and the
+        signal backstop, which is what happens today anyway.
+        """
+        return ""
+
     def session_dir(self, worker_path: str) -> Path | None:
         """Path to session/usage data for this worker, or None if unsupported."""
         return None

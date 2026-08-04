@@ -373,11 +373,18 @@ def test_get_worker_not_found(daemon):
 
 @pytest.mark.asyncio
 async def test_kill_worker(daemon):
+    """An operator kill REMOVES the worker; it no longer parks it at STUNG.
+
+    This assertion was ``worker.state == STUNG`` with the worker still in the
+    roster. That was the behaviour that let the drone revive a deliberate kill
+    ~15s later (see tests/test_operator_kill.py for the measured evidence), so
+    the contract changed on purpose rather than the test drifting.
+    """
     with patch("swarm.worker.manager.kill_worker", new_callable=AsyncMock) as mock_kill:
         await daemon.kill_worker("api")
         mock_kill.assert_called_once()
-        worker = daemon.get_worker("api")
-        assert worker.state == WorkerState.STUNG
+        assert daemon.get_worker("api") is None
+        assert "api" not in {w.name for w in daemon.workers}
 
 
 @pytest.mark.asyncio

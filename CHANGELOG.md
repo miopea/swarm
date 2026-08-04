@@ -10,6 +10,31 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.4.5] - 2026-08-04
+
+### Features
+
+### Changes
+
+- **Killing a worker now shuts the agent down gracefully instead of signalling it cold.** Esc to interrupt any running turn, then the provider's quit command (`/quit` on Claude Code) so the agent can save its session, then `exit` to close the login shell `shell_wrap` leaves behind. The existing SIGTERM/SIGKILL still runs unconditionally afterwards — graceful is an *attempt*, and a wedged agent that ignores its quit command must not survive a kill, or "graceful" would be a regression. The whole budget is ~3 s: kill is an interactive action, and a long wait reads as the click not having worked. `LLMProvider.quit_command()` returns `""` by default rather than guessing — a wrong quit string gets typed into the prompt as literal text and left there, so providers whose command isn't known simply skip that step.
+
+### Fixes
+
+- **A killed worker stayed killed.** Killing a worker often took several attempts, and the log says why:
+
+  ```
+  2026-08-03 16:16:44 | rcg-dev-install | OPERATOR | killed
+  2026-08-03 16:16:59 | rcg-dev-install | REVIVED  | worker exited
+  ```
+
+  Fifteen seconds. Three independent same-worker instances (`rcg-dev-install`, `sculpt-studio-codex`, `bfg-solutions`). `kill` marked the worker `STUNG` and left it in the roster; the drone decision rule revives **any** STUNG worker — correct and wanted for a crash, exactly wrong for a deliberate kill — and had no way to tell the two apart. With `max_revive_attempts = 3` the operator had to kill up to four times before `revive_count` exhausted the budget, and fewer if earlier crashes had already spent some of it, which is why it felt intermittent rather than reliably broken.
+
+  **The fix is an ordering, not a flag:** the worker leaves the roster *before* any shutdown step runs. The revive rule only ever sees workers in the roster, so there is nothing left to revive — no flag for a future edit to forget to check, and no window during the ~3 s graceful sequence for a drone poll to land in. Crash recovery is deliberately untouched: a worker that dies on its own is still in the roster, still marked STUNG, still revived. Manual revive still works too — the `#1187` respawn path already handled an absent-from-roster worker, and is now the normal route back rather than a defensive one.
+
+  Not the cause, and worth recording since it looked like the obvious suspect: the holder's kill is sound. Reproduced against a real holder with a child that ignores SIGTERM — the whole process group was still reaped, because closing the PTY master sends SIGHUP.
+
+- **The kill toast no longer claims success on failure.** `killWorker()` reported `Killed <name>` from a bare `.then()` with no status check, so a failed kill looked exactly like a successful one and the operator's only clue was the worker still sitting there — which reads as "the click didn't register" and invites clicking again. It now checks the response, and reports success without the error styling it was previously using for both outcomes.
+
 ## [2026.8.4.4] - 2026-08-04
 
 ### Features

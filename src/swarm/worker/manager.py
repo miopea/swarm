@@ -238,9 +238,18 @@ async def add_worker_live(
     return worker
 
 
-async def kill_worker(worker: Worker, pool: WorkerProcessProvider) -> None:
-    """Kill a specific worker."""
+async def kill_worker(worker: Worker, pool: WorkerProcessProvider | None) -> None:
+    """Kill a specific worker.
+
+    Tolerates a missing pool. A kill that raises leaves the caller half-done —
+    and the operator-kill path has already removed the worker from the roster
+    by this point, so an exception here would strand a live process with no
+    entry in the UI to kill it from.
+    """
+    if pool is None:
+        _log.warning("kill for %s: no process pool — nothing to signal", worker.name)
+        return
     try:
         await pool.kill(worker.name)
-    except ProcessError:
+    except (ProcessError, OSError):
         _log.info("kill failed for %s (process may have already exited)", worker.name)
