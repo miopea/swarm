@@ -61,8 +61,8 @@ async def handle_manifest(request: web.Request) -> web.Response:
         "short_name": "Swarm",
         "start_url": "/",
         "display": "standalone",
-        "background_color": "#2A1B0E",
-        "theme_color": "#D8A03D",
+        "background_color": "#15130F",
+        "theme_color": "#F1B83D",
         "icons": [
             {
                 "src": "/static/icon-192.png",

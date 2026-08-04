@@ -83,9 +83,7 @@ with sync_playwright() as pw:
     # 3. Verify the share routed into the worker (NOT the task modal).
     # The task modal should remain hidden; the toast should mention
     # 'Sent N attachment(s) to <worker>'.
-    modal_open = page.evaluate(
-        "document.getElementById('task-modal')?.style.display !== 'none'"
-    )
+    modal_open = page.evaluate("document.getElementById('task-modal')?.style.display !== 'none'")
     print(f"task-modal opened (should be False for worker-route): {modal_open}")
 
     # Confirm the URL was cleaned (no ?share= leftover).
@@ -126,12 +124,8 @@ with sync_playwright() as pw:
     location2 = resp2.headers.get("location") or resp2.headers.get("Location") or ""
     page.goto("http://localhost:9090" + location2, wait_until="domcontentloaded")
     page.wait_for_timeout(2500)
-    modal_open2 = page.evaluate(
-        "document.getElementById('task-modal')?.style.display !== 'none'"
-    )
-    ls_value = page.evaluate(
-        "localStorage.getItem('swarm.lastActiveWorker')"
-    )
+    modal_open2 = page.evaluate("document.getElementById('task-modal')?.style.display !== 'none'")
+    ls_value = page.evaluate("localStorage.getItem('swarm.lastActiveWorker')")
     print(f"task-modal opened (should be True for fallback-route): {modal_open2}")
     print(f"  localStorage.swarm.lastActiveWorker after step 5: {ls_value!r}")
     fb_shot = Path("/home/bschleifer/projects/personal/swarm/docs/qa-share-fallback.png")

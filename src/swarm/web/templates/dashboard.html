@@ -7,18 +7,18 @@
     TEST MODE — Supervised orchestration testing active
     <span id="test-report-link" style="display:none; margin-left:12px;"></span>
 </div>
-<div id="update-banner" style="display:none; background:#362415; border-bottom:2px solid var(--leaf); padding:8px 16px; font-size:13px; color:var(--text); text-align:center;">
+<div id="update-banner" style="display:none; background:var(--surface-raised); border-bottom:2px solid var(--leaf); padding:8px 16px; font-size:13px; color:var(--text); text-align:center;">
     <span id="update-banner-text"></span>
-    <button data-action="installUpdate" style="margin-left:12px; padding:2px 10px; background:var(--leaf); color:#000; border:none; border-radius:4px; cursor:pointer; font-size:12px; font-weight:600;">Update &amp; Restart</button>
+    <button data-action="installUpdate" style="margin-left:12px; padding:2px 10px; background:var(--leaf); color:var(--canvas); border:none; border-radius:4px; cursor:pointer; font-size:12px; font-weight:600;">Update &amp; Restart</button>
     <button data-action="hideUpdateBanner" style="margin-left:6px; padding:2px 10px; background:transparent; color:var(--muted); border:1px solid var(--muted); border-radius:4px; cursor:pointer; font-size:12px;">Dismiss</button>
 </div>
-<div id="holder-drift-banner" style="display:none; background:#3a1a1a; border-bottom:2px solid var(--poppy); padding:10px 16px; font-size:13px; color:var(--text); text-align:center;">
+<div id="holder-drift-banner" style="display:none; background:color-mix(in srgb, var(--danger) 14%, var(--surface)); border-bottom:2px solid var(--poppy); padding:10px 16px; font-size:13px; color:var(--text); text-align:center;">
     <strong style="color:var(--poppy);">PTY holder is stale.</strong>
     Reload won&rsquo;t help &mdash; the holder is a separate sidecar.
     Kill PID <code id="holder-drift-pid">?</code> then restart swarm:
-    <code id="holder-drift-cmd" style="display:inline-block; margin:0 6px; padding:2px 8px; background:#000; border-radius:3px; font-size:12px;"></code>
-    <button data-action="bounceHolder" style="margin-left:4px; padding:4px 12px; background:var(--leaf); color:#000; border:none; border-radius:4px; cursor:pointer; font-size:12px; font-weight:600;">Bounce holder</button>
-    <button data-action="copyHolderDriftCmd" style="margin-left:4px; padding:2px 10px; background:var(--poppy); color:#000; border:none; border-radius:4px; cursor:pointer; font-size:12px; font-weight:600;">Copy</button>
+    <code id="holder-drift-cmd" style="display:inline-block; margin:0 6px; padding:2px 8px; background:var(--canvas); border:1px solid var(--border); border-radius:3px; font-size:12px;"></code>
+    <button data-action="bounceHolder" style="margin-left:4px; padding:4px 12px; background:var(--leaf); color:var(--canvas); border:none; border-radius:4px; cursor:pointer; font-size:12px; font-weight:600;">Bounce holder</button>
+    <button data-action="copyHolderDriftCmd" style="margin-left:4px; padding:2px 10px; background:var(--poppy); color:var(--canvas); border:none; border-radius:4px; cursor:pointer; font-size:12px; font-weight:600;">Copy</button>
 </div>
 <header>
     <h1><img src="/static/bees/happy.svg" alt="" class="header-icon"><span class="ws-indicator" id="ws-dot"></span> <span id="resource-indicator" class="resource-indicator" style="display:none;font-size:0.65em;vertical-align:middle;margin-left:0.5em;cursor:pointer;position:relative;" data-action="toggleResourcePopover"><span id="res-mem-bar" style="display:inline-block;width:40px;height:8px;background:#333;border-radius:3px;overflow:hidden;vertical-align:middle;"><span id="res-mem-fill" style="display:block;height:100%;width:0%;background:var(--leaf);transition:width 0.3s;"></span></span> <span id="res-swap-bar" style="display:inline-block;width:30px;height:8px;background:#333;border-radius:3px;overflow:hidden;vertical-align:middle;margin-left:2px;"><span id="res-swap-fill" style="display:block;height:100%;width:0%;background:var(--amber);transition:width 0.3s;"></span></span> <span id="res-pressure-badge" style="font-size:0.85em;padding:1px 5px;border-radius:3px;margin-left:3px;"></span><div id="resource-popover" class="resource-popover" style="display:none;"></div></span> <span class="header-title-text">Swarm's Bee Hive</span> <span id="header-clock" class="header-clock"></span></h1>
@@ -37,6 +37,11 @@
             Tunnel{{ ': ON' if tunnel.running else '' }}
         </button>
         <a href="/config" class="btn btn-secondary no-underline header-hide-mobile">Config</a>
+        <button class="theme-toggle btn btn-secondary header-hide-mobile" type="button"
+                data-action="cycleTheme" aria-label="Colour theme: System. Activate to change.">
+            <span class="theme-toggle-icon" aria-hidden="true">◐</span>
+            Theme: <span class="theme-toggle-label">System</span>
+        </button>
         <!-- Attach button removed: PTY model has no full-session view -->
         <!-- Ask Queen lives in the Command Center panel; it now talks to the
              interactive Queen (PTY, has queen_view_* tools) via the thread
@@ -50,6 +55,11 @@
             <div class="mobile-overflow-menu" id="mobile-overflow-menu">
                 <button class="btn btn-secondary" data-action="tunnelAction" data-close-menu="1">Tunnel</button>
                 <a href="/config" class="btn btn-secondary no-underline">Config</a>
+                <button class="theme-toggle btn btn-secondary" type="button"
+                        data-action="cycleTheme" aria-label="Colour theme: System. Activate to change.">
+                    <span class="theme-toggle-icon" aria-hidden="true">◐</span>
+                    Theme: <span class="theme-toggle-label">System</span>
+                </button>
                 <!-- Attach button removed: PTY model has no full-session view -->
                 <button class="btn btn-danger" data-action="killSession" data-close-menu="1">Shutdown</button>
                 <form method="POST" action="/logout" style="margin:0"><button type="submit" class="btn btn-secondary" style="width:100%">Logout</button></form>

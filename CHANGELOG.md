@@ -10,6 +10,29 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.4.4] - 2026-08-04
+
+### Features
+
+- **Modern Hive colour system.** The dashboard, configuration, login, offline,
+  and PWA surfaces now share accessible light and dark palettes, with a
+  persistent System / Light / Dark control that follows OS changes without a
+  flash of the wrong theme. Embedded terminals update their palette live when
+  the mode changes, without reconnecting or losing scrollback.
+
+### Changes
+
+- UI typography, panel hierarchy, controls, focus indicators, status colours,
+  and minimum text sizes now target WCAG 2.1 AA readability across desktop and
+  mobile layouts.
+
+### Fixes
+
+- Light-mode terminal ANSI colours no longer wash out against the white
+  background. Every configured foreground meets at least 4.5:1 contrast, and
+  xterm enforces the same floor in light mode while leaving dark-mode rendering
+  unchanged.
+
 ## [2026.8.4.3] - 2026-08-04
 
 ### Features

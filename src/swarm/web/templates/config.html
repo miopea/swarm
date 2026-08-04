@@ -42,6 +42,11 @@
     <h1><img src="/static/bees/cool.svg" class="bee-icon bee-md" alt="" style="margin-right:0.3rem"><a href="/" class="text-honey no-underline">Bee Hive</a><span class="hide-mobile"> &mdash; Config</span></h1>
     <div class="flex-center gap-lg">
         <a href="/dashboard" class="btn btn-secondary no-underline">Dashboard</a>
+        <button class="theme-toggle btn btn-secondary" type="button"
+                data-action="cycleTheme" aria-label="Colour theme: System. Activate to change.">
+            <span class="theme-toggle-icon" aria-hidden="true">◐</span>
+            <span class="hide-mobile">Theme: </span><span class="theme-toggle-label">System</span>
+        </button>
         <form method="POST" action="/logout" style="display:inline"><button type="submit" class="btn btn-secondary" title="Sign out">Logout</button></form>
     </div>
 </header>

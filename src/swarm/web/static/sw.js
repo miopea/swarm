@@ -1,11 +1,13 @@
-const CACHE_NAME = 'swarm-v21';
-const APP_SHELL = ['/manifest.json', '/static/bees/happy.svg', '/static/icon-192.png', '/static/icon-512.png', '/offline.html'];
+const CACHE_NAME = 'swarm-v22';
+const APP_SHELL = ['/manifest.json', '/static/theme.js', '/static/bees/happy.svg', '/static/icon-192.png', '/static/icon-512.png', '/offline.html'];
 
 const INLINE_OFFLINE = `<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Swarm — Offline</title>
-<style>body{background:#2A1B0E;color:#E8DCC8;font-family:monospace;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center}
-h1{color:#D8A03D;font-size:1.4rem}p{color:#7A6B5A;font-size:.9rem;margin:.5rem 0}</style></head>
+<script src="/static/theme.js"></script>
+<style>:root,[data-theme="dark"]{--bg:#15130F;--text:#F5F1E8;--accent:#F1B83D;--muted:#B8AE9F}[data-theme="light"]{--bg:#F6F4EF;--text:#211D18;--accent:#7A5000;--muted:#665E53}
+body{background:var(--bg);color:var(--text);font-family:ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center}
+h1{color:var(--accent);font-size:1.4rem}p{color:var(--muted);font-size:.9rem;margin:.5rem 0}</style></head>
 <body><div><h1>Waiting for Swarm...</h1><p>The server should restart automatically.</p><p>Retrying...</p>
 <script>setInterval(function(){fetch('/api/health').then(function(r){if(r.ok)location.replace('/')}).catch(function(){})},3000)</script>
 </div></body></html>`;
@@ -83,7 +85,14 @@ self.addEventListener('fetch', e => {
   // the request fail so a normal reload picks up fresh code.
   const dynamic = url.pathname.endsWith('.js') || url.pathname.endsWith('.css') || url.pathname.endsWith('.html');
   if (dynamic) {
-    e.respondWith(fetch(req));
+    // The tiny pre-paint theme controller is part of the offline shell. Keep
+    // network-first freshness, but fall back to its versioned cache while the
+    // daemon is restarting so the offline page still honors the user's mode.
+    if (url.pathname === '/static/theme.js') {
+      e.respondWith(fetch(req).catch(() => caches.match('/static/theme.js')));
+    } else {
+      e.respondWith(fetch(req));
+    }
     return;
   }
 

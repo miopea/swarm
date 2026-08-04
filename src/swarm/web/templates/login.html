@@ -3,20 +3,45 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="theme-color" content="#2A1B0E">
+    <meta name="theme-color" content="#15130F">
     <link rel="icon" href="/static/icon-192.png" type="image/png" sizes="192x192">
     <title>Swarm — Login</title>
+    <script src="/static/theme.js?v={{ build_sha or version }}" nonce="{{ csp_nonce }}"></script>
     <style>
+        :root, [data-theme="dark"] {
+            --canvas: #15130F;
+            --surface: #1D1A15;
+            --panel: #262119;
+            --text-primary: #F5F1E8;
+            --text-secondary: #B8AE9F;
+            --border: #756B5D;
+            --accent: #F1B83D;
+            --accent-fill: #F1B83D;
+            --on-accent: #15130F;
+            --danger: #FF7B72;
+            --focus-ring: #FFD071;
+            --shadow-md: 0 8px 24px rgba(0,0,0,0.32);
+        }
+        [data-theme="light"] {
+            --canvas: #F6F4EF;
+            --surface: #FFFFFF;
+            --panel: #EFEAE1;
+            --text-primary: #211D18;
+            --text-secondary: #665E53;
+            --border: #8A8073;
+            --accent: #7A5000;
+            --accent-fill: #E9AA2D;
+            --on-accent: #211D18;
+            --danger: #B42318;
+            --focus-ring: #7A5000;
+            --shadow-md: 0 8px 24px rgba(33,29,24,0.14);
+        }
         :root {
-            --honey: #D8A03D;
-            --hive-bg: #2A1B0E;
-            --surface: #362415;
-            --panel: #3E2B1B;
-            --muted: #B0A08A;
-            --border: #8C6A38;
-            --error: #E74C3C;
-            --beeswax: #E6D2B5;
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.35), 0 2px 4px rgba(0,0,0,0.25);
+            --honey: var(--accent);
+            --hive-bg: var(--canvas);
+            --muted: var(--text-secondary);
+            --error: var(--danger);
+            --beeswax: var(--text-primary);
         }
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -83,8 +108,9 @@
             font-size: 0.95rem;
         }
         .form-group input:focus {
-            outline: none;
-            border-color: var(--honey);
+            outline: 3px solid var(--focus-ring);
+            outline-offset: 2px;
+            border-color: var(--focus-ring);
         }
         .btn {
             display: inline-flex;
@@ -100,11 +126,11 @@
             cursor: pointer;
             transition: opacity 0.15s;
         }
-        .btn:hover { opacity: 0.9; }
+        .btn:hover { box-shadow: var(--shadow-md); }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .btn-primary {
-            background: var(--honey);
-            color: var(--hive-bg);
+            background: var(--accent-fill);
+            color: var(--on-accent);
         }
         .btn-secondary {
             background: transparent;

@@ -4,11 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Swarm — Starting...</title>
+<script src="/static/theme.js"></script>
 <style>
-  :root { --bg: #2A1B0E; --honey: #D8A03D; --muted: #7A6B5A; --text: #E8DCC8; --border: #4A3828; }
+  :root, [data-theme="dark"] { --bg: #15130F; --surface: #1D1A15; --honey: #F1B83D; --muted: #B8AE9F; --text: #F5F1E8; --border: #756B5D; }
+  [data-theme="light"] { --bg: #F6F4EF; --surface: #FFFFFF; --honey: #7A5000; --muted: #665E53; --text: #211D18; --border: #8A8073; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    background: var(--bg); color: var(--text); font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', monospace;
+    background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     display: flex; align-items: center; justify-content: center; min-height: 100vh;
     text-align: center;
   }

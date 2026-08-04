@@ -14,7 +14,130 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "src" / "swarm" / "web" / 
 
 # Matches opening HTML tags (possibly spanning multiple lines)
 _TAG_RE = re.compile(r"<[a-zA-Z][^>]*>", re.DOTALL)
+
+
 # Matches individual class="..." attributes within a tag
+def _relative_luminance(hex_color: str) -> float:
+    channels = [int(hex_color[index : index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [
+        channel / 12.92 if channel <= 0.04045 else ((channel + 0.055) / 1.055) ** 2.4
+        for channel in channels
+    ]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast_ratio(first: str, second: str) -> float:
+    first_luminance = _relative_luminance(first)
+    second_luminance = _relative_luminance(second)
+    lighter = max(first_luminance, second_luminance)
+    darker = min(first_luminance, second_luminance)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _theme_tokens(css: str, selector: str) -> dict[str, str]:
+    match = re.search(rf"{re.escape(selector)}\s*\{{(?P<body>.*?)\}}", css, re.DOTALL)
+    assert match, f"expected theme selector {selector}"
+    return dict(re.findall(r"(--[\w-]+):\s*(#[0-9A-Fa-f]{6})", match.group("body")))
+
+
+def test_modern_hive_themes_are_loaded_before_first_paint():
+    """Theme choice must apply before the inline stylesheet paints the page."""
+    base = (TEMPLATES_DIR / "base.html").read_text()
+    login = (TEMPLATES_DIR / "login.html").read_text()
+    theme_js = STATIC_DIR / "theme.js"
+
+    assert theme_js.exists(), "expected one shared theme controller"
+    for template in (base, login):
+        script_index = template.find("/static/theme.js")
+        style_index = template.find("<style>")
+        assert 0 <= script_index < style_index
+
+
+def test_modern_hive_palette_meets_wcag_contrast_floors():
+    """Core text and component boundaries must meet WCAG 2.1 AA."""
+    css = (TEMPLATES_DIR / "base.html").read_text()
+    dark = _theme_tokens(css, ':root, [data-theme="dark"]')
+    light = _theme_tokens(css, '[data-theme="light"]')
+
+    for name, theme in (("dark", dark), ("light", light)):
+        assert _contrast_ratio(theme["--text-primary"], theme["--canvas"]) >= 4.5, name
+        assert _contrast_ratio(theme["--text-secondary"], theme["--surface"]) >= 4.5, name
+        assert _contrast_ratio(theme["--border-strong"], theme["--surface"]) >= 3.0, name
+        assert _contrast_ratio(theme["--on-accent"], theme["--accent-fill"]) >= 4.5, name
+
+
+def test_theme_controller_supports_system_light_and_dark():
+    js = (STATIC_DIR / "theme.js").read_text()
+    for marker in (
+        "swarm.theme",
+        "prefers-color-scheme: dark",
+        "data-theme",
+        "themechange",
+        "getTerminalTheme",
+    ):
+        assert marker in js
+    assert "['system', 'light', 'dark']" in js
+
+
+def test_theme_controls_are_accessible_on_dashboard_and_config():
+    for filename in ("dashboard.html", "config.html"):
+        template = (TEMPLATES_DIR / filename).read_text()
+        assert 'data-action="cycleTheme"' in template
+        assert 'class="theme-toggle' in template
+        assert 'aria-label="Colour theme' in template
+
+
+def test_terminal_theme_tracks_the_dashboard_theme():
+    js = (STATIC_DIR / "dashboard.js").read_text()
+    assert "window.swarmTheme.getTerminalTheme()" in js
+    assert "window.addEventListener('swarm:themechange'" in js
+    assert "entry.term.options.theme" in js
+
+
+def test_light_terminal_ansi_palette_remains_readable():
+    """Every ANSI foreground must remain legible on the light terminal surface."""
+    js = (STATIC_DIR / "theme.js").read_text()
+    light_match = re.search(r"light:\s*\{(?P<body>.*?)\n\s*\}", js, re.DOTALL)
+    assert light_match
+    colors = dict(
+        re.findall(r"^\s*(\w+):\s*'(#[0-9A-Fa-f]{6})'", light_match.group("body"), re.MULTILINE)
+    )
+    background = colors["background"]
+    foregrounds = {
+        name: color for name, color in colors.items() if name not in {"background", "cursorAccent"}
+    }
+
+    assert foregrounds
+    for name, color in foregrounds.items():
+        assert _contrast_ratio(color, background) >= 4.5, name
+
+    dashboard_js = (STATIC_DIR / "dashboard.js").read_text()
+    assert (
+        "minimumContrastRatio: window.swarmTheme.getTerminalMinimumContrastRatio()" in dashboard_js
+    )
+    assert "entry.term.options.minimumContrastRatio =" in dashboard_js
+
+
+def test_sleeping_workers_remain_readable():
+    css = (TEMPLATES_DIR / "base.html").read_text()
+    assert '.worker-item[data-state="SLEEPING"] { opacity:' not in css
+
+
+def test_theme_reaches_login_offline_and_pwa_shell():
+    login = (TEMPLATES_DIR / "login.html").read_text()
+    offline = (STATIC_DIR / "offline.html").read_text()
+    service_worker = (STATIC_DIR / "sw.js").read_text()
+    pwa_route = (
+        Path(__file__).resolve().parent.parent / "src" / "swarm" / "web" / "routes" / "pwa.py"
+    ).read_text()
+
+    assert "/static/theme.js" in login
+    assert "/static/theme.js" in offline
+    assert "'/static/theme.js'" in service_worker
+    assert '"background_color": "#15130F"' in pwa_route
+    assert '"theme_color": "#F1B83D"' in pwa_route
+
+
 _CLASS_ATTR_RE = re.compile(r'\bclass\s*=\s*"[^"]*"')
 
 

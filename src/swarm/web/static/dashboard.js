@@ -48,6 +48,13 @@
 
     // Terminal cache — keeps xterm.js instances alive across worker switches
     const termCache = new Map();  // workerName → { term, fitAddon, ws, container, connectTimer, reconnectAttempts, reconnectTimer, lastCols, lastRows, lastAccess }
+    window.addEventListener('swarm:themechange', function() {
+        if (!window.swarmTheme) return;
+        termCache.forEach(function(entry) {
+            entry.term.options.theme = window.swarmTheme.getTerminalTheme();
+            entry.term.options.minimumContrastRatio = window.swarmTheme.getTerminalMinimumContrastRatio();
+        });
+    });
     const MAX_CACHED_TERMS = 10;
     // A real terminal is never this small. proposeDimensions() returns
     // garbage (~6 cols) when the container is measured mid-layout — flex
@@ -3672,20 +3679,8 @@
             scrollback: 5000,
             fontSize: 14,
             fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-            theme: {
-                background: '#2A1B0E',
-                foreground: '#E6D2B5',
-                cursor: '#D8A03D',
-                selectionBackground: 'rgba(216,160,61,0.3)',
-                black: '#2A1B0E',
-                red: '#D15D4C',
-                green: '#8CB369',
-                yellow: '#D8A03D',
-                blue: '#A88FD9',
-                magenta: '#A88FD9',
-                cyan: '#7EC8C8',
-                white: '#E6D2B5',
-            }
+            minimumContrastRatio: window.swarmTheme.getTerminalMinimumContrastRatio(),
+            theme: window.swarmTheme.getTerminalTheme()
         });
 
         var fitAddon = new FitAddon.FitAddon();

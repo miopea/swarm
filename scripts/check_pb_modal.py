@@ -21,11 +21,18 @@ session = _get_session_cookie("http://localhost:9090", password)
 with sync_playwright() as pw:
     browser = pw.chromium.launch(headless=True)
     ctx = browser.new_context(viewport={"width": 1400, "height": 900})
-    ctx.add_cookies([{
-        "name": "swarm_session", "value": session,
-        "domain": "localhost", "path": "/",
-        "httpOnly": True, "sameSite": "Lax",
-    }])
+    ctx.add_cookies(
+        [
+            {
+                "name": "swarm_session",
+                "value": session,
+                "domain": "localhost",
+                "path": "/",
+                "httpOnly": True,
+                "sameSite": "Lax",
+            }
+        ]
+    )
     page = ctx.new_page()
     page.goto("http://localhost:9090/", wait_until="domcontentloaded")
     page.wait_for_timeout(800)
