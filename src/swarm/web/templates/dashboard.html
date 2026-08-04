@@ -1217,6 +1217,22 @@
         <div id="terminal-container" class="terminal-content"></div>
     </div>
 </div>
+<!-- Operator shell modal (hidden).  A plain bash PTY rooted in the worker's
+     directory — deliberately NOT the worker's own terminal, because typing
+     into that interleaves with the agent's turn. -->
+<div id="shell-modal" class="modal-overlay z-terminal" style="display:none;">
+    <div class="terminal-fullscreen" role="dialog" aria-modal="true" aria-labelledby="shell-title">
+        <div class="panel-header no-shrink">
+            <span id="shell-title">Shell</span>
+            <span class="flex-center gap-md">
+                <span id="shell-path" class="text-sm text-muted"></span>
+                <span id="shell-status" class="text-sm text-muted">connecting…</span>
+                <button class="btn btn-sm btn-secondary" data-action="closeShell">Close</button>
+            </span>
+        </div>
+        <div id="shell-container" class="terminal-content"></div>
+    </div>
+</div>
 <div id="ctx-menu" class="ctx-menu" style="display:none"></div>
 {% endblock %}
 

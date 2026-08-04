@@ -36,6 +36,7 @@ from swarm.server.jira_service import JiraService
 from swarm.server.loop_runner import BackgroundLoopRunner
 from swarm.server.proposals import ProposalManager
 from swarm.server.resource_monitor import ResourceMonitor
+from swarm.server.shell_service import ShellService, ShellSession
 from swarm.server.task_manager import TaskManager
 from swarm.server.test_runner import TestRunner
 from swarm.server.worker_service import WorkerService
@@ -418,6 +419,13 @@ class SwarmDaemon(EventEmitter):
             worker_lock=self._worker_lock,
             init_pilot=lambda enabled: self.init_pilot(enabled=enabled),
             write_identity=self.write_identity_for_spawn,
+        )
+        # --- ShellService: operator bash sessions in a worker's directory ---
+        # Tracked separately from ``self.workers`` on purpose — see the module
+        # docstring for why a shell must never enter the worker roster.
+        self.shell_svc = ShellService(
+            get_pool=lambda: self.pool,
+            get_worker=lambda n: self.get_worker(n),
         )
         self.tunnel = TunnelManager(
             port=config.port,
@@ -2331,8 +2339,22 @@ class SwarmDaemon(EventEmitter):
         await self.worker_svc.sleep_worker(name)
 
     async def kill_worker(self, name: str) -> None:
-        """Kill a worker: mark STUNG, unassign tasks, broadcast."""
+        """Kill a worker: mark STUNG, unassign tasks, broadcast.
+
+        Its shell goes too. A shell is only reachable through its worker's
+        context menu, so one left behind is invisible in the UI and can only be
+        reaped by hand in the holder.
+        """
+        await self.shell_svc.close(name)
         await self.worker_svc.kill(name)
+
+    async def open_shell(self, name: str) -> ShellSession:
+        """Open an operator bash shell in *name*'s directory."""
+        return await self.shell_svc.open(name)
+
+    async def close_shell(self, name: str) -> None:
+        """Close *name*'s operator shell (kills bash). No-op when none is open."""
+        await self.shell_svc.close(name)
 
     async def revive_worker(self, name: str) -> None:
         """Revive a STUNG worker, respawning it if the roster already dropped it.

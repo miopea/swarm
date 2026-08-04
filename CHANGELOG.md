@@ -10,6 +10,20 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.4] - 2026-08-04
+
+### Features
+
+- **Open a bash shell in a worker's folder from its right-click menu.** Running a local command where a worker lives previously meant leaving the dashboard, or typing into the agent's own PTY — which interleaves with whatever turn it is running. "Open shell" spawns a login shell rooted in the worker's directory and attaches the existing web terminal to it in its own modal window. Sessions are ephemeral: closing the window kills bash, so a shell can never outlive the UI showing it and become an orphan nobody can see or reap (the tradeoff being that a long-running command dies with the window). Closing a worker's shell also happens automatically when the worker is killed, since a shell is only reachable through its worker's menu.
+
+  **A shell is deliberately not a `Worker`, and that is the load-bearing part.** It is spawned into the same process pool — that is where PTYs live and the terminal already knows how to attach to one — but the pool is a flat namespace shared with real workers and is *not* the boundary it looks like: `WorkerService.discover` wraps **every** process the holder reports in a `Worker`. A shell left visible to it becomes a worker on the next reconcile: present in the sidebar, eligible for task assignment, polled by drones, its bash prompt classified into BUZZING/RESTING, nudged by the IdleWatcher. A task handed to a bash prompt is lost silently — nothing is running that could execute it. Two things prevent that and have to agree: every session name carries a `shell:` prefix, and `discover` skips names matching it. The terminal bridge consults the shell registry only for prefix-matching names, so an unknown worker still takes the 404 path rather than a lookup that happens to also return `None`.
+
+### Changes
+
+- **Sleep is now offered from any live state, not just RESTING.** Parking a busy worker took two trips through the context menu — *Force to rest*, then right-click again for *Sleep*. The two-step existed because sleep alone does not stick: SLEEPING is a *display* state (RESTING plus a backdated `state_since`), and the state tracker re-reads the PTY on its next tick — if the PTY still shows an active turn or an approval prompt, it re-detects that and the worker leaves SLEEPING again. *Force to rest* was doing the load-bearing half by sending Escape, which is what actually changes what the PTY shows. So the fix is not a looser state check — that would produce a menu item that appears to work and silently undoes itself seconds later, which is worse than two clicks. `sleep_worker` now sends the Escape itself, and only when there is a turn or prompt to interrupt (an already-RESTING worker sits at an idle prompt the operator may be mid-thought in, where Escape buys nothing). STUNG is still refused: the process has exited, and rendering a dead worker as SLEEPING files it under a state that reads as idle-and-fine.
+
+### Fixes
+
 ## [2026.8.2.6] - 2026-08-02
 
 ### Features

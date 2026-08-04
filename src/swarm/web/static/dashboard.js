@@ -122,6 +122,7 @@
         hideConfirm: function() { hideConfirm(); },
         hideDecisionModal: function() { hideDecisionModal(); },
         closeTerminal: function() { closeTerminal(); },
+        closeShell: function() { closeShell(); },
         switchTab: function(el) { switchTab(el.dataset.tab); },
         switchTaskFilter: function(el) { switchTaskFilter(el.dataset.filter); },
         switchPriorityFilter: function(el) { switchPriorityFilter(el.dataset.priority); },
@@ -10340,7 +10341,12 @@
         if (state === 'RESTING' || state === 'SLEEPING') {
             items.push({ label: 'Continue', action: 'w:continue' });
         }
-        if (state === 'RESTING') {
+        // Offered from every live state, not just RESTING. The backend sends
+        // the Escape itself when there is a turn or prompt to interrupt, so
+        // this is one step rather than force-rest-then-sleep. SLEEPING is
+        // already there (dataset.state is the display state) and STUNG is a
+        // dead process the backend refuses to render as idle.
+        if (state === 'RESTING' || state === 'WAITING' || state === 'BUZZING') {
             items.push({ label: 'Sleep', action: 'w:sleep' });
         }
         if (state === 'WAITING') {
@@ -10352,6 +10358,7 @@
         items.push({ label: 'Ask Queen', action: 'w:queen' });
         items.push({ sep: true });
         items.push({ label: 'Open terminal', action: 'w:terminal' });
+        items.push({ label: 'Open shell', action: 'w:shell' });
         items.push({ label: 'Copy name', action: 'w:copy' });
         // Duplicate as different LLM
         var providers = _swarmCfg.providers || ['claude', 'gemini', 'codex'];
@@ -10489,12 +10496,196 @@
                 break;
             case 'kill': killWorker(); break;
             case 'terminal': break; // selectWorker already shows terminal
+            case 'shell': openShell(_ctxWorkerName); break;
             case 'copy':
                 navigator.clipboard.writeText(_ctxWorkerName);
                 showToast('Copied: ' + _ctxWorkerName);
                 break;
         }
     }
+
+    // --- Operator shell modal ---------------------------------------------
+    // A bash PTY rooted in a worker's directory. Deliberately its OWN terminal
+    // rather than the worker's: input sent to the agent's PTY interleaves with
+    // whatever turn it is running.
+    //
+    // The session is ephemeral (the backend kills bash on close), so nothing is
+    // cached — every open builds a fresh terminal and every close tears it
+    // down. That keeps this independent of ``termCache`` and the worker
+    // selection state machine it is wired into.
+    var _shell = null;  // { worker, term, ws, fit, onResize, ready, pending }
+
+    function shellStatus(text) {
+        var el = document.getElementById('shell-status');
+        if (el) el.textContent = text;
+    }
+
+    /** True while the shell window is up — keyboard handlers defer to xterm. */
+    function isShellModalOpen() {
+        var m = document.getElementById('shell-modal');
+        return !!m && m.style.display !== 'none';
+    }
+
+    window.openShell = function(name) {
+        if (!name) return;
+        if (typeof Terminal === 'undefined' || typeof FitAddon === 'undefined') {
+            showToast('Terminal library still loading — try again in a moment', true);
+            return;
+        }
+        if (_shell) closeShell();  // one shell window at a time
+
+        fetch('/api/workers/' + encodeURIComponent(name) + '/shell', {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'Dashboard' },
+        })
+            .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
+            .then(function(res) {
+                if (!res.ok || res.d.error) {
+                    showToast(res.d.error || 'Could not open shell', true);
+                    return;
+                }
+                attachShell(name, res.d.session, res.d.path);
+            })
+            .catch(function(err) { showToast('Shell failed: ' + err.message, true); });
+    };
+
+    function attachShell(worker, session, path) {
+        var modal = document.getElementById('shell-modal');
+        var container = document.getElementById('shell-container');
+        if (!modal || !container) return;
+
+        container.innerHTML = '';
+        document.getElementById('shell-title').textContent = 'Shell — ' + worker;
+        document.getElementById('shell-path').textContent = path || '';
+        shellStatus('connecting…');
+        modal.style.display = '';
+
+        var term = new Terminal({
+            cursorBlink: false,
+            scrollback: 5000,
+            fontSize: 14,
+            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+            theme: {
+                background: '#2A1B0E',
+                foreground: '#E6D2B5',
+                cursor: '#D8A03D',
+                selectionBackground: 'rgba(216,160,61,0.3)',
+                black: '#2A1B0E',
+                red: '#D15D4C',
+                green: '#8CB369',
+                yellow: '#D8A03D',
+                blue: '#A88FD9',
+                magenta: '#A88FD9',
+                cyan: '#7EC8C8',
+                white: '#E6D2B5',
+            }
+        });
+        var fit = new FitAddon.FitAddon();
+        term.loadAddon(fit);
+        if (typeof ClipboardAddon !== 'undefined' && ClipboardAddon.ClipboardAddon) {
+            term.loadAddon(new ClipboardAddon.ClipboardAddon(undefined, new ClipboardAddon.BrowserClipboardProvider()));
+        }
+        if (typeof WebLinksAddon !== 'undefined' && WebLinksAddon.WebLinksAddon) {
+            term.loadAddon(new WebLinksAddon.WebLinksAddon());
+        }
+        term.open(container);
+        try { fit.fit(); } catch (e) {}
+
+        var wsPath = '/ws/terminal?worker=' + encodeURIComponent(session);
+        var dims = null;
+        try { dims = fit.proposeDimensions(); } catch (e) { dims = null; }
+        // Same guard as the worker terminal: a mid-layout proposal can be ~6
+        // cols, and opening the PTY that narrow wraps everything until the
+        // next resize. Omit and let the resize below settle it.
+        if (dims && dims.cols >= MIN_TERM_COLS && dims.rows >= MIN_TERM_ROWS) {
+            wsPath += '&cols=' + encodeURIComponent(dims.cols) + '&rows=' + encodeURIComponent(dims.rows);
+        }
+
+        var ws = window.swarmWS.openAuthenticated(wsPath);
+        ws.binaryType = 'arraybuffer';
+
+        var state = {
+            worker: worker, term: term, ws: ws, fit: fit,
+            onResize: null, ready: false, pending: [],
+        };
+
+        ws.onmessage = function(ev) {
+            if (typeof ev.data === 'string') {
+                // The server's meta frame lands after auth is accepted and the
+                // initial view is flushed — the same signal the worker terminal
+                // uses to know input will actually be delivered rather than
+                // swallowed by the first-message auth gate.
+                try {
+                    var payload = JSON.parse(ev.data);
+                    if (payload && payload.meta === 'term' && !state.ready) {
+                        state.ready = true;
+                        shellStatus('connected');
+                        state.pending.forEach(function(d) {
+                            ws.send(new TextEncoder().encode(d));
+                        });
+                        state.pending = [];
+                        term.focus();
+                    }
+                } catch (err) {}
+                return;
+            }
+            term.write(new Uint8Array(ev.data));
+        };
+        ws.onclose = function() {
+            if (_shell !== state) return;
+            shellStatus('disconnected');
+        };
+        ws.onerror = function() {
+            if (_shell !== state) return;
+            shellStatus('error');
+        };
+
+        term.onData(function(data) {
+            if (ws.readyState !== WebSocket.OPEN) return;
+            if (!state.ready) {
+                // Keep at most a screenful; a shell nobody can see does not
+                // need an unbounded replay queue.
+                state.pending.push(data);
+                if (state.pending.length > 256) state.pending.shift();
+                return;
+            }
+            ws.send(new TextEncoder().encode(data));
+        });
+
+        state.onResize = function() {
+            try {
+                fit.fit();
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ action: 'resize', cols: term.cols, rows: term.rows }));
+                }
+            } catch (e) {}
+        };
+        window.addEventListener('resize', state.onResize);
+        requestAnimationFrame(function() { setTimeout(state.onResize, 80); });
+
+        _shell = state;
+    }
+
+    window.closeShell = function() {
+        var s = _shell;
+        _shell = null;
+        var modal = document.getElementById('shell-modal');
+        if (modal) modal.style.display = 'none';
+        if (!s) return;
+        if (s.onResize) window.removeEventListener('resize', s.onResize);
+        try { if (s.ws) s.ws.close(); } catch (e) {}
+        try { if (s.term) s.term.dispose(); } catch (e) {}
+        var c = document.getElementById('shell-container');
+        if (c) c.innerHTML = '';
+        // Ephemeral by design — tell the daemon to kill bash. Fire-and-forget:
+        // the window is already gone, and a failure here has nothing to report
+        // to. The daemon also closes shells when their worker is killed, so a
+        // dropped request does not strand the process indefinitely.
+        fetch('/api/workers/' + encodeURIComponent(s.worker) + '/shell/close', {
+            method: 'POST',
+            headers: { 'X-Requested-With': 'Dashboard' },
+        }).catch(function() {});
+    };
 
     // --- Task context menu ---
     var _ctxTaskId = null, _ctxTaskTitle = null;
@@ -10633,7 +10824,8 @@
             inlineTerm &&
             inlineTerm.textarea &&
             document.activeElement !== inlineTerm.textarea &&
-            document.getElementById('terminal-modal').style.display === 'none'
+            document.getElementById('terminal-modal').style.display === 'none' &&
+            !isShellModalOpen()
         ) {
             var isEditable = document.activeElement && (
                 document.activeElement.tagName === 'INPUT' ||
@@ -10672,8 +10864,9 @@
             }
             return;
         }
-        // Skip when terminal modal is open (xterm handles keys inside modal)
+        // Skip when a modal terminal is open (xterm handles keys inside it)
         if (document.getElementById('terminal-modal').style.display !== 'none') return;
+        if (isShellModalOpen()) return;
         // Ctrl+Tab / Shift+Ctrl+Tab (works in standalone PWA mode)
         if (e.key === 'Tab' && e.ctrlKey) {
             e.preventDefault();
@@ -10691,8 +10884,9 @@
     // --- Keyboard shortcuts (Alt+letter) ---
     document.addEventListener('keydown', function(e) {
         if (!e.altKey) return;
-        // When modal terminal is attached, let everything through to xterm
+        // When a modal terminal is attached, let everything through to xterm
         if (document.getElementById('terminal-modal').style.display !== 'none') return;
+        if (isShellModalOpen()) return;
         // When inline terminal is focused, let everything through
         if (isTermInputFocused()) return;
 
@@ -10713,6 +10907,7 @@
     document.addEventListener('keydown', function(e) {
         if (e.key !== '?' || e.altKey || e.ctrlKey || e.metaKey) return;
         if (document.getElementById('terminal-modal').style.display !== 'none') return;
+        if (isShellModalOpen()) return;
         if (isTermInputFocused()) return;
         var ae = document.activeElement;
         var tag = ae && ae.tagName;

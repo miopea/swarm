@@ -197,6 +197,9 @@ def daemon(monkeypatch):
         init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
         write_identity=lambda wc, path: None,
     )
+    from swarm.server.shell_service import ShellService
+
+    d.shell_svc = ShellService(get_pool=lambda: d.pool, get_worker=d.get_worker)
 
     from swarm.server.jira_service import JiraService
     from swarm.server.resource_monitor import ResourceMonitor
@@ -3347,3 +3350,77 @@ async def test_prune_messages_uses_configured_window(daemon):
     daemon.config.coordination.message_retention_days = 0
     assert daemon._prune_messages() == 0
     daemon.message_store.prune.assert_not_called()
+
+
+# --- Operator shell routes (see swarm.server.shell_service) ---------------
+
+
+@pytest.fixture
+def shell_daemon(daemon):
+    """Daemon with a ShellService over a recording fake pool."""
+    from swarm.server.shell_service import ShellService
+    from tests.fakes.process import FakeWorkerProcess
+
+    class _Pool:
+        def __init__(self):
+            self.killed = []
+
+        async def spawn(self, name, cwd, command=None, cols=200, rows=50, shell_wrap=False):
+            return FakeWorkerProcess(name=name, cwd=cwd)
+
+        async def kill(self, name):
+            self.killed.append(name)
+
+    daemon.pool = _Pool()
+    daemon.shell_svc = ShellService(
+        get_pool=lambda: daemon.pool,
+        get_worker=daemon.get_worker,
+    )
+    return daemon
+
+
+@pytest.fixture
+async def shell_client(shell_daemon):
+    app = create_app(shell_daemon, enable_web=False)
+    async with TestClient(TestServer(app)) as c:
+        _inject_session_cookie(c)
+        yield c
+
+
+@pytest.mark.asyncio
+async def test_shell_open_returns_the_session_name(shell_client, shell_daemon):
+    """The caller needs the pool key to attach the terminal.
+
+    A shell is deliberately absent from the worker roster, so the name cannot
+    be derived client-side from the worker list.
+    """
+    name = shell_daemon.workers[0].name
+    resp = await shell_client.post(f"/api/workers/{name}/shell", headers=_API_HEADERS)
+    assert resp.status == 200
+    data = await resp.json()
+    assert data["session"] == f"shell:{name}"
+    assert data["path"] == shell_daemon.workers[0].path
+
+
+@pytest.mark.asyncio
+async def test_shell_open_on_unknown_worker_is_404(shell_client):
+    resp = await shell_client.post("/api/workers/nonexistent/shell", headers=_API_HEADERS)
+    assert resp.status == 404
+
+
+@pytest.mark.asyncio
+async def test_shell_close_kills_bash(shell_client, shell_daemon):
+    name = shell_daemon.workers[0].name
+    await shell_client.post(f"/api/workers/{name}/shell", headers=_API_HEADERS)
+    resp = await shell_client.post(f"/api/workers/{name}/shell/close", headers=_API_HEADERS)
+    assert resp.status == 200
+    assert shell_daemon.pool.killed == [f"shell:{name}"]
+
+
+@pytest.mark.asyncio
+async def test_shell_close_is_idempotent(shell_client, shell_daemon):
+    """The window's close handler fires on paths where open never succeeded."""
+    name = shell_daemon.workers[0].name
+    resp = await shell_client.post(f"/api/workers/{name}/shell/close", headers=_API_HEADERS)
+    assert resp.status == 200
+    assert shell_daemon.pool.killed == []

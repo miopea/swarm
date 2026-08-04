@@ -194,6 +194,7 @@ def _validate_terminal_request(
 ) -> tuple[object, object, set[str]] | web.Response:
     """Validate auth, concurrency, and worker.  Returns (daemon, worker, sessions) or Response."""
     from swarm.server.helpers import get_daemon as _get_daemon
+    from swarm.server.shell_service import is_shell_session
 
     auth_err = _check_auth(request)
     if auth_err is not None:
@@ -213,6 +214,19 @@ def _validate_terminal_request(
         return web.json_response({"error": "Missing 'worker' query parameter"}, status=400)
 
     worker = daemon.get_worker(worker_name)
+    if not worker and is_shell_session(worker_name):
+        # Operator shells are deliberately absent from the worker roster (see
+        # swarm.server.shell_service). A ShellSession duck-types the only two
+        # attributes this bridge touches — ``name`` and ``process`` — so the
+        # rest of the handler needs no knowledge that shells exist.
+        #
+        # Gated on the prefix rather than "worker lookup missed": a name that
+        # is not shell-shaped can never be a shell, and saying so here keeps
+        # an unknown worker on the 404 path instead of routing it through a
+        # lookup that happens to also return None.
+        shell_svc = getattr(daemon, "shell_svc", None)
+        if shell_svc is not None:
+            worker = shell_svc.get_by_session_name(worker_name)
     if not worker:
         return web.json_response({"error": f"Worker '{worker_name}' not found"}, status=404)
 

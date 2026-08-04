@@ -87,6 +87,9 @@ def daemon(monkeypatch):
         init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
         write_identity=lambda wc, path: None,
     )
+    from swarm.server.shell_service import ShellService
+
+    d.shell_svc = ShellService(get_pool=lambda: d.pool, get_worker=d.get_worker)
     return d
 
 
@@ -165,3 +168,47 @@ def test_resize_clamps_bounds():
     assert max(1, min(500, 0)) == 1
     assert max(1, min(500, 999)) == 500
     assert max(1, min(500, 80)) == 80
+
+
+@pytest.mark.asyncio
+async def test_terminal_resolves_an_operator_shell(client, daemon):
+    """A shell is deliberately absent from the worker roster.
+
+    ``daemon.get_worker`` therefore returns None for it, and without the shell
+    lookup in ``_validate_terminal_request`` the 'Open shell' menu item would
+    open a window onto a 404. The bridge only ever touches ``.name`` and
+    ``.process``, which is what lets a ShellSession stand in for a Worker here.
+    """
+    from swarm.server.shell_service import ShellService, shell_session_name
+
+    session_name = shell_session_name("api")
+
+    class _Pool:
+        async def spawn(self, name, cwd, command=None, cols=200, rows=50, shell_wrap=False):
+            return FakeWorkerProcess(name=name, cwd=cwd)
+
+        async def kill(self, name):
+            pass
+
+    daemon.pool = _Pool()
+    daemon.shell_svc = ShellService(
+        get_pool=lambda: daemon.pool,
+        get_worker=daemon.get_worker,
+    )
+    await daemon.shell_svc.open("api")
+
+    resp = await client.get(f"/ws/terminal?worker={session_name}&token={_TEST_PASSWORD}")
+    assert resp.status != 404, "bridge could not resolve an open shell session"
+
+
+@pytest.mark.asyncio
+async def test_terminal_still_404s_for_a_shell_that_is_not_open(client, daemon):
+    """The prefix alone must not grant access — the session has to exist."""
+    from swarm.server.shell_service import ShellService, shell_session_name
+
+    daemon.shell_svc = ShellService(get_pool=lambda: None, get_worker=daemon.get_worker)
+
+    resp = await client.get(
+        f"/ws/terminal?worker={shell_session_name('api')}&token={_TEST_PASSWORD}"
+    )
+    assert resp.status == 404

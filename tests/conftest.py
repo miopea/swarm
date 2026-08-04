@@ -351,6 +351,9 @@ def make_daemon(
         init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
         write_identity=lambda wc, path: None,
     )
+    from swarm.server.shell_service import ShellService
+
+    d.shell_svc = ShellService(get_pool=lambda: d.pool, get_worker=d.get_worker)
     d.tunnel = TunnelManager(port=cfg.port)
     d.jira_svc = JiraService(
         get_jira=lambda: MagicMock(),

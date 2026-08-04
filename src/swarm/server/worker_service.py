@@ -306,11 +306,19 @@ class WorkerService:
             # Wrap WorkerProcess objects in Worker dataclasses.
             # Match against existing workers to preserve state; create new
             # Worker objects for any processes discovered for the first time.
+            from swarm.server.shell_service import is_shell_session
             from swarm.worker.worker import infer_worker_kind
 
             existing = {w.name: w for w in workers}
             new_workers: list[Worker] = []
             for proc in processes:
+                # Operator shells share the pool's flat namespace with real
+                # workers but are NOT workers. Adopting one here would put a
+                # bash prompt in the sidebar, eligible for task assignment and
+                # drone polling — and a task handed to bash is lost silently.
+                # See swarm.server.shell_service.
+                if is_shell_session(proc.name):
+                    continue
                 if proc.name in existing:
                     w = existing[proc.name]
                     w.process = proc
@@ -448,14 +456,36 @@ class WorkerService:
         return worker
 
     async def sleep_worker(self, name: str) -> None:
-        """Force a RESTING worker into SLEEPING by backdating state_since."""
+        """Put a worker to sleep from whatever state it is currently in.
+
+        SLEEPING is a *display* state — RESTING plus a backdated
+        ``state_since`` — which makes it fragile: the state tracker re-reads
+        the PTY on its next tick, and if the PTY still shows an active turn
+        (BUZZING) or an approval prompt (WAITING) it re-detects that and the
+        worker leaves SLEEPING again. Parking a busy worker therefore means
+        changing what the PTY *shows*, not just what the daemon records.
+
+        That is why this used to require RESTING: the operator had to run
+        *Force to rest* first, and the load-bearing half of that was the
+        Escape. Folding the Escape in here is what makes one step work;
+        merely loosening the state check would produce a menu item that
+        appears to succeed and silently undoes itself seconds later.
+
+        STUNG is refused — the process has exited, and rendering a dead
+        worker as SLEEPING files it under a state that reads as idle-and-fine.
+        """
         import time
 
         from swarm.server.daemon import SwarmOperationError
 
         worker = self.require_worker(name)
-        if worker.state not in (WorkerState.RESTING, WorkerState.WAITING):
-            raise SwarmOperationError(f"Worker '{name}' is {worker.state.value}, not idle")
+        if worker.state == WorkerState.STUNG:
+            raise SwarmOperationError(f"Worker '{name}' is STUNG (process exited), not idle")
+        # Only interrupt when there is a turn or prompt to interrupt. An
+        # already-RESTING worker sits at an idle prompt the operator may be
+        # mid-thought in, and Escape there buys nothing.
+        if worker.state != WorkerState.RESTING:
+            await self.escape_worker(name)
         # Force to RESTING so display_state can become SLEEPING
         worker.state = WorkerState.RESTING
         # Backdate state_since so display_state returns SLEEPING

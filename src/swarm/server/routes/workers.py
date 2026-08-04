@@ -49,6 +49,8 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/workers/{name}/interrupt", handle_worker_interrupt)
     app.router.add_post("/api/workers/{name}/revive", handle_worker_revive)
     app.router.add_post("/api/workers/{name}/sleep", handle_worker_sleep)
+    app.router.add_post("/api/workers/{name}/shell", handle_worker_shell_open)
+    app.router.add_post("/api/workers/{name}/shell/close", handle_worker_shell_close)
     app.router.add_post("/api/workers/{name}/analyze", handle_worker_analyze)
     app.router.add_post("/api/workers/{name}/merge", handle_worker_merge)
 
@@ -254,6 +256,33 @@ async def handle_worker_revive(request: web.Request) -> web.Response:
 
 async def handle_worker_sleep(request: web.Request) -> web.Response:
     return await worker_action(request, lambda d, n: d.sleep_worker(n), "sleeping")
+
+
+@handle_errors
+async def handle_worker_shell_open(request: web.Request) -> web.Response:
+    """Open an operator bash shell in the worker's directory.
+
+    Returns the pool session name so the caller can attach the web terminal to
+    it — the shell is not a worker, so the name is not derivable from the
+    worker list.
+    """
+    d = get_daemon(request)
+    name = request.match_info["name"]
+    session = await d.open_shell(name)
+    return web.json_response(
+        {
+            "status": "open",
+            "worker": name,
+            "session": session.name,
+            "path": session.path,
+        }
+    )
+
+
+@handle_errors
+async def handle_worker_shell_close(request: web.Request) -> web.Response:
+    """Close the worker's operator shell (kills bash). Idempotent."""
+    return await worker_action(request, lambda d, n: d.close_shell(n), "closed")
 
 
 @handle_errors

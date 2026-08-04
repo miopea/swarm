@@ -168,6 +168,9 @@ def daemon(monkeypatch):
         init_pilot=lambda enabled: d.init_pilot(enabled=enabled),
         write_identity=lambda wc, path: None,
     )
+    from swarm.server.shell_service import ShellService
+
+    d.shell_svc = ShellService(get_pool=lambda: d.pool, get_worker=d.get_worker)
     d.tasks = TaskManager(
         task_board=d.task_board,
         task_history=d.task_history,
