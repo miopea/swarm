@@ -10,6 +10,18 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.5.2] - 2026-08-05
+
+### Features
+
+### Changes
+
+- **The worker state filter chips are now multi-select.** They behaved as radio buttons, so the only expressible answers were "one state" or "all of them" — "everything except Sleeping", the obvious thing to want on a board where most workers are asleep, was unreachable. Chips now toggle independently and combine. "All" is a *mode* represented by the selection set being **empty**, not a sixth member mixed in among the real states: a sentinel in the same set forces every read to special-case it, and the one read that forgets silently filters every worker out. Deselecting the last chip therefore lands back on "All" rather than on a filter that matches nothing. Chips carry `aria-pressed` and the group carries `role="group"` — with more than one selectable, pressed state is the only thing conveying to assistive tech that several filters are live.
+
+### Fixes
+
+- **A Queen notification no longer hijacks the viewport.** Every proposal opened the bottom panel, even mid-read on another tab. The `proposal_created` handler called `switchTab('decisions')` beneath a comment reading *"Flash the Decisions badge so users notice even if not on that tab"* — the comment described the intent, the code did something much larger. `switchTab()` exits focus mode, expands a collapsed bottom panel, changes the active tab **and** persists it to `sessionStorage`, so an event arriving at the Queen's convenience relocated the operator and kept them relocated across a reload. It now does what the comment always said: flashes the badge, honouring `prefers-reduced-motion` (the count is the real signal; the flash is only the cue that it changed). The sibling Queen events are covered by the same rule, and a test asserts none of them call `switchTab` — user-initiated switches, such as opening a linked task, are unaffected and still correct.
+
 ## [2026.8.5] - 2026-08-05
 
 ### Features

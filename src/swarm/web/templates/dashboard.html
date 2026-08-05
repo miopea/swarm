@@ -83,13 +83,18 @@
         <div class="panel-header">Workers</div>
         <div class="worker-search-bar">
             <input type="text" id="worker-search" placeholder="Filter workers..." data-input-action="workerSearch">
-            <div class="worker-state-filters" id="worker-state-filters">
-                <button class="filter-chip active" data-worker-state="all">All</button>
-                <button class="filter-chip" data-worker-state="BUZZING">Buzzing</button>
-                <button class="filter-chip" data-worker-state="WAITING">Waiting</button>
-                <button class="filter-chip" data-worker-state="RESTING">Resting</button>
-                <button class="filter-chip" data-worker-state="SLEEPING">Sleeping</button>
-                <button class="filter-chip" data-worker-state="STUNG">Stung</button>
+            {# Multi-select toggles: combine states freely (e.g. everything but
+               Sleeping). aria-pressed rather than aria-selected because these
+               are toggle buttons, not tabs — with more than one selectable,
+               the pressed state is what conveys that several filters are live. #}
+            <div class="worker-state-filters" id="worker-state-filters"
+                 role="group" aria-label="Filter workers by state">
+                <button class="filter-chip active" data-worker-state="all" aria-pressed="true">All</button>
+                <button class="filter-chip" data-worker-state="BUZZING" aria-pressed="false">Buzzing</button>
+                <button class="filter-chip" data-worker-state="WAITING" aria-pressed="false">Waiting</button>
+                <button class="filter-chip" data-worker-state="RESTING" aria-pressed="false">Resting</button>
+                <button class="filter-chip" data-worker-state="SLEEPING" aria-pressed="false">Sleeping</button>
+                <button class="filter-chip" data-worker-state="STUNG" aria-pressed="false">Stung</button>
             </div>
         </div>
         <div class="panel-body" id="worker-list">

@@ -745,8 +745,14 @@
                 // pings then. No premature interruptive notification.
                 showToast('Queen proposes: ' + (data.proposal ? data.proposal.task_title : 'new assignment'), false, BEE.queen);
                 refreshProposals();
-                // Flash the Decisions badge so users notice even if not on that tab
-                switchTab('decisions');
+                // Flash the Decisions badge so users notice even if not on that
+                // tab. This used to call switchTab('decisions'), which did far
+                // more than the comment claimed: it expanded the bottom panel,
+                // exited focus mode, changed the active tab and persisted that
+                // to sessionStorage. A Queen proposal is a background event —
+                // it may arrive at any moment, including mid-read — so it is
+                // entitled to draw attention, not to take over the viewport.
+                flashDecisionsBadge();
                 break;
             case 'proposals_changed':
                 renderProposals(data.proposals || []);
@@ -1189,17 +1195,41 @@
     }
 
     // --- Worker search (client-side DOM filter) ---
-    var activeWorkerStateFilter = 'all';
+    //
+    // The state chips are MULTI-SELECT. "Show me everything except sleeping"
+    // is a real thing to want and used to be unreachable: the chips behaved as
+    // radio buttons, so any answer other than one state or all of them could
+    // not be expressed.
+    //
+    // "All" is a MODE, not a sixth state, and is represented by the set being
+    // EMPTY rather than by a magic 'all' member. Mixing a sentinel into the
+    // same set as real states means every read has to remember to special-case
+    // it; an empty set means "no state filter" everywhere, with no exceptions
+    // to forget.
+    var activeWorkerStates = new Set();
 
     function filterWorkers(query) {
         var q = (query || '').toLowerCase();
-        var sf = activeWorkerStateFilter;
+        var hasStateFilter = activeWorkerStates.size > 0;
         document.querySelectorAll('.worker-item').forEach(function(el) {
             var name = (el.dataset.worker || '').toLowerCase();
             var state = el.dataset.state || '';
             var nameMatch = !q || name.indexOf(q) !== -1;
-            var stateMatch = sf === 'all' || state === sf;
+            var stateMatch = !hasStateFilter || activeWorkerStates.has(state);
             el.style.display = (nameMatch && stateMatch) ? '' : 'none';
+        });
+    }
+
+    /** Reflect the selection on the chips, for sighted and AT users alike. */
+    function syncWorkerStateChips() {
+        document.querySelectorAll('[data-worker-state]').forEach(function(c) {
+            var s = c.dataset.workerState;
+            var on = (s === 'all') ? activeWorkerStates.size === 0 : activeWorkerStates.has(s);
+            c.classList.toggle('active', on);
+            // aria-pressed, not aria-selected: these are toggle buttons, and
+            // with multi-select the pressed state is the only thing conveying
+            // that more than one filter is live.
+            c.setAttribute('aria-pressed', String(on));
         });
     }
 
@@ -1207,10 +1237,17 @@
     document.addEventListener('click', function(e) {
         var chip = e.target.closest('[data-worker-state]');
         if (!chip) return;
-        activeWorkerStateFilter = chip.dataset.workerState;
-        document.querySelectorAll('[data-worker-state]').forEach(function(c) {
-            c.classList.toggle('active', c.dataset.workerState === activeWorkerStateFilter);
-        });
+        var state = chip.dataset.workerState;
+        if (state === 'all') {
+            activeWorkerStates.clear();
+        } else if (activeWorkerStates.has(state)) {
+            // Deselecting the last chip empties the set, which IS "All" — so
+            // the filter can never end up in a state that matches nothing.
+            activeWorkerStates.delete(state);
+        } else {
+            activeWorkerStates.add(state);
+        }
+        syncWorkerStateChips();
         var search = document.getElementById('worker-search');
         filterWorkers(search ? search.value : '');
     });
@@ -3357,6 +3394,35 @@
             badge.style.display = 'none';
         }
         updateAppBadge(count);
+    }
+
+    /** Draw the eye to the Decisions tab WITHOUT moving the operator.
+     *
+     * Called from background WebSocket events. It must never call switchTab():
+     * that expands the bottom panel, exits focus mode, changes the active tab
+     * and persists the choice to sessionStorage, so an event arriving while
+     * someone was reading another tab relocated them and kept them relocated
+     * across reloads.
+     *
+     * The count itself is the signal; this is only the cue that it changed, so
+     * skipping it under prefers-reduced-motion loses nothing.
+     */
+    function flashDecisionsBadge() {
+        try {
+            if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+            var badge = document.getElementById('proposal-badge');
+            var target = (badge && badge.style.display !== 'none')
+                ? badge
+                : document.getElementById('tab-decisions-btn');
+            if (!target || typeof target.animate !== 'function') return;
+            target.animate(
+                [{ opacity: 1 }, { opacity: 0.3 }, { opacity: 1 }],
+                { duration: 400, iterations: 3, easing: 'ease-in-out' }
+            );
+        } catch (e) {
+            // A missing element or an unsupported animate() must not break the
+            // WS handler that called us.
+        }
     }
 
     function updateQueenQueueBadge(status) {
@@ -11146,7 +11212,7 @@
             updateBulkWorkerButtons();
             // Re-apply state filter after swap
             var search = document.getElementById('worker-search');
-            if (activeWorkerStateFilter !== 'all' || (search && search.value)) {
+            if (activeWorkerStates.size > 0 || (search && search.value)) {
                 filterWorkers(search ? search.value : '');
             }
         }
