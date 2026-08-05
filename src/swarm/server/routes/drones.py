@@ -19,6 +19,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/drones/approval-rate", handle_approval_rate)
     app.router.add_post("/api/drones/rules/suggest", handle_rule_suggest)
     app.router.add_get("/api/notifications", handle_notification_history)
+    app.router.add_post("/api/notifications", handle_notification_raise)
     app.router.add_get("/api/queen/oversight", handle_oversight_status)
     app.router.add_get("/api/coordination/ownership", handle_ownership_status)
     app.router.add_get("/api/coordination/sync", handle_sync_status)
@@ -202,6 +203,69 @@ async def handle_notification_history(request: web.Request) -> web.Response:
     limit = min(int(request.query.get("limit", "50")), 50)
     history = d.escalation._notification_history[-limit:]
     return web.json_response({"notifications": list(reversed(history))})
+
+
+@handle_errors
+async def handle_notification_raise(request: web.Request) -> web.Response:
+    """Raise an operator notification from an EXTERNAL tool (#1265).
+
+    Before this, the only way for something outside the daemon to reach the
+    operator was to INSERT into ``buzz_log`` directly — which
+    ``bfg-solutions/scripts/credential-check-cron.sh`` did, documenting the
+    coupling and filing this endpoint as the follow-up. ``GET
+    /api/notifications`` is history-only, and ``/api/hooks/event`` only speaks
+    Claude Code lifecycle events.
+
+    DELIBERATELY DOES ONE THING: appends a drone-log entry with
+    ``is_notification=True``. It does NOT also call ``push_notification`` —
+    ``StatePublisher`` already fans notification-worthy entries out to the
+    WebSocket (see ``state_publisher.py``), so calling both would deliver the
+    notification twice. Using the same single entry point is what makes an
+    external notification indistinguishable from an internal one on the
+    dashboard, rather than something that merely looks similar.
+
+    FAILURE MODE, stated because a notifier that fails quietly is worse than
+    none: a rejected request returns 4xx with a reason and NOTHING is recorded;
+    a caller that never reaches the daemon at all gets a connection error. In
+    both cases the failure is the CALLER's to surface — the daemon cannot notify
+    you that it failed to notify you, and pretending otherwise would be the same
+    circularity as a check that reports on itself. Callers that must not lose
+    the signal should treat a non-2xx as a hard failure (``curl --fail``) rather
+    than best-effort.
+    """
+    d = get_daemon(request)
+    body = await request.json()
+
+    detail = str(body.get("detail") or body.get("message") or "").strip()
+    if not detail:
+        return json_error("Missing 'detail' — say what the operator needs to know.")
+    label = str(body.get("label") or body.get("action") or "external").strip()
+    source = str(body.get("source") or "external").strip()
+    worker = str(body.get("worker") or "external").strip()
+
+    _MAX_DETAIL = 2000
+    if len(detail) > _MAX_DETAIL:
+        detail = detail[: _MAX_DETAIL - 3] + "..."
+
+    from swarm.drones.log import LogCategory, SystemAction
+
+    entry = d.drone_log.add(
+        SystemAction.EXTERNAL_NOTIFICATION,
+        worker,
+        f"{label}: {detail}" if label != "external" else detail,
+        category=LogCategory.OPERATOR,
+        is_notification=True,
+        metadata={"source": source, "label": label},
+    )
+    return web.json_response(
+        {
+            "status": "raised",
+            "label": label,
+            "source": source,
+            "worker": worker,
+            "timestamp": getattr(entry, "timestamp", None),
+        }
+    )
 
 
 @handle_errors

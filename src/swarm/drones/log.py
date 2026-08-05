@@ -99,6 +99,14 @@ class SystemAction(Enum):
     # ASSIGNED (swarm_park_task) — intentional set-down, not a blocker.
     TASK_PARKED = "TASK_PARKED"
     TASK_STARTED = "TASK_STARTED"
+
+    # #1265: an EXTERNAL tool raised an operator notification through
+    # POST /api/notifications. One closed enum member rather than an open string,
+    # because this value is used for routing, filtering and priority mapping —
+    # letting callers invent members would silently break every consumer that
+    # switches on it. The caller's own label travels in ``metadata["label"]`` and
+    # in the detail text, so nothing is lost.
+    EXTERNAL_NOTIFICATION = "EXTERNAL_NOTIFICATION"
     # #939: a worker self-assigned + closed an UNASSIGNED task it demonstrably
     # did (authority-guard park / HOLD), instead of routing through the Queen's
     # force-complete. The doer adopts the task; this is the audit anchor.

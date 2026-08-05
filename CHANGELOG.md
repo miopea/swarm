@@ -10,6 +10,22 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.5.6] - 2026-08-05
+
+### Features
+
+- **`POST /api/notifications` — external tools can raise an operator notification without writing `buzz_log` directly (#1265).** `GET /api/notifications` was history-only and `/api/hooks/event` only speaks Claude Code lifecycle events, so the credential-check cron had no option but to `INSERT` into `buzz_log` itself. It did, and documented the coupling in the script rather than hiding it, filing this endpoint as the follow-up.
+
+  **The endpoint deliberately does exactly one thing**: appends a drone-log entry with `is_notification=True`. It does *not* also call `push_notification` — `StatePublisher` already fans notification-worthy entries out to the WebSocket, so doing both would deliver every external notification twice. Using the same single entry point is what makes an external notification indistinguishable from an internal one on the dashboard rather than merely similar-looking, and a test asserts (via AST, not a substring search) that the handler never calls the fan-out directly.
+
+  The caller's label travels in `metadata["label"]`, not as a new `SystemAction` member. That enum drives routing, filtering and priority mapping, so letting callers invent members would silently break every consumer that switches on it — one closed `EXTERNAL_NOTIFICATION` member covers them all.
+
+  **Failure mode, stated because a notifier that fails quietly is worse than none:** a rejected request returns 4xx with a reason and records nothing; a caller that cannot reach the daemon gets a connection error. In both cases the failure is the *caller's* to surface — the daemon cannot notify you that it failed to notify you. Callers that must not lose the signal should treat non-2xx as a hard failure (`curl --fail`) rather than best-effort.
+
+### Changes
+
+### Fixes
+
 ## [2026.8.5.5] - 2026-08-05
 
 ### Features
