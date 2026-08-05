@@ -9,7 +9,7 @@ Args: $ARGUMENTS
 
 1. **Validate.** If $ARGUMENTS contains fewer than 2 whitespace-separated tokens, REFUSE with:
 
-   ```
+   ```text
    Usage: /swarm-warning <to-worker> <warning text>
    ```
 

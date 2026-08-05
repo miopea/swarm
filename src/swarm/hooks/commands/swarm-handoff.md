@@ -11,7 +11,7 @@ Workflow:
 
 1. **Validate args.** If $ARGUMENTS is empty OR contains fewer than 2 whitespace-separated tokens, REFUSE with this exact line and stop:
 
-   ```
+   ```text
    Usage: /swarm-handoff <target-worker> <task description>
    ```
 

@@ -19,7 +19,7 @@ Examples accepted (positional flexible):
 
 2. **Validate.** If no numeric token OR no phase text remaining, REFUSE with:
 
-   ```
+   ```text
    Usage: /swarm-progress <phase> <percent>
    ```
 

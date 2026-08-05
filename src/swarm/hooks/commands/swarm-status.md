@@ -9,6 +9,7 @@ Show me a tight Swarm status summary using the coordination tools.
 3. Call `mcp__swarm__swarm_query_peers` to see peer worker state (who's idle/busy, their current task + queue depth).
 
 Then summarize in 5–10 lines covering:
+
 - My current task (if any) — title + status + percent if known
 - My queue (assigned but not yet IN_PROGRESS)
 - Unread messages — count + senders

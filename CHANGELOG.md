@@ -10,6 +10,20 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.5] - 2026-08-05
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **The bundled `/swarm-*` command docs and the `swarm-coordinate` skill no longer fail markdownlint**, so repos that lint their markdown recursively stop inheriting the failures. Six bare ` ``` ` fences gained a `text` language tag (MD040) and a blank line now precedes the list in `swarm-status.md` (MD032) — seven single-line changes, nothing else. These files are packaged under `src/swarm/hooks/{commands,skills}/` and written into every worker's `.claude/` by `install_worker_commands()` / `install_worker_skills()`, both of which overwrite unconditionally (`copy2`; `rmtree` + `copytree`). That is why a consuming repo could fix them and not stay fixed: the next install wrote the bundled copies straight back over the fix. Fixing the source is therefore the only fix that holds, and it reaches every consumer on their next install.
+
+  Scoped deliberately to the two rules that gate anything. MD013 (line length) and MD041 (first-line H1) also fire under markdownlint's defaults but are disabled in the consuming repo's `.markdownlint.json`, so no line rewraps or added headings appear in the diff.
+
+  Blast radius was larger than the single repo that reported it: 26 checkouts on this box carry these files, 6 of them with the files tracked in git (`rcg-dev-install`, `d365-solutions`, `bfg-solutions`, `budgetbug`, `sculpt-studio`, `sillytavern`). Repos that lint only `docs/**` were carrying the same broken files silently.
+
 ## [2026.8.4.6] - 2026-08-04
 
 ### Features

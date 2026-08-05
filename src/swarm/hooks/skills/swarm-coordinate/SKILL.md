@@ -21,7 +21,7 @@ Survey the swarm and recommend where pending work could go. **Advisory only** â€
    - **Open tasks** â€” tasks in `UNASSIGNED`/`ASSIGNED` waiting for a worker.
 5. Output a tight delegation suggestion as plain text. Use this shape:
 
-   ```
+   ```text
    Idle workers: <list, or "none">
    Pending tasks: <list with task numbers + short titles, or "none">
    Suggested delegations:

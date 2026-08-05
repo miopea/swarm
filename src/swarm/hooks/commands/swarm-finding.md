@@ -9,7 +9,7 @@ Args: $ARGUMENTS
 
 If $ARGUMENTS is empty, REFUSE with this exact line and stop:
 
-```
+```text
 Usage: /swarm-finding <freeform finding text>
 ```
 

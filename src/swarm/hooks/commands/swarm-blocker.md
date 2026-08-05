@@ -9,7 +9,7 @@ Args: $ARGUMENTS
 
 1. **Validate.** Args must have at least 3 whitespace-separated tokens, where the first two are integers. If not, REFUSE with:
 
-   ```
+   ```text
    Usage: /swarm-blocker <task#> <blocked-by-task#> <reason>
    ```
 
