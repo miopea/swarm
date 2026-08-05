@@ -790,22 +790,28 @@ def _find_repo(repo: SharedConfigRepo) -> Path | None:
     return None
 
 
-async def _sync_one_shared_config(repo: SharedConfigRepo, state: dict[str, str]) -> bool:
-    """Install *repo* if it is not already current. Returns True if state changed.
+async def _sync_one_shared_config(repo: SharedConfigRepo, state: dict[str, str]) -> str:
+    """Install *repo* if it is not already current.
+
+    Returns a short OUTCOME token — ``installed`` / ``already-current`` /
+    ``absent`` / ``failed`` / ``timeout`` — rather than a bool, so the caller can
+    name what happened per repo in one summary line. A bool could only say
+    "something changed", which cannot distinguish "already current" from "never
+    ran" — the exact distinction #1263 was filed about.
 
     Never raises — a shared-config problem must not take down the update check.
     """
     repo_dir = _find_repo(repo)
     if repo_dir is None:
         _log.debug("%s not found locally; skipping", repo.name)
-        return False
+        return "absent"
 
     fingerprint = await _repo_fingerprint(repo_dir)
     # "" means we could not read git. Fall through and install rather than
     # guessing; an unreadable repo is exactly when a stale skip is worst.
     if fingerprint and state.get(repo.name) == fingerprint:
         _log.info("%s already current at %s — install skipped", repo.name, fingerprint)
-        return False
+        return "already-current"
 
     installer = repo_dir / repo.installer
     _log.info("syncing %s from %s", repo.name, repo_dir)
@@ -830,12 +836,12 @@ async def _sync_one_shared_config(repo: SharedConfigRepo, state: dict[str, str])
         except TimeoutError:
             proc.kill()
             _log.warning("%s install timed out after %ds", repo.name, _SHARED_CONFIG_TIMEOUT)
-            return False
+            return "timeout"
 
         text = output.decode(errors="replace").strip()
         if proc.returncode != 0:
             _log.warning("%s install.sh exited %d:\n%s", repo.name, proc.returncode, text)
-            return False
+            return "failed"
 
         # Re-read AFTER the install: the installer pulls, so HEAD may have
         # moved. Recording the pre-install fingerprint would re-run the whole
@@ -844,10 +850,10 @@ async def _sync_one_shared_config(repo: SharedConfigRepo, state: dict[str, str])
         if installed:
             state[repo.name] = installed
         _log.info("team config sync complete for %s at %s", repo.name, installed or "unknown")
-        return True
+        return "installed"
     except Exception:
         _log.warning("%s sync failed", repo.name, exc_info=True)
-        return False
+        return "failed"
 
 
 async def sync_team_config() -> None:
@@ -859,13 +865,31 @@ async def sync_team_config() -> None:
 
     Never raises — this runs from a background startup task.
     """
+    # ONE WARNING-LEVEL LINE PER INVOCATION, and the level is deliberate (#1263).
+    #
+    # Every per-repo outcome below is INFO, and the daemon runs at
+    # log_level=WARNING — so before this line existed, a healthy sync, an
+    # already-current skip, a dev-mode skip and a sync that was never invoked at
+    # all were ALL silence in swarm.log. Failures were visible (WARNING), so a
+    # broken installer still surfaced; what could not be seen was whether the
+    # distribution path was alive.
+    #
+    # WARNING for a healthy outcome is a deliberate abuse of the level. The
+    # alternative is unobservability at the level this fleet actually deploys
+    # at, and the governing question decides it: what would this look like if it
+    # were measuring nothing? Silence. Would that differ from success? Not
+    # without this line. Once per daemon start is not spam.
     if dev_mode_active():
-        _log.info("development mode — skipping shared-config sync")
+        _log.warning("shared-config sync: SKIPPED — development mode")
         return
 
     state = _read_shared_config_state()
+    outcomes: list[str] = []
     changed = False
     for repo in _SHARED_CONFIG_REPOS:
-        changed |= await _sync_one_shared_config(repo, state)
+        outcome = await _sync_one_shared_config(repo, state)
+        outcomes.append(f"{repo.name}={outcome}")
+        changed |= outcome == "installed"
     if changed:
         _write_shared_config_state(state)
+    _log.warning("shared-config sync: %s", "; ".join(outcomes) or "no repos configured")

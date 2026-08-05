@@ -100,7 +100,7 @@ async def test_a_real_non_executable_installer_actually_runs(repo):
     with patch("swarm.update._repo_fingerprint", new=AsyncMock(return_value="main:aaa:aaa")):
         changed = await _sync_one_shared_config(repo, state)
 
-    assert changed is True, "a non-executable install.sh still did not run (exit 126?)"
+    assert changed == "installed", "a non-executable install.sh still did not run (exit 126?)"
     assert state["claude-team-config"] == "main:aaa:aaa"
 
 
@@ -160,7 +160,7 @@ async def test_already_current_repo_skips_the_install(repo):
     ):
         changed = await _sync_one_shared_config(repo, state)
 
-    assert changed is False
+    assert changed == "already-current"
     assert spawned is False
 
 
@@ -171,7 +171,7 @@ async def test_a_moved_head_reinstalls(repo):
     state = {"claude-team-config": "main:OLD:OLD"}
     with patch("swarm.update._repo_fingerprint", new=AsyncMock(return_value="main:NEW:NEW")):
         changed = await _sync_one_shared_config(repo, state)
-    assert changed is True
+    assert changed == "installed"
     assert state["claude-team-config"] == "main:NEW:NEW"
 
 
@@ -186,7 +186,7 @@ async def test_an_unreadable_repo_installs_rather_than_skipping(repo):
     state = {"claude-team-config": ""}
     with patch("swarm.update._repo_fingerprint", new=AsyncMock(return_value="")):
         changed = await _sync_one_shared_config(repo, state)
-    assert changed is True, "empty fingerprint was treated as already-current"
+    assert changed == "installed", "empty fingerprint was treated as already-current"
 
 
 # --- 4. codex parity -------------------------------------------------------
@@ -281,7 +281,7 @@ async def test_installer_failure_is_loud_and_not_recorded_as_current(repo):
     with patch("asyncio.create_subprocess_exec", new=failing_exec):
         changed = await _sync_one_shared_config(repo, state)
 
-    assert changed is False
+    assert changed == "failed"
     assert "claude-team-config" not in state, "a failed install was cached as current"
 
 
@@ -289,7 +289,7 @@ async def test_installer_failure_is_loud_and_not_recorded_as_current(repo):
 async def test_a_missing_repo_is_a_no_op(tmp_path):
     """Most boxes have neither repo; that is normal, not an error."""
     missing = SharedConfigRepo(name="codex-team-config", candidates=(tmp_path / "nope",))
-    assert await _sync_one_shared_config(missing, {}) is False
+    assert await _sync_one_shared_config(missing, {}) == "absent"
 
 
 def test_state_file_survives_corruption():
@@ -307,3 +307,99 @@ def test_state_file_round_trips(tmp_path):
     with patch("swarm.update._SHARED_CONFIG_STATE_FILE", target):
         _write_shared_config_state({"claude-team-config": "main:a:a"})
         assert json.loads(Path(target).read_text())["claude-team-config"] == "main:a:a"
+
+
+# --- #1263: observable at the DEPLOYED log level ---------------------------
+#
+# #1241 logged every non-failure outcome at INFO, and the daemon runs at
+# log_level=WARNING. So a healthy sync, an already-current skip, a dev-mode skip
+# and a sync that was never invoked at all were ALL silence in swarm.log.
+# Failures were WARNING and stayed visible, so this was never the original
+# exit-126 defect rebuilt — but there was no positive confirmation the
+# distribution path was alive, which is the "no number to notice" shape.
+#
+# I had identified exactly this asymmetry while fixing #1241 and then shipped
+# INFO anyway, demonstrating the acceptance criterion with a handler I attached
+# myself. That proves the code emits the line; it does not prove the line
+# reaches swarm.log. rcg-dev-install caught it.
+
+
+@pytest.mark.asyncio
+async def test_a_summary_line_survives_the_deployed_warning_threshold(caplog):
+    """THE guard. At WARNING — what the daemon actually runs at — the sync must
+    still say what it did per repo."""
+    with (
+        caplog.at_level(logging.WARNING, logger="swarm.update"),
+        patch("swarm.update.dev_mode_active", return_value=False),
+        patch("swarm.update._read_shared_config_state", lambda: {}),
+        patch("swarm.update._write_shared_config_state", lambda s: None),
+        patch(
+            "swarm.update._SHARED_CONFIG_REPOS",
+            (SharedConfigRepo(name="claude-team-config", candidates=(Path("/nope"),)),),
+        ),
+    ):
+        await sync_team_config()
+
+    msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("shared-config sync:" in m for m in msgs), f"nothing at WARNING: {msgs}"
+    assert any("claude-team-config=absent" in m for m in msgs), msgs
+
+
+@pytest.mark.asyncio
+async def test_dev_mode_skip_is_visible_at_warning_too(caplog):
+    """A dev box must be able to tell 'skipped because dev' from 'never ran'."""
+    with (
+        caplog.at_level(logging.WARNING, logger="swarm.update"),
+        patch("swarm.update.dev_mode_active", return_value=True),
+    ):
+        await sync_team_config()
+
+    msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("SKIPPED — development mode" in m for m in msgs), msgs
+
+
+@pytest.mark.asyncio
+async def test_already_current_is_distinguishable_from_never_invoked(caplog):
+    """The distinction #1263 was filed about, asserted at WARNING.
+
+    'already-current' must appear in the summary. If the sync were never
+    invoked, no summary line exists at all — so absence and already-current are
+    different observations rather than the same silence.
+    """
+    repo = SharedConfigRepo(name="claude-team-config", candidates=(Path("/nope"),))
+    with (
+        caplog.at_level(logging.WARNING, logger="swarm.update"),
+        patch("swarm.update.dev_mode_active", return_value=False),
+        patch("swarm.update._read_shared_config_state", lambda: {"claude-team-config": "x"}),
+        patch("swarm.update._write_shared_config_state", lambda s: None),
+        patch("swarm.update._SHARED_CONFIG_REPOS", (repo,)),
+        patch("swarm.update._find_repo", return_value=Path("/nope")),
+        patch("swarm.update._repo_fingerprint", new=AsyncMock(return_value="x")),
+    ):
+        await sync_team_config()
+
+    msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("already-current" in m for m in msgs), msgs
+
+
+@pytest.mark.asyncio
+async def test_raising_other_levels_did_not_mask_installer_failure(repo, caplog):
+    """#1263 AC-4. The one signal that already worked must still work."""
+
+    async def failing_exec(*args, **kwargs):
+        proc = AsyncMock()
+        proc.stdout.read = AsyncMock(return_value=b"boom")
+        proc.communicate = AsyncMock(return_value=(b"main:a:a", b""))
+        proc.wait = AsyncMock(return_value=1)
+        proc.returncode = 0 if args[0] == "git" else 1
+        return proc
+
+    with (
+        caplog.at_level(logging.WARNING, logger="swarm.update"),
+        patch("asyncio.create_subprocess_exec", new=failing_exec),
+    ):
+        outcome = await _sync_one_shared_config(repo, {})
+
+    assert outcome == "failed"
+    msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("exited" in m for m in msgs), f"installer failure no longer visible: {msgs}"

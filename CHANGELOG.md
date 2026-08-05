@@ -10,6 +10,20 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.5.4] - 2026-08-05
+
+### Features
+
+### Changes
+
+- **Shared-config sync outcomes are now visible at the log level the daemon actually runs at (#1263).** Every non-failure outcome was INFO while `log_level` defaults to WARNING in four independent places, so a healthy sync, an already-current skip, a dev-mode skip and a sync that was never invoked at all were *all* silence in `swarm.log`. Failures were WARNING and stayed visible, so this was never the exit-126 defect rebuilt — what was missing was positive confirmation that the distribution path was alive. There is now one WARNING-level summary line per invocation naming each repo's outcome (`claude-team-config=installed; codex-team-config=already-current`), and `_sync_one_shared_config` returns an outcome token rather than a bool, because a bool cannot distinguish "already current" from "never ran" — the exact distinction at issue.
+
+  WARNING for a healthy outcome is a deliberate abuse of the level, taken because the alternative is unobservability at the level this fleet deploys at. Once per daemon start is not spam. **The daemon's own dev-mode early return was also raised from DEBUG**: it fires *before* `sync_team_config()`, so raising the inner outcomes alone fixed nothing on a dev box — the summary line was unreachable there.
+
+### Fixes
+
+- **Copy and paste now work in the operator shell.** Loading `ClipboardAddon` is not sufficient, and the shell shipped without the two pieces that actually matter. Ctrl/Cmd+V now returns `false` from a custom key handler so it never reaches xterm — which would send raw `0x16` to the PTY (readline's quoted-insert) instead of pasting — and a capture-phase `paste` listener on the terminal textarea `stopPropagation()`s, because a document-level paste handler for email import would otherwise consume the event first. Copy is Cmd+C or Ctrl+Shift+C. **Plain Ctrl+C is deliberately left as SIGINT**: making it copy whenever text happens to be selected would remove the only way to interrupt a runaway command, and a stale selection is exactly the state an operator forgets about.
+
 ## [2026.8.5.3] - 2026-08-05
 
 ### Features

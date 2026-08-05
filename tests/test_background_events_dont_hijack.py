@@ -144,3 +144,49 @@ def test_chips_expose_their_toggle_state_to_assistive_tech(js):
     filters = markup[markup.index('id="worker-state-filters"') :][:1200]
     assert 'role="group"' in markup[markup.index("worker-state-filters") - 200 :][:600]
     assert filters.count("aria-pressed") >= 6, "not every chip declares aria-pressed"
+
+
+# --- operator shell: copy/paste --------------------------------------------
+#
+# Reported 2026-08-05: neither copy nor paste worked in the spawned shell.
+# Loading ClipboardAddon is not sufficient — the worker terminal also blocks
+# Ctrl/Cmd+V from reaching xterm (which would send raw 0x16, readline's
+# quoted-insert, instead of pasting) and installs a capture-phase paste
+# listener that stopPropagation()s so the document-level email-import paste
+# handler cannot consume the event first. The shell shipped with neither.
+
+
+def _shell_attach_body(js: str) -> str:
+    start = js.index("function attachShell(")
+    return js[start : js.index("\n    window.closeShell", start)]
+
+
+def test_shell_blocks_ctrl_v_from_reaching_xterm(js):
+    """Without this, Ctrl/Cmd+V sends 0x16 to the PTY and nothing pastes."""
+    body = _shell_attach_body(js)
+    assert "attachCustomKeyEventHandler" in body, "no custom key handler in the shell"
+    assert "'v'" in body and "return false" in body
+
+
+def test_shell_paste_listener_is_capture_phase_and_stops_propagation(js):
+    """A document-level paste handler exists for email import. Bubble-phase or
+    non-stopping registration loses the event to it."""
+    body = _shell_attach_body(js)
+    assert "addEventListener('paste'" in body
+    assert "}, true);" in body, "paste listener is not registered in the capture phase"
+    assert "stopPropagation()" in body
+    assert "term.paste(text)" in body
+
+
+def test_shell_leaves_plain_ctrl_c_as_sigint(js):
+    """Copy is Cmd+C / Ctrl+Shift+C only.
+
+    Hijacking plain Ctrl+C when text happens to be selected would remove the
+    only way to interrupt a runaway command in a shell — and a stale selection
+    is exactly the state an operator forgets about.
+    """
+    body = _shell_attach_body(js)
+    assert "e.metaKey && (e.key === 'c'" in body, "Cmd+C not handed to the browser"
+    assert "e.ctrlKey && e.shiftKey" in body, "Ctrl+Shift+C not handled"
+    # The guard must require meta or shift — never ctrlKey alone with 'c'.
+    assert "e.ctrlKey && (e.key === 'c'" not in body, "plain Ctrl+C hijacked; SIGINT lost"

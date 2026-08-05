@@ -10679,6 +10679,47 @@
         term.open(container);
         try { fit.fit(); } catch (e) {}
 
+        // --- Copy / paste -------------------------------------------------
+        // Loading ClipboardAddon is NOT sufficient, and the shell shipped
+        // without these two pieces so neither copy nor paste worked in it.
+        // The worker terminal has both; this mirrors them, minus the
+        // image-upload branch (a shell has no use for attachments).
+        term.attachCustomKeyEventHandler(function(e) {
+            if (e.type !== 'keydown') return true;
+            var mod = e.ctrlKey || e.metaKey;
+            // PASTE must not reach xterm: it would send raw 0x16 to the PTY —
+            // readline's quoted-insert — instead of pasting. Returning false
+            // lets the browser's native paste event fire, which the listener
+            // below picks up.
+            if (mod && (e.key === 'v' || e.key === 'V')) return false;
+            // COPY via Cmd+C or Ctrl+Shift+C. Neither can mean SIGINT, so they
+            // are safe to hand to the browser.
+            //
+            // PLAIN Ctrl+C IS DELIBERATELY LEFT ALONE. In a shell it has to
+            // stay SIGINT: making it copy whenever text happens to be selected
+            // would remove the only way to interrupt a runaway command, and the
+            // selection is often left over from something the operator forgot
+            // about. Losing a keystroke is an annoyance; losing SIGINT is not.
+            if ((e.metaKey && (e.key === 'c' || e.key === 'C')) ||
+                (e.ctrlKey && e.shiftKey && (e.key === 'c' || e.key === 'C'))) return false;
+            return true;
+        });
+
+        if (term.textarea) {
+            // Capture phase + stopPropagation is load-bearing: a document-level
+            // paste listener handles email import, and without this it consumes
+            // the event before the terminal ever sees it.
+            term.textarea.addEventListener('paste', function(e) {
+                var cd = e.clipboardData || window.clipboardData || {};
+                var text = cd.getData('text');
+                if (text) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    term.paste(text);
+                }
+            }, true);
+        }
+
         var wsPath = '/ws/terminal?worker=' + encodeURIComponent(session);
         var dims = null;
         try { dims = fit.proposeDimensions(); } catch (e) { dims = null; }

@@ -1968,7 +1968,13 @@ class SwarmDaemon(EventEmitter):
         from swarm.update import dev_mode_active
 
         if dev_mode_active():
-            _log.debug("dev mode — skipping update check")
+            # WARNING, not DEBUG (#1263). This return happens BEFORE
+            # sync_team_config(), so the summary line that function logs is
+            # unreachable on a dev box — leaving "skipped because dev" and
+            # "never invoked at all" as the same silence at the deployed
+            # log_level of WARNING. Raising the inner outcomes without this one
+            # fixes nothing on the machines most likely to be inspected.
+            _log.warning("update check + shared-config sync: SKIPPED — development mode")
             return
         try:
             await asyncio.sleep(_UPDATE_CHECK_DELAY)
