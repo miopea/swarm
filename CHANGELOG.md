@@ -10,6 +10,22 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.5.7] - 2026-08-05
+
+### Features
+
+### Changes
+
+- **TaskBoard's state machine is audited, and the audit is now guarded by a test (#1104).** All 7 `TaskStatus` members have their entering and leaving verbs enumerated and assessed against seven properties; `docs/specs/taskboard-state-machine-audit.md` carries the table and `tests/test_status_exit_reachability.py` keeps it honest.
+
+  **The headline finding: BLOCKED's only non-falsifying exit is dead code.** `TaskBoard.unblock` exists, works, and is covered by `tests/test_board.py` — and is called by *nothing* in `src/`. The only exit any surface can invoke is `force_complete`, which records DONE for work that is still open. Two comments in the codebase (`board.py:599`, `queen_handlers/_tasks.py:45`) instruct the reader to unblock a task, which no surface permits.
+
+  Why every prior test missed it: unit tests on the board prove the *transition*. Reachability is a different property and no board-level test can see it. The board tests pass; the verb is unreachable — the same shape as a green check measuring nothing. The new test therefore asserts **reachability**, carries a positive control (it proves it can see verbs known to be wired up before any absence it reports is trusted), and marks the known gap `xfail(strict=True)` so that a new status with no exit fails immediately *and* fixing BLOCKED also fails, forcing the marker off rather than letting the gap close silently.
+
+  Results: (a) non-empty, (e) no racy gate and (f) no silent undo all **pass** — (f) only as of the sibling worker-asserted-ACTIVE change, which removed the one `activate()` caller that wrote no history. (b), (d) and (g) **fail**, filed as #1268, #1269 and #1270. `board.block_for_operator`'s ACTIVE-only precondition is confirmed **correct** and pinned by test, as is `park`'s relaxed `(ACTIVE, ASSIGNED)` precondition — narrowing it would re-open the INV-2 race.
+
+### Fixes
+
 ## [2026.8.5.6] - 2026-08-05
 
 ### Features
