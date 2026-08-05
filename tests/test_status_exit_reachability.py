@@ -61,10 +61,15 @@ _BOARD_EXITS: dict[TaskStatus, list[tuple[str, str, bool]]] = {
         ("block_for_operator", "blocked", False),
     ],
     TaskStatus.BLOCKED: [
-        # Exists, works, tested at board level — and called by NOTHING in src/.
+        # CORRECTED 2026-08-05: the audit's first pass OMITTED release, which
+        # accepts BLOCKED (only DONE/FAILED and already-ownerless are refused)
+        # and is reached from the Queen via queen_reassign_task. That omission
+        # produced a false headline — "BLOCKED has no reachable honest exit".
+        # It does; release just DROPS THE OWNER.
+        ("release", "unassigned", False),
+        # #1268: the OWNER-PRESERVING exit. Had zero callers; now on both surfaces.
         ("unblock", "assigned", False),
-        # The only exit any surface can actually invoke. Records completion for
-        # work that is still open.
+        # Exits BLOCKED by recording completion for work that is still open.
         ("force_complete", "done", True),
     ],
     TaskStatus.DONE: [("reopen", "backlog", False), ("release", "unassigned", False)],
@@ -162,30 +167,14 @@ def test_the_board_verb_inventory_is_honest():
     assert "block_on_external" in worker, "scan cannot see swarm_block_on_external"
 
 
-def test_unblock_is_defined_but_unreachable():
-    """THE finding. Documents the current, verified state rather than asserting
-    the desired one, so it stays green until the follow-up lands and then fails
-    loudly — see the xfail below for the desired property."""
-    assert hasattr(TaskBoard, "unblock"), "unblock disappeared; update this audit"
-    all_src = _src("mcp/handlers") + _src("mcp/queen_handlers") + _src("server")
-    assert "unblock(" not in all_src, (
-        "unblock now HAS a caller — the #1104 follow-up landed. Delete this test "
-        "and un-xfail test_blocked_has_a_non_falsifying_exit_reachable_from_a_surface."
-    )
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "#1104 failing cell: BLOCKED's only non-falsifying exit (board.unblock) "
-        "is reachable from NEITHER surface — zero callers in src/. The only "
-        "invokable exit is force_complete, which records DONE for open work. "
-        "Filed as a follow-up; strict=True so fixing it fails this test and "
-        "forces the marker off rather than letting the gap close silently."
-    ),
-)
 def test_blocked_has_a_non_falsifying_exit_reachable_from_a_surface():
-    """Property (b) crossed with (c) — the combination nothing tested before."""
+    """Property (b) crossed with (c) — the combination nothing tested before.
+
+    Was xfail(strict=True) while BLOCKED had no owner-preserving exit reachable
+    from any surface. #1268 wired ``unblock`` to both surfaces, so this now
+    passes normally and a regression fails it directly — the strictness is not
+    weakened, it is simply no longer needed to hold a known gap open.
+    """
     honest = {v for v, _, falsifies in _BOARD_EXITS[TaskStatus.BLOCKED] if not falsifies}
     reachable = _reachable_board_verbs("worker") | _reachable_board_verbs("queen")
     assert honest & reachable, (

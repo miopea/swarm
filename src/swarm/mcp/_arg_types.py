@@ -82,6 +82,13 @@ class StartTaskArgs(TypedDict, total=False):
     task_number: int
 
 
+class UnblockTaskArgs(TypedDict, total=False):
+    """``swarm_unblock_task`` — clear your own blocker, keeping the task."""
+
+    task_number: int
+    reason: str
+
+
 class BlockExternalArgs(TypedDict, total=False):
     """``swarm_block_on_external`` — park a task on an upstream/external wait."""
 

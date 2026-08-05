@@ -8,27 +8,44 @@ edit), #1070 (block/no unblock), the hub BLOCKED-internal→external cell, #1159
 (verb succeeds and does nothing), #1237 (every exit falsifies), and the HOLD
 class (edit verb structurally unreachable).
 
-## The headline finding
+## The headline finding — CORRECTED 2026-08-05
 
-**BLOCKED's only non-falsifying exit is dead code.**
+**What this document originally claimed, and it was WRONG:** "BLOCKED's only
+non-falsifying exit is dead code."
 
-`TaskBoard.unblock` (`board.py:405`) exists, works, and is covered by
-`tests/test_board.py`. It is called by **nothing** in `src/`. So the exit set is
-non-empty *and* contains an honest member *and* the honest member cannot be
-invoked from either surface. The only exit any surface can reach is
-`force_complete`, which records DONE for work that is still open.
+**What is true:** `board.release` accepts BLOCKED — its only guards are DONE/FAILED
+and already-ownerless — and the Queen reaches it through `queen_reassign_task`
+(`mcp/queen_handlers/_tasks.py:328`), whose own inline comment says *"board.release
+accepts any holdable status"*. #1059 filed and fixed exactly this. **So the Queen
+could always move a BLOCKED task without falsifying history, and the operator was
+never stuck.**
 
-Two comments in the codebase assert otherwise:
+**How the error happened.** The precondition-extraction script used to build the
+table below listed `release`'s *refusal* set (DONE, FAILED, UNASSIGNED) in the
+*accepts* column. I read that as "release rejects BLOCKED" and never opened the
+method. The same script had already misled me about `park`; I caught that one by
+reading, wrote below that I had therefore confirmed every interesting cell by
+reading — and then did not read this one. **The claim in the (e) section that every
+interesting cell was read was itself false when written.**
 
-- `board.py:599` — *"BLOCKED is already off-active and has its own unblock verbs"*
-- `queen_handlers/_tasks.py:45` — *"a BLOCKED task must be unblocked first"*
+**The two gaps that were real**, and what #1268 fixed:
 
-Both instruct the reader to do something no surface permits.
+1. **No worker-surface exit from BLOCKED at all.** The worker that declared the
+   blocker could not clear it. This is what sculpt-studio hit on #1237.
+2. **No owner-preserving exit from either surface.** `release` drops the owner, so
+   "the wait ended, resume where you left off" required reassigning the task back
+   to the same worker.
 
-**Why every prior test missed it.** Unit tests on the board prove the
-*transition*. Property (b) is about *reachability*, which no board-level test can
-see. `test_board.py` passes and the verb is unreachable — the same shape as a
-green check measuring nothing.
+Both closed by #1268: `swarm_unblock_task` (worker) and `queen_unblock_task`
+(Queen), sharing one audit + BlockerStore-clearing helper so the surfaces cannot
+drift.
+
+**One comment I wrongly accused.** `board.py:599` says BLOCKED "has its own unblock
+verbs (#1059 `release`)" — **that is CORRECT** and needed no change. The comment
+that was genuinely wrong is `queen_handlers/_tasks.py:45`, which claimed
+`queen_reassign_task` "does NOT move a BLOCKED task … must be unblocked first",
+contradicting its own implementation 280 lines below. **That** is what misled the
+Queen, and through her the operator, about #1237. Corrected in #1268.
 
 ## Enumeration
 
@@ -41,7 +58,7 @@ verbs wrap them.
 | UNASSIGNED | `unassign`, `approve`, `release`, `unassign_worker`, INV reconcilers | `assign`→ASSIGNED, `release` | yes | yes |
 | ASSIGNED | `assign`, `unblock`, `park`, `reopen_for_verifier`, `activate` demote, `_recon_inv1/2` | `activate`→ACTIVE, `complete`→DONE, `unassign`→UNASSIGNED, `block_on_external`→BLOCKED | yes | yes |
 | ACTIVE | `activate` (2 callers) | `complete`, `park`, `unassign`, `block_on_external`, `block_for_operator` | yes | yes |
-| **BLOCKED** | `block_on_external`, `block_for_operator`, `_recon_inv2` | `unblock`→ASSIGNED **(0 callers)**, `force_complete`→DONE *(falsifies)* | yes | **NO** |
+| BLOCKED | `block_on_external`, `block_for_operator`, `_recon_inv2` | `release`→UNASSIGNED *(drops owner)*, `unblock`→ASSIGNED *(keeps owner, #1268)*, `force_complete`→DONE *(falsifies)* | yes | yes |
 | DONE | `complete`, `force_complete` | `reopen`→BACKLOG, `release` | yes | yes |
 | FAILED | `fail`, `reject` | `reopen`→BACKLOG, `release` | yes | yes |
 
@@ -50,8 +67,8 @@ verbs wrap them.
 | property | result |
 | --- | --- |
 | (a) exit set non-empty | **PASS** — all 7 statuses |
-| (b) reachable from both surfaces | **FAIL** — BLOCKED (see above) |
-| (c) achievable without falsifying history | **PASS at board level**, FAIL in practice for BLOCKED, because the only *reachable* exit falsifies |
+| (b) reachable from both surfaces | **PASS as of #1268.** Originally reported FAIL for BLOCKED on a false premise — `release` was always Queen-reachable. The real gaps were no worker-surface exit and no owner-preserving exit; both now closed. |
+| (c) achievable without falsifying history | **PASS.** `release` never falsified; `unblock` now adds the owner-preserving route. |
 | (d) transitions between distinct causes of one state | **FAIL** — see below |
 | (e) no gate is racy rather than strict | **PASS** — see below |
 | (f) no silent undo | **PASS** — now; it failed before this audit's sibling change |

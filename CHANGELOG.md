@@ -10,6 +10,20 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.5.8] - 2026-08-05
+
+### Features
+
+- **`swarm_unblock_task` and `queen_unblock_task` — an owner-preserving exit from BLOCKED, on both surfaces (#1268).** A blocked task returns to ASSIGNED and *stays with the same worker*, so "the thing I waited for happened, I'm resuming" is now expressible. `board.unblock` already did the right transition and had zero callers; both verbs wire it up and share one helper for the audit trail and blocker-row clearing, so the two surfaces cannot drift. Refusals name what would resolve them and mutate nothing; success text quotes the status **read back** from the board rather than the transition requested. Blocker rows are cleared with `clear_for_task` rather than the per-worker `clear`, because a blocked task can carry rows from several workers and a leftover row is what kept the IdleWatcher nudging (#529).
+
+### Changes
+
+- **Correction to the #1104 audit's headline, which was wrong.** It claimed BLOCKED's only non-falsifying exit was dead code. In fact `board.release` accepts BLOCKED and the Queen has always reached it via `queen_reassign_task` — so the operator was never stuck. The error came from an extraction script that listed `release`'s *refusal* set in its *accepts* column; the same script had already misled me about `park`, and the audit's own claim that every interesting cell had been read was false when written. The two gaps that were real — no worker-surface exit, and no owner-preserving exit from either surface — are what #1268 closes. `docs/specs/taskboard-state-machine-audit.md` now carries the correction, and the reachability test's `xfail` is removed rather than weakened (0 xfailed).
+
+- **`queen_reassign_task`'s description no longer contradicts its own implementation.** It claimed a BLOCKED task "must be unblocked first"; the code releases first and `release` accepts any holdable status. That text is what sent a worker chasing a path that did not exist (#1237). It now states that reassign *does* move a blocked task but **drops the owner**, and points at `queen_unblock_task` for the owner-preserving case. `board.py:599` was accused of the same fault and was in fact **correct** — left unchanged.
+
+### Fixes
+
 ## [2026.8.5.7] - 2026-08-05
 
 ### Features

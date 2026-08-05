@@ -100,6 +100,12 @@ class SystemAction(Enum):
     TASK_PARKED = "TASK_PARKED"
     TASK_STARTED = "TASK_STARTED"
 
+    # #1268: a BLOCKED task returned to ASSIGNED with its OWNER PRESERVED.
+    # Distinct from release (#1059), which also exits BLOCKED but drops the
+    # owner — the audit trail has to tell "the wait ended, same worker resumes"
+    # apart from "this was taken off its owner".
+    TASK_UNBLOCKED = "TASK_UNBLOCKED"
+
     # #1265: an EXTERNAL tool raised an operator notification through
     # POST /api/notifications. One closed enum member rather than an open string,
     # because this value is used for routing, filtering and priority mapping —

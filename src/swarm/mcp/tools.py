@@ -64,6 +64,8 @@ from swarm.mcp.handlers._tasks import (  # noqa: F401
     _handle_complete_task,
     _handle_task_status,
 )
+from swarm.mcp.handlers._unblock import HANDLERS as _UNBLOCK_H
+from swarm.mcp.handlers._unblock import TOOLS as _UNBLOCK_T
 from swarm.mcp.types import HandlerResult
 
 if TYPE_CHECKING:
@@ -135,6 +137,7 @@ TOOLS: list[dict[str, Any]] = [
     *_BLOCK_EXT_T,
     *_PARK_T,
     *_START_T,
+    *_UNBLOCK_T,
     *_EMAIL_T,
     *_TASKS_T,
     *_CREATE_T,
@@ -153,6 +156,7 @@ _HANDLERS = {
     **_BLOCK_EXT_H,
     **_PARK_H,
     **_START_H,
+    **_UNBLOCK_H,
     **_EMAIL_H,
     **_TASKS_H,
     **_CREATE_H,

@@ -41,9 +41,13 @@ TOOLS: list[dict[str, Any]] = [
             "reach the work (wrong expertise, over-loaded) and a peer is "
             "better-positioned, or when an orphaned unassigned/parked task needs an "
             "owner.  Assigning a HOLD-parked task clears the HOLD — your assignment is "
-            "the endorsement.  #1057: this does NOT move a BLOCKED task — releasing an "
-            "owner needs ASSIGNED/ACTIVE, so a BLOCKED task must be unblocked first; "
-            "the refusal names the reason.  The TARGET worker's current workload is "
+            "the endorsement.  THIS DOES MOVE A BLOCKED TASK: it releases first, and "
+            "board.release accepts any holdable status (#1059) — but release DROPS THE "
+            "OWNER, so the task lands on the new worker. To clear a blocker and keep "
+            "the SAME owner, use queen_unblock_task (#1268).  An earlier version of "
+            "this text claimed a BLOCKED task 'must be unblocked first', which "
+            "contradicted the implementation below and sent a worker chasing a path "
+            "that did not exist (#1237).  "
             "never consulted, so a busy target is never why this fails.  "
             "Call queen_view_worker_state on the target worker first "
             "so you're acting on current reality, not a stale assumption.  If `start` is "
@@ -500,8 +504,88 @@ def _handle_edit_task(d: SwarmDaemon, worker_name: str, args: dict[str, Any]) ->
     ]
 
 
+QUEEN_UNBLOCK_TOOL: dict[str, Any] = {
+    "name": "queen_unblock_task",
+    "description": (
+        "Clear a BLOCKED task's blocker and hand it back to the SAME worker, "
+        "still ASSIGNED. Use this when the thing it waited on has happened — an "
+        "operator decision you relayed, an upstream task that shipped. "
+        "#1268: this is the OWNER-PRESERVING exit from BLOCKED. "
+        "queen_reassign_task also moves a blocked task (it releases first, which "
+        "accepts any holdable status) but it DROPS the owner, so resuming with "
+        "the same worker meant reassigning the task back to them. "
+        "queen_force_complete_task also exits BLOCKED but records the task as "
+        "DONE — never use it to escape a blocker on work that is still open. "
+        "REFUSES if the task is not BLOCKED, naming its actual status."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "number": {"type": "integer", "description": "Task display number."},
+            "task_id": {"type": "string", "description": "Task id (alternative to number)."},
+            "reason": {
+                "type": "string",
+                "description": "What cleared it. Recorded to history; required for audit.",
+            },
+        },
+        "required": ["reason"],
+        "examples": [{"number": 1237, "reason": "operator chose PWA-only; build unblocked"}],
+    },
+}
+
+
+def _handle_queen_unblock_task(
+    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+) -> list[TextContent]:
+    """#1268: BLOCKED -> ASSIGNED keeping the owner, from the Queen surface.
+
+    Shares its audit + BlockerStore clearing with the worker handler
+    (``mcp/handlers/_unblock.py``) rather than reimplementing them. A Queen
+    unblock that forgot the BlockerStore would reproduce #529 on one surface
+    only, which is the hardest kind of gap to spot.
+    """
+    from swarm.mcp.handlers._unblock import record_unblock, unblock_result_text
+
+    err = _assert_queen(worker_name)
+    if err:
+        return err
+    reason = (args.get("reason") or "").strip()
+    if not reason:
+        return [{"type": "text", "text": "Missing 'reason' — unblocks must be audited."}]
+    target = _resolve_task(d, args)
+    if isinstance(target, list):
+        return target
+    task = target
+
+    if task.status != TaskStatus.BLOCKED:
+        return [
+            {
+                "type": "text",
+                "text": (
+                    f"#{task.number} is {task.status.value}, not blocked — nothing "
+                    f"to unblock and nothing changed. To move an unblocked task to "
+                    f"another worker use queen_reassign_task."
+                ),
+            }
+        ]
+
+    if not d.task_board.unblock(task.id):
+        return [
+            {
+                "type": "text",
+                "text": f"Could not unblock #{task.number} (status changed under us?).",
+            }
+        ]
+
+    removed = record_unblock(d, task, "queen", reason)
+    return [{"type": "text", "text": unblock_result_text(d.task_board, task, removed)}]
+
+
+TOOLS.append(QUEEN_UNBLOCK_TOOL)
+
 HANDLERS = {
     "queen_reassign_task": _handle_reassign_task,
+    "queen_unblock_task": _handle_queen_unblock_task,
     "queen_force_complete_task": _handle_force_complete_task,
     "queen_edit_task": _handle_edit_task,
 }
