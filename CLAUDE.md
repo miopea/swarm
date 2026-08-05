@@ -123,5 +123,9 @@ Full standard: `rcg-architecture/docs/standards/secrets.md`.
 
 ## Project notes
 
-Architecture, structure, endpoints and conventions: `docs/project-notes.md`.
-Read it before working in an unfamiliar area of this repo.
+`docs/project-notes.md` — moved out of this file so it is read when
+relevant rather than every session. **Check it before deriving a repo fact by
+hand** (an `az` call, a directory walk, reading routes): if it is in here, the
+answer is already written down.
+
+Covers: What This Is; Autonomous task momentum; Plan-mode gate for user-request tasks; Queen message-surface elevation; Two Queens: division of labor; Verifying out-of-band task assignments; Worker identity: where it comes from, and when a fix reaches a session; Live MCP tool-surface propagation; Why three earlier attempts missed; Architecture; Key Modules; Conventions; State Machine; Dynamic workflows coexistence; Native `/loop` coexistence (task #761); Per-task token-budget governor (task #762); Standing background-improvement loops (task #765); Harness-improvement digest (operator-gated hill-climbing); ….
