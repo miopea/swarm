@@ -123,6 +123,19 @@ def test_sleeping_workers_remain_readable():
     assert '.worker-item[data-state="SLEEPING"] { opacity:' not in css
 
 
+def test_light_worker_states_have_independent_visual_cues():
+    """Light mode must show state without replacing the selected-worker cue."""
+    css = (TEMPLATES_DIR / "base.html").read_text()
+
+    for state in ("BUZZING", "WAITING", "RESTING", "SLEEPING", "STUNG"):
+        assert f'[data-theme="light"] .worker-item[data-state="{state}"]' in css
+
+    assert "inset-inline-end: 0" in css
+    assert "width: 4px" in css
+    assert ".worker-item:not(.selected) { background: var(--worker-state-tint); }" in css
+    assert ".worker-meta > span:first-child" in css
+
+
 def test_theme_reaches_login_offline_and_pwa_shell():
     login = (TEMPLATES_DIR / "login.html").read_text()
     offline = (STATIC_DIR / "offline.html").read_text()

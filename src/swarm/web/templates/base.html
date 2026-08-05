@@ -1188,6 +1188,41 @@
         .worker-provider-tag { font-weight: normal; font-size: 0.75rem; color: var(--muted); }
         .worker-meta { font-size: 0.75rem; color: var(--muted); }
         .worker-task { font-size: 0.75rem; color: var(--lavender); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+        /* In light mode, colour alone is too weak to scan across a long
+           worker list. Keep selection on the left, and give state its own
+           right-edge rail, quiet tint, and labelled pill. */
+        [data-theme="light"] .worker-item {
+            --worker-state-color: var(--text-secondary);
+            --worker-state-tint: transparent;
+            position: relative;
+        }
+        [data-theme="light"] .worker-item::before {
+            content: "";
+            position: absolute;
+            inset-block: 0;
+            inset-inline-end: 0;
+            width: 4px;
+            border-radius: 0 3px 3px 0;
+            background: var(--worker-state-color);
+            pointer-events: none;
+        }
+        [data-theme="light"] .worker-item[data-state="BUZZING"] { --worker-state-color: var(--success); --worker-state-tint: rgba(47, 111, 62, 0.08); }
+        [data-theme="light"] .worker-item[data-state="WAITING"] { --worker-state-color: var(--warning); --worker-state-tint: rgba(122, 80, 0, 0.09); }
+        [data-theme="light"] .worker-item[data-state="RESTING"] { --worker-state-color: var(--info); --worker-state-tint: rgba(31, 101, 145, 0.07); }
+        [data-theme="light"] .worker-item[data-state="SLEEPING"] { --worker-state-color: var(--text-secondary); --worker-state-tint: transparent; }
+        [data-theme="light"] .worker-item[data-state="STUNG"] { --worker-state-color: var(--danger); --worker-state-tint: rgba(180, 35, 24, 0.07); }
+        [data-theme="light"] .worker-item:not(.selected) { background: var(--worker-state-tint); }
+        [data-theme="light"] .worker-item .worker-name { color: var(--worker-state-color); }
+        [data-theme="light"] .worker-item .worker-meta > span:first-child {
+            display: inline-block;
+            padding: 1px 5px;
+            border: 1px solid var(--worker-state-color);
+            border-radius: 999px;
+            background: var(--worker-state-tint);
+            color: var(--worker-state-color);
+            font-weight: 700;
+            line-height: 1.2;
+        }
         /* STUNG crash diagnostics — last PTY lines so revive-crash loops are
            diagnosable from the dashboard without terminal access. */
         .crash-tail { margin-top: 2px; max-width: 220px; }

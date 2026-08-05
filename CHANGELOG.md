@@ -10,6 +10,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.5.3] - 2026-08-05
+
+### Features
+
+### Changes
+
+- **Worker state is legible in light mode without competing with the selection cue.** Colour alone is too weak to scan down a long worker list on a light background, and tinting the row fought with the selected-worker highlight. State now gets its own channel: a right-edge rail (selection keeps the left), a quiet background tint applied only to unselected rows, and a bordered pill on the state label. Sleeping stays deliberately neutral so the states that need attention are the ones that draw it.
+
+### Fixes
+
 ## [2026.8.5.2] - 2026-08-05
 
 ### Features
