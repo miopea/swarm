@@ -125,4 +125,3 @@ Full standard: `rcg-architecture/docs/standards/secrets.md`.
 
 Architecture, structure, endpoints and conventions: `docs/project-notes.md`.
 Read it before working in an unfamiliar area of this repo.
-

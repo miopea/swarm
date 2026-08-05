@@ -585,4 +585,3 @@ while true; do
 done
 ```
 Key rules: always set `--max-turns`, always define an exit signal, always log output, always sleep between cycles.
-
