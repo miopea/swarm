@@ -120,6 +120,29 @@ class WorkerProcess:
         elapsed = time.time() - self._last_user_input
         return self._terminal_active and elapsed < self._USER_ACTIVE_WINDOW
 
+    # Longer than _USER_ACTIVE_WINDOW on purpose — see below.
+    _OPERATOR_ENGAGED_WINDOW = 300.0  # 5 minutes
+
+    @property
+    def is_operator_engaged(self) -> bool:
+        """True when the operator appears to be working WITH this worker.
+
+        Deliberately NOT :attr:`is_user_active`, which answers a different
+        question. That property's 2-second window is right for "would writing to
+        this PTY right now collide with a keystroke?". Dispatch gating asks "is
+        this worker in a conversation?" — and a human pauses longer than two
+        seconds between two sentences, so the tight window reports *available*
+        mid-conversation and a task gets dispatched straight into the operator's
+        turn.
+
+        Same two inputs, different threshold: no new state to keep in sync, and
+        nothing to get stuck. When the operator detaches the terminal
+        ``_terminal_active`` goes false and this goes false with it, so there is
+        no flag anyone has to remember to clear.
+        """
+        elapsed = time.time() - self._last_user_input
+        return self._terminal_active and elapsed < self._OPERATOR_ENGAGED_WINDOW
+
     @property
     def last_user_input_at(self) -> float:
         """Wall-clock timestamp of the most recent operator keystroke (0 if never)."""

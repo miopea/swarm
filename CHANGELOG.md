@@ -10,6 +10,22 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.5.5] - 2026-08-05
+
+### Features
+
+- **`swarm_start_task` — a worker now declares which task it is working on.** Previously `ACTIVE` was *inferred by the daemon and never asserted by the worker*: `start_task` (dispatch) and `WorkerStateTracker._promote_one_assigned` both reached `TaskBoard.activate`, and neither is the worker. The promoter picked the **most-recently-updated ASSIGNED** task on a `RESTING→BUZZING` transition, so the board could say a worker was on task B while it was on A — the operator's "multiple tasks crashing", and the mechanism behind #1159 (`park` stamps `updated_at`, so the just-set-down task sorted first and was re-activated seconds later). The verb refuses rather than guessing — another worker's task, a blocked or closed task, an ambiguous queue, or a worker that already has something in progress — and every refusal names what would resolve it (#1057). Spec: `docs/specs/worker-asserted-active.md`.
+
+  The pre-existing machinery was never the gap: `activate` was already the single chokepoint, `_assert_no_double_active` self-heals double-ACTIVE at persist, and two reconcilers run — all enforcing *at most one* ACTIVE per worker. None of it could know *which one is right*, because the only party that knows was never asked.
+
+### Changes
+
+- **The daemon no longer infers `ACTIVE` from PTY activity.** `_promote_one_assigned` activates nothing. Going BUZZING is evidence a worker is doing *something*; it was never evidence of *which task*. A dispatched-but-unasserted task therefore stays ASSIGNED — and the board reading "queued" is **true**, which is the property that was missing. Deliberately **no nudge and no timed fallback**: a grace-period auto-activate would restore exactly the inference being removed, just on a delay, and would pass every positive test while doing so.
+
+- **The auto-dispatch chain no longer interrupts an operator conversation.** A worker the operator is actively working with is BUZZING but unavailable, and pushing a task prompt into that PTY interleaves with the operator's turn. Such a task stays ASSIGNED and queued *on that worker* — it keeps ownership — and the next idle transition picks it up. Only the automatic chain is gated; an operator explicitly starting a task still goes straight through. This needed a new threshold rather than the existing `is_user_active`, whose 2-second window answers a different question ("would writing now collide with a keystroke?") and reports *available* mid-conversation because humans pause longer than that between sentences. `is_operator_engaged` reads the same two inputs with a 5-minute window, so there is no new state to keep in sync and nothing to get stuck — it clears when the terminal detaches.
+
+### Fixes
+
 ## [2026.8.5.4] - 2026-08-05
 
 ### Features

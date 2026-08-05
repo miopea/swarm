@@ -76,6 +76,12 @@ class ParkTaskArgs(TypedDict, total=False):
     task_number: int
 
 
+class StartTaskArgs(TypedDict, total=False):
+    """``swarm_start_task`` — assert that you are now working a task."""
+
+    task_number: int
+
+
 class BlockExternalArgs(TypedDict, total=False):
     """``swarm_block_on_external`` — park a task on an upstream/external wait."""
 

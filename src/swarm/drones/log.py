@@ -98,6 +98,7 @@ class SystemAction(Enum):
     # #406: a worker proactively handed its own ACTIVE task back to
     # ASSIGNED (swarm_park_task) — intentional set-down, not a blocker.
     TASK_PARKED = "TASK_PARKED"
+    TASK_STARTED = "TASK_STARTED"
     # #939: a worker self-assigned + closed an UNASSIGNED task it demonstrably
     # did (authority-guard park / HOLD), instead of routing through the Queen's
     # force-complete. The doer adopts the task; this is the audit anchor.

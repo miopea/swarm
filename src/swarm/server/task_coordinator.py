@@ -991,6 +991,24 @@ class TaskCoordinator:
             # Real work never reaches here, so the loop is always preempted.
             d._maybe_run_standing_loop(worker_name)
             return
+        # DON'T DISPATCH INTO AN OPERATOR CONVERSATION. A worker the operator is
+        # actively working with is BUZZING but unavailable, and pushing a task
+        # prompt into that PTY interleaves with the operator's turn. The task
+        # stays ASSIGNED and queued on this worker — it keeps ownership, and the
+        # next idle transition picks it up through this same path.
+        #
+        # Only the AUTOMATIC chain is gated. An operator explicitly starting a
+        # task still goes straight through ``start_task``: they know what they
+        # are interrupting, and gating that would be the tool second-guessing a
+        # direct instruction.
+        worker = d.get_worker(worker_name)
+        proc = getattr(worker, "process", None) if worker is not None else None
+        if proc is not None and getattr(proc, "is_operator_engaged", False):
+            _log.debug(
+                "auto-chain deferred for %s — operator engaged; leaving queued",
+                worker_name,
+            )
+            return
         # Go through ``d.start_task`` (the daemon proxy) rather than
         # ``self.start_task`` so existing tests that patch
         # ``daemon.start_task`` still intercept the auto-chain dispatch.

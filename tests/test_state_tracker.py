@@ -386,8 +386,15 @@ class TestBuzzingPromotesOneTask:
 
         tracker._handle_state_change(w, WorkerState.RESTING)
 
+        # CONTRACT CHANGED (worker-asserted ACTIVE, 2026-08-05): the promoter
+        # activates NOTHING now, so the answer is zero rather than one. The
+        # original property — never MORE than one — is preserved and is still
+        # enforced by TaskBoard.activate + _assert_no_double_active; it is
+        # covered directly by test_worker_asserted_active.py's
+        # test_one_active_per_worker_still_enforced.
         active = [t for t in (t1, t2) if t.status == TaskStatus.ACTIVE]
-        assert len(active) == 1  # exactly one IN PROGRESS, never both
+        assert len(active) == 0, "the promoter picked a task again (#1159 mechanism)"
+        assert t1.status == TaskStatus.ASSIGNED and t2.status == TaskStatus.ASSIGNED
 
     def test_buzzing_skips_when_worker_already_has_active(self) -> None:
         from swarm.tasks.task import TaskStatus
@@ -402,6 +409,14 @@ class TestBuzzingPromotesOneTask:
 
         # The already-active task stays; the other is NOT also promoted.
         assert t1.status == TaskStatus.ACTIVE
+        # CONTRACT CHANGED (worker-asserted ACTIVE, 2026-08-05): the promoter no
+        # longer activates anything. Going BUZZING is evidence the worker is
+        # doing SOMETHING, never evidence of WHICH task — that guess is what
+        # produced #1159 and the operator's 'multiple tasks crashing'. ACTIVE is
+        # now asserted by the worker via swarm_start_task. Left ASSIGNED is the
+        # CORRECT outcome here, not a regression.
+        # See docs/specs/worker-asserted-active.md and
+        # tests/test_worker_asserted_active.py.
         assert t2.status == TaskStatus.ASSIGNED
 
     def test_buzzing_promotes_single_assigned(self) -> None:
@@ -418,4 +433,12 @@ class TestBuzzingPromotesOneTask:
 
         tracker._handle_state_change(w, WorkerState.RESTING)
 
-        assert t.status == TaskStatus.ACTIVE  # the normal single-task case still works
+        # CONTRACT CHANGED (worker-asserted ACTIVE, 2026-08-05): the promoter no
+        # longer activates anything. Going BUZZING is evidence the worker is
+        # doing SOMETHING, never evidence of WHICH task — that guess is what
+        # produced #1159 and the operator's 'multiple tasks crashing'. ACTIVE is
+        # now asserted by the worker via swarm_start_task. Left ASSIGNED is the
+        # CORRECT outcome here, not a regression.
+        # See docs/specs/worker-asserted-active.md and
+        # tests/test_worker_asserted_active.py.
+        assert t.status == TaskStatus.ASSIGNED

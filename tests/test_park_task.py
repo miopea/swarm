@@ -339,8 +339,15 @@ def test_promotion_still_picks_up_genuinely_queued_work(board):
     worker.state = WorkerState.BUZZING
     _tracker_with_board(board)._promote_one_assigned(worker)
 
-    assert board.get(queued.id).status == TaskStatus.ACTIVE
+    # CONTRACT CHANGED (worker-asserted ACTIVE, 2026-08-05): the promoter no
+    # longer activates anything, so the queued task stays ASSIGNED. What this
+    # test still proves is the part that matters here and is UNCHANGED: the
+    # PARKED task is not selected even though its updated_at was made the
+    # newest. The guard is the tag, never the timestamp — #1159's actual fix.
+    assert board.get(queued.id).status == TaskStatus.ASSIGNED
     assert board.get(parked.id).status == TaskStatus.ASSIGNED
+    assert board.get(parked.id).is_on_hold, "the park was cleared"
+    assert not board.get(queued.id).is_on_hold
 
 
 def test_park_confirmation_reports_the_persisted_status(daemon):

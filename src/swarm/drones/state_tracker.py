@@ -312,14 +312,30 @@ class WorkerStateTracker:
         assigned = [t for t in mine if t.status == TaskStatus.ASSIGNED and not t.is_on_hold]
         if not assigned:
             return
-        assigned.sort(key=lambda t: t.updated_at, reverse=True)
-        # #611 P3: route through the single ACTIVE chokepoint so the promotion
-        # persists + notifies (the old raw task.start() here skipped both) and
-        # shares the one-active demote logic. The cap above means there's
-        # nothing to demote, but using activate() keeps every ACTIVE transition
-        # on one path.
-        self.task_board.activate(assigned[0].id)
-        self._emit("state_changed", worker)
+        # DELIBERATELY DOES NOT ACTIVATE ANY MORE.
+        #
+        # Going BUZZING is evidence the worker is doing SOMETHING. It is not
+        # evidence of WHICH task, and this function never had a way to tell —
+        # it picked the most-recently-updated ASSIGNED task and hoped. That
+        # produced #1159 (park stamps updated_at, so the just-set-down task
+        # sorted first and was re-activated seconds later) and the operator's
+        # "multiple tasks crashing": the board saying B while the worker was
+        # on A.
+        #
+        # ACTIVE is now worker-ASSERTED via ``swarm_start_task``. The worker is
+        # the only party that knows which task it is on, so it is the only party
+        # that may say. See docs/specs/worker-asserted-active.md.
+        #
+        # A dispatched-but-unasserted task therefore stays ASSIGNED, and that is
+        # correct rather than a gap: the board reads "queued", which is TRUE.
+        # Deliberately no nudge and no timed fallback — a fallback would restore
+        # exactly the inference removed here, just on a delay.
+        _log.debug(
+            "worker %s went BUZZING with %d assigned task(s) and none active — "
+            "leaving them ASSIGNED; ACTIVE is worker-asserted (swarm_start_task)",
+            worker.name,
+            len(assigned),
+        )
 
     def _log_state_transition(self, worker: Worker, prev: WorkerState) -> None:
         """Record a state transition in the buzz log with diagnostic context.
