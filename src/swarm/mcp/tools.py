@@ -56,6 +56,8 @@ from swarm.mcp.handlers._playbooks import TOOLS as _PB_T
 from swarm.mcp.handlers._playbooks import _handle_get_playbooks  # noqa: F401
 from swarm.mcp.handlers._progress import HANDLERS as _PROG_H
 from swarm.mcp.handlers._progress import TOOLS as _PROG_T
+from swarm.mcp.handlers._relabel import HANDLERS as _RELABEL_H
+from swarm.mcp.handlers._relabel import TOOLS as _RELABEL_T
 from swarm.mcp.handlers._start import HANDLERS as _START_H
 from swarm.mcp.handlers._start import TOOLS as _START_T
 from swarm.mcp.handlers._tasks import HANDLERS as _TASKS_H
@@ -137,6 +139,7 @@ TOOLS: list[dict[str, Any]] = [
     *_BLOCK_EXT_T,
     *_PARK_T,
     *_START_T,
+    *_RELABEL_T,
     *_UNBLOCK_T,
     *_EMAIL_T,
     *_TASKS_T,
@@ -156,6 +159,7 @@ _HANDLERS = {
     **_BLOCK_EXT_H,
     **_PARK_H,
     **_START_H,
+    **_RELABEL_H,
     **_UNBLOCK_H,
     **_EMAIL_H,
     **_TASKS_H,

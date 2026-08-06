@@ -696,6 +696,74 @@ class TaskBoard(EventEmitter):
             )
         return True
 
+    def relabel_blocker(
+        self, task_id: str, *, external_ref: str, reason: str
+    ) -> tuple[str, str] | None:
+        """Re-label WHY a BLOCKED task is blocked, without leaving BLOCKED (#1269).
+
+        Returns ``(old_ref, new_ref)`` on success, ``None`` if the task is missing or
+        not BLOCKED. Never touches status, owner, or resolution.
+
+        THE GAP THIS CLOSES. BLOCKED is reachable by two semantically distinct
+        causes — ``block_on_external`` (waiting on an upstream artifact) and
+        ``block_for_operator`` (waiting on a human decision) — and the board
+        surfaces them differently: ``is_awaiting_operator`` keys off
+        ``external_blocker_ref == AWAITING_OPERATOR_REF``, and the Queen batches
+        those into one set of operator asks. There was no way to move between them,
+        so a task whose cause CHANGED (the upstream shipped, and now it needs an
+        operator decision — or the operator decided, and now it waits on a release)
+        had to be described by whichever cause happened to be recorded first. That
+        is the #1104 audit's failing property (d).
+
+        DECISION (AC-3): ONE VERB, in place — not exit-and-re-enter via #1268's
+        ``unblock``. Three reasons, in order of weight:
+
+        1. Re-entry is not actually available for both causes. ``unblock`` lands the
+           task in ASSIGNED, and ``block_for_operator`` requires ACTIVE — so
+           re-labelling *to* operator-decision would need unblock → activate →
+           block, passing through two states the task was never really in. #1269's
+           AC-4 forbids relaxing that ACTIVE-only precondition, and it is correct
+           (it is the Queen's auto-park path, where "no longer ACTIVE" legitimately
+           means the stall resolved).
+        2. Passing through ACTIVE would mint a spurious ``STARTED`` history row and
+           briefly make the task the worker's one ACTIVE task, which is an INV-1
+           interaction for a change that is purely a re-description.
+        3. The cause is one field. A verb that rewrites one field is honest about
+           what happened; a three-step dance implies a lifecycle event that did not
+           occur.
+
+        The caller supplies the new binding, so both directions are the same
+        operation: pass ``AWAITING_OPERATOR_REF`` for a human decision, or an
+        artifact reference for an upstream wait. Symmetric by construction rather
+        than by having two verbs that must be kept in step.
+
+        AC-5: the binding AND the reason move together. Updating the ref while
+        leaving ``block_reason`` describing the old cause would produce a task whose
+        machine-readable cause and human-readable explanation disagree — worse than
+        either being stale alone, because each corroborates the other to a reader.
+        """
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None or task.status != TaskStatus.BLOCKED:
+                return None
+            old_ref = task.external_blocker_ref
+            if old_ref == external_ref:
+                return None  # no-op: nothing to record, nothing to broadcast
+            import time
+
+            task.external_blocker_ref = external_ref
+            task.block_reason = reason
+            task.updated_at = time.time()
+            _log.info(
+                "task %s blocker re-labelled: %r -> %r",
+                task_id,
+                old_ref or "(none)",
+                external_ref or "(none)",
+            )
+            self._persist()
+            self._notify()
+        return old_ref, external_ref
+
     def block_for_operator(self, task_id: str, reason: str) -> bool:
         """Operator-approved park of a stalled, operator-blocked task:
         ACTIVE → BLOCKED (off-active, not auto-assignable, owner retained).

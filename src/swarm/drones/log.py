@@ -106,6 +106,13 @@ class SystemAction(Enum):
     # apart from "this was taken off its owner".
     TASK_UNBLOCKED = "TASK_UNBLOCKED"
 
+    # #1269: a task stayed BLOCKED but the CAUSE changed — an upstream wait became
+    # an operator ask, or the reverse. Its own member rather than reusing
+    # TASK_PARKED/TASK_UNBLOCKED because neither happened: the task did not enter
+    # or leave the hold, so an audit reader filtering for lifecycle events would
+    # be misled by either. What changed is which batch the operator sees it in.
+    TASK_BLOCKER_RELABELLED = "TASK_BLOCKER_RELABELLED"
+
     # #1265: an EXTERNAL tool raised an operator notification through
     # POST /api/notifications. One closed enum member rather than an open string,
     # because this value is used for routing, filtering and priority mapping —
