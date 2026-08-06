@@ -10,6 +10,14 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.6.18] - 2026-08-06
+
+### Features
+
+### Changes
+
+### Fixes
+
 ## [2026.8.6.17] - 2026-08-06
 
 ### Features

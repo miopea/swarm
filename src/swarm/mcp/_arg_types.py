@@ -67,6 +67,7 @@ class EditTaskArgs(TypedDict, total=False):
     number: int
     description: str
     title: str
+    append_description: str
 
 
 class ParkTaskArgs(TypedDict, total=False):

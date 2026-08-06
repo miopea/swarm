@@ -62,7 +62,17 @@ def _describe_edit(
     if title is not None and title != before.title:
         parts.append(f"title: {_preview(before.title)!r} -> {_preview(title)!r}")
     if description is not None and description != before.description:
-        parts.append(f"description replaced (was: {_preview(before.description)!r})")
+        # #1289 (AC-4): the CHARACTER DELTA, so the trail distinguishes "corrected a
+        # line" from "silently dropped a third of the text". The preview alone could
+        # not: it shows the head of the old value, which looks identical whether one
+        # sentence changed or 2,200 characters vanished. That is not hypothetical —
+        # #1274's own description lost ~2,200 chars to a replace-style edit and the
+        # history entry gave no hint, which is how it went unnoticed for hours.
+        old_n, new_n = len(before.description or ""), len(description)
+        parts.append(
+            f"description replaced: {old_n} -> {new_n} chars ({new_n - old_n:+d}) "
+            f"(was: {_preview(before.description)!r})"
+        )
     if acceptance_criteria is not None and acceptance_criteria != before.acceptance_criteria:
         parts.append(
             f"acceptance_criteria: {len(before.acceptance_criteria)} -> "
