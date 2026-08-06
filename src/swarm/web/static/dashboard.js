@@ -4900,14 +4900,6 @@
         selectWorker(name);
     }
 
-    // Show tile button when a worker is selected
-    var _origSelectWorker = window.selectWorker;
-    window.selectWorker = function(name) {
-        var btn = document.getElementById('tile-mode-btn');
-        if (btn) btn.style.display = '';
-        _origSelectWorker(name);
-    };
-
     // *targetTerm*/*targetWs* identify WHICH terminal was pasted/dropped
     // into. They default to the active inline terminal for the global
     // drop-outside fallback, but the per-terminal paste/drop handlers in
@@ -5032,6 +5024,16 @@
 
     window.selectWorker = function(name) {
         selectedWorker = name;
+        // #1292: reveal the Tile button here, in the BASE definition, rather than from
+        // a decorator. There used to be a wrapper ~130 lines above that did this, and
+        // it was DOUBLY dead: it captured `window.selectWorker` before anything had
+        // assigned it (so its `_origSelectWorker` was undefined and calling it would
+        // have thrown), and this assignment then overwrote the wrapper outright. Net
+        // effect: #tile-mode-btn shipped with style="display:none" and nothing ever
+        // cleared it, so Tile view was unreachable while looking implemented.
+        // Folding it in removes the ordering hazard instead of relocating it.
+        var _tileBtn = document.getElementById('tile-mode-btn');
+        if (_tileBtn) _tileBtn.style.display = '';
         try { sessionStorage.setItem('swarm_selected_worker', name); } catch(e) {}
         // localStorage variant survives across sessions — picked up by
         // the Web Share Target landing flow so a shared screenshot can
