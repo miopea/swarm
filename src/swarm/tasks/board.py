@@ -1055,19 +1055,36 @@ class TaskBoard(EventEmitter):
         return page, total
 
     def summary(self) -> str:
-        """One-line summary of the board state."""
+        """One-line summary of the board state. Rendered verbatim by the dashboard.
+
+        EVERY STATUS MUST BE COUNTED HERE. #1279: BLOCKED had no category, so a
+        blocked task landed in ``total`` and in none of the parts — the string
+        said "6 open" on a board holding 9, and this string is what the dashboard
+        copies into ``#task-summary`` (``static/dashboard.js:11262``), so the
+        operator was reading a count that did not add up.
+
+        Guarded by a completeness invariant (the parts sum to ``total``) rather
+        than a check for any particular word, because a status added without a
+        category is how this defect and the missing filter chip (#1278) both
+        happened.
+        """
         with self._lock:
             snapshot = list(self._tasks.values())
         total = len(snapshot)
         backlog = sum(1 for t in snapshot if t.status == TaskStatus.BACKLOG)
         unassigned = sum(1 for t in snapshot if t.status == TaskStatus.UNASSIGNED)
         active = sum(1 for t in snapshot if t.status in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE))
+        blocked = sum(1 for t in snapshot if t.status == TaskStatus.BLOCKED)
         done = sum(1 for t in snapshot if t.status == TaskStatus.DONE)
         failed = sum(1 for t in snapshot if t.status == TaskStatus.FAILED)
         parts = [f"{total} tasks:"]
         if backlog:
             parts.append(f"{backlog} backlog,")
         parts.append(f"{unassigned} unassigned, {active} in progress, {done} done")
+        # Conditional, matching backlog/failed: a board with nothing blocked
+        # reads exactly as it did before.
+        if blocked:
+            parts.append(f", {blocked} blocked")
         if failed:
             parts.append(f", {failed} failed")
         return " ".join(parts)

@@ -1,4 +1,4 @@
-"""Every task must be reachable from some dashboard filter state (#1277, #1278).
+"""BLOCKED must be visible on every task surface (#1277, #1278, #1279).
 
 OPERATOR-REPORTED, 2026-08-06: BLOCKED tasks not visible in the task editor at
 all, and open tasks (#1275 named) could not be edited. Neither was an edit-
@@ -6,17 +6,22 @@ permission defect — ``task_manager.edit_task`` has no status or assignment
 guard, and ``task_list.html`` has no ``show = false`` rule for the edit action,
 so the button renders for every status. **The rows were simply never rendered.**
 
-Two independent causes, measured against the live board (1234 tasks):
+ONE CLASS ON THREE SURFACES, measured against the live board (1235 tasks):
 
-1. ``_paginate`` truncates the unfiltered view at ``MAX_QUERY_LIMIT`` (1000)
-   while ``all_tasks`` sorts OLDEST-FIRST, so the 234 newest tasks vanish from
-   the default view — and 1226 of 1234 tasks are DONE, so the newest open work
-   is exactly what gets pushed out.
-2. There is no ``blocked`` filter chip, so BLOCKED is reachable only under
-   "All" — where cause 1 then truncates it.
+1. **The list** (#1277) — ``_paginate`` truncates the unfiltered view at
+   ``MAX_QUERY_LIMIT`` (1000) while ``all_tasks`` sorts OLDEST-FIRST, and 1226 of
+   1235 tasks are DONE, so the newest open work is exactly what gets pushed out.
+2. **The filter bar** (#1278) — no ``blocked`` chip, so BLOCKED could only be
+   asked for under "All", where cause 1 then truncated it.
+3. **The count** (#1279) — ``board.summary()`` counts backlog, unassigned,
+   assigned+active, done and failed, and NEVER counts blocked, so the total does
+   not add up.
 
-Composed, they left #1255 (blocked) visible in **no reachable filter state at
-all**, which is what the operator was looking at.
+Composed, 1 and 2 left #1255 visible in **no reachable filter state at all**.
+Cause 3 is what produced the number the operator actually quoted: reconstructed
+from ``task_history`` at 2026-08-06 00:20–00:30 the board held 9 open tasks and
+``summary()`` reported 6, omitting the three that were BLOCKED. The Queen's
+"9 − 3 = 6" was the correct explanation, not the coincidence I first called it.
 
 WHY THE LIMIT IS NOT THE THING TO RAISE. ``_paginate``'s own docstring records
 this defect shipping once before at limit 100 ("silently truncated any swarm
@@ -221,6 +226,66 @@ def test_the_partial_actually_applies_the_display_sort():
     assert ctx["task_has_more"] is True, (
         "nothing was truncated at 1232 rows, so this test is no longer exercising "
         "the condition it was written for"
+    )
+
+
+# --- the count must account for every task (#1279) ------------------------
+
+
+def test_summary_accounts_for_every_task_including_blocked():
+    """#1279, and the surface that produced the operator's number.
+
+    ``summary()`` counted backlog + unassigned + assigned/active + done + failed
+    and never blocked, so a blocked task was in ``total`` and in no category. The
+    dashboard renders this string into ``#task-summary`` verbatim
+    (``dashboard.js:11262``), so it told the operator 6 while 9 were open.
+
+    Asserted as a COMPLETENESS INVARIANT — the parts must sum to the total —
+    rather than as "the word blocked appears". A blocked-specific assertion would
+    pass while the next status added without a category vanished exactly the same
+    way, and a status with no category is how both this and #1278 happened.
+    """
+    from swarm.tasks.board import TaskBoard
+
+    board = TaskBoard()
+    made = {}
+    for status in TaskStatus:
+        t = board.create(title=f"a {status.value} task")
+        made[status] = t
+        # Drive each task to its status through the real verbs, so this reflects
+        # reachable board states rather than hand-set fields.
+        if status is TaskStatus.UNASSIGNED:
+            board.assign(t.id, "alice")
+            board.unassign(t.id)
+        elif status is TaskStatus.ASSIGNED:
+            board.assign(t.id, "alice")
+        elif status is TaskStatus.ACTIVE:
+            board.assign(t.id, "bob")
+            board.activate(t.id)
+        elif status is TaskStatus.BLOCKED:
+            board.assign(t.id, "carol")
+            board.activate(t.id)
+            board.block_on_external(t.id, "carol", "upstream", "platform#1")
+        elif status is TaskStatus.DONE:
+            board.assign(t.id, "dave")
+            board.complete(t.id, "done")
+        elif status is TaskStatus.FAILED:
+            board.assign(t.id, "erin")
+            board.fail(t.id)
+
+    present = {t.status for t in board.all_tasks}
+    assert TaskStatus.BLOCKED in present, (
+        "positive control: no blocked task on the board, so this test could not "
+        "detect the defect it was written for"
+    )
+
+    summary = board.summary()
+    total = len(board.all_tasks)
+    counted = sum(int(n) for n in re.findall(r"(\d+)\s+(?!tasks)", summary))
+    assert counted == total, (
+        f"summary() accounts for {counted} of {total} tasks — some status is in "
+        f"no category and is silently uncounted. Statuses present: "
+        f"{sorted(s.value for s in present)}. Summary was: {summary!r}"
     )
 
 
