@@ -514,12 +514,28 @@ class TaskBoard(EventEmitter):
         return True
 
     def reassign_worker(self, old_name: str, new_name: str) -> None:
-        """Reassign all tasks from one worker name to another (rename)."""
+        """Reassign all tasks from one worker name to another (rename).
+
+        #1275: this persisted without notifying, while its sibling
+        ``unassign_worker`` right below does both — so renaming a worker moved every
+        one of its tasks and no dashboard could learn about it. Persisting without
+        notifying is precisely "the change is real and durable, and nothing can see
+        it", which is the stale-board symptom.
+
+        The notify is conditional on having actually moved something: every connected
+        dashboard re-fetches the task list on ``tasks_changed``, so broadcasting for
+        zero changes is real wasted work rather than a harmless extra.
+        """
         with self._lock:
+            moved = 0
             for task in self._tasks.values():
                 if task.assigned_worker == old_name:
                     task.assigned_worker = new_name
+                    moved += 1
             self._persist()
+            if moved:
+                _log.info("reassigned %d task(s) from %s to %s", moved, old_name, new_name)
+                self._notify()
 
     def unassign_worker(self, worker_name: str) -> None:
         """Unassign all tasks from a worker (e.g., when worker dies)."""
