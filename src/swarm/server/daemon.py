@@ -2466,6 +2466,44 @@ class SwarmDaemon(EventEmitter):
     ) -> bool:
         return await self.tasks_coord.start_task(task_id, actor=actor, message=message)
 
+    def mark_task_in_progress(self, task_id: str, actor: str = "user") -> bool:
+        """Move an ASSIGNED task to ACTIVE for its EXISTING owner, without dispatching.
+
+        #1288. The operator could select "In Progress" in the dashboard and no
+        transition implemented it, so the status silently refused — the same
+        selectable-but-unreachable shape as BLOCKED in #1280, on a different cell.
+
+        DELIBERATELY NOT ``start_task``, which is the other way to reach ACTIVE:
+        that one also SENDS the task into the worker's PTY. The operator's case is a
+        worker already doing the work whose board row says queued (sculpt-studio on
+        #1255) — re-dispatching would paste the prompt a second time. This corrects
+        the board, it does not restart the work.
+
+        ROUTES THROUGH ``_activate_with_history`` rather than ``board.activate``, so
+        it adds NO new ``activate()`` caller: the property-(f) test in
+        test_status_exit_reachability.py pins that count at exactly 2 because a
+        caller that activates without writing history is what made #1159
+        undiagnosable. The wrapper writes the STARTED row, logs any INV-1 demotions
+        it performs, and fires the jira export.
+
+        REQUIRES AN OWNER. ACTIVE means "this worker is working it", so an ownerless
+        ACTIVE task would be a claim about nobody — and ``_activate_with_history``
+        needs the worker name for its history detail. Refuses rather than inventing
+        one.
+
+        This does NOT relax the worker-asserted-ACTIVE design (#1282,
+        docs/specs/worker-asserted-active.md). That design forbids the DAEMON from
+        INFERRING which task a worker is on. An operator stating it explicitly is an
+        assertion by the one party entitled to make it, exactly as ``override_hold``
+        (#1281) let him assign a task the auto-assigner must not touch.
+        """
+        task = self.task_board.get(task_id)
+        if task is None or task.status != TaskStatus.ASSIGNED:
+            return False
+        if not task.assigned_worker:
+            return False
+        return self.tasks_coord._activate_with_history(task_id, task.assigned_worker, actor)
+
     async def _maybe_seed_goal(
         self, task: SwarmTask, worker_name: str, worker_prov: object
     ) -> None:

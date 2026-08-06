@@ -46,6 +46,17 @@ def _apply_status_change(d: SwarmDaemon, task_id: str, current: str, target: str
         # only ever entered by task creation and by reopen (Done/Failed). Parking
         # something as not-ready is a normal operator action and had no way in.
         return d.task_board.demote_to_backlog(task_id)
+    if target == "active" and current == "assigned":
+        # #1288: "In Progress" was offered in the dropdown and no branch implemented
+        # it, so the operator's selection silently refused — the same
+        # selectable-but-unreachable shape as BLOCKED in #1280, one cell over.
+        #
+        # ASSIGNED is the ONLY source. A task must be owned and queued before it can
+        # be in progress: unassigned/backlog have no owner to attribute the work to,
+        # blocked must be unblocked first (which lands in ASSIGNED), and done/failed
+        # must be reopened. Each of those is refused with a reason rather than
+        # silently coerced.
+        return d.mark_task_in_progress(task_id)
     if target == "unassigned" and current in ("assigned", "active"):
         d.unassign_task(task_id)
     elif target == "unassigned" and current == "backlog":
@@ -63,6 +74,39 @@ def _apply_status_change(d: SwarmDaemon, task_id: str, current: str, target: str
     else:
         return False
     return True
+
+
+def _unsupported_reason(current: str, target: str) -> str:
+    """Why a pair is refused, in words the operator can act on (#1057, #1288).
+
+    "not a supported transition" tells him nothing about what to do instead. The
+    cells that get chosen by accident deserve a sentence.
+    """
+    if target == "blocked":
+        # DISPLAY-ONLY on purpose. The option must exist so a BLOCKED task's own
+        # status can be shown in the select at all — that was #1280's fix, and
+        # without it the select landed on selectedIndex=-1 and submitted nothing.
+        # But blocking REQUIRES a reason, and this dropdown has nowhere to collect
+        # one: a blocker with an empty reason is #1057's withheld-fact shape, and
+        # #1287 showed an unrecorded blocker cause leaves the task in no operator
+        # batch at all.
+        return (
+            "Blocked is shown so a blocked task's status is visible, but it cannot be "
+            "SET here — a blocker needs a reason, and this form has nowhere to put one. "
+            "Use swarm_block_on_external / swarm_block_on_operator from the worker, or "
+            "have the Queen park it."
+        )
+    if target == "active" and current != "assigned":
+        return (
+            f"In Progress means a worker is working it, so the task must be ASSIGNED "
+            f"to someone first — it is {current}. Assign it, then set In Progress."
+        )
+    if target == "assigned":
+        return (
+            f"Use the 'Assign to' picker rather than the status dropdown: moving to "
+            f"assigned needs a worker, and {current} → assigned has none to infer."
+        )
+    return f"{current} → {target} is not a supported transition."
 
 
 def _leave_blocked(d: SwarmDaemon, task_id: str, target: str) -> bool:
@@ -465,9 +509,8 @@ async def handle_action_edit_task(request: web.Request) -> web.Response:
                     new_status,
                 )
                 return json_error(
-                    f"#{getattr(task, 'number', '?')}: field changes saved, but status "
-                    f"{before} → {new_status} is not a supported transition, so the "
-                    f"status is unchanged.",
+                    f"#{getattr(task, 'number', '?')}: field changes saved, but the "
+                    f"status is unchanged. {_unsupported_reason(before, new_status)}",
                     status=409,
                 )
 
