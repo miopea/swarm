@@ -447,9 +447,27 @@ async def handle_action_edit_task(request: web.Request) -> web.Response:
                 # already persisted, so this names what did and did not happen —
                 # reporting success on a status change that never applied is how
                 # the operator was left unable to tell a no-op from a move.
+                #
+                # LOGGED AT WARNING, not just returned. The operator reported
+                # "blocked → assigned gives an error" and there was NO trace in
+                # ~/.swarm/swarm.log to diagnose it from — the refusal existed only
+                # in an HTTP response his browser threw away. A refusal the operator
+                # can see but the log cannot is unreportable: I could not reproduce
+                # it and had nothing to read. Names the task number so the entry is
+                # self-identifying.
+                import logging
+
+                logging.getLogger("swarm.web.tasks").warning(
+                    "refused status change on #%s: %s → %s is not a supported "
+                    "transition (field edits were saved)",
+                    getattr(task, "number", "?"),
+                    before,
+                    new_status,
+                )
                 return json_error(
-                    f"Field changes saved, but status {before} → {new_status} is not a "
-                    f"supported transition, so the status is unchanged.",
+                    f"#{getattr(task, 'number', '?')}: field changes saved, but status "
+                    f"{before} → {new_status} is not a supported transition, so the "
+                    f"status is unchanged.",
                     status=409,
                 )
 

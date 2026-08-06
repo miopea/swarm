@@ -321,3 +321,52 @@ def test_the_board_refuses_to_demote_closed_work(daemon_with_board):
     assert d.task_board.demote_to_backlog(t.id) is False, "demoted closed work"
     assert d.task_board.get(t.id).status == TaskStatus.DONE
     assert d.task_board.get(t.id).resolution == "shipped", "resolution lost"
+
+
+def test_a_refused_status_change_is_logged_at_warning(daemon_with_board, caplog):
+    """A refusal the operator can see but the log cannot is unreportable.
+
+    2026-08-06: the operator reported "blocked → assigned gives an error". The 409
+    existed only in an HTTP response his browser discarded, so there was nothing in
+    ~/.swarm/swarm.log to diagnose from — and the server path could not be
+    reproduced. WARNING because operators run at WARNING and this is a forensic
+    anchor, not a debug aid.
+    """
+    import logging
+
+    from swarm.web.routes.tasks import _apply_status_change
+
+    d = daemon_with_board
+    t = _blocked_task(d)
+    with caplog.at_level(logging.WARNING, logger="swarm.web.tasks"):
+        assert _apply_status_change(d, t.id, "blocked", "done") is False
+
+    # _apply_status_change itself only reports the refusal; the handler logs it.
+    # Assert the handler path, which is what the operator actually hits.
+    from aiohttp.test_utils import make_mocked_request
+    from multidict import MultiDict
+
+    import swarm.web.app  # noqa: F401
+    from swarm.web.routes.tasks import handle_action_edit_task
+
+    d.edit_task = lambda task_id, **kw: True
+    req = make_mocked_request("POST", "/action/task/edit")
+    req.app["daemon"] = d
+    form = MultiDict([("task_id", t.id), ("status", "done")])
+
+    async def _post():
+        return form
+
+    req.post = _post  # type: ignore[method-assign]
+
+    import asyncio
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="swarm.web.tasks"):
+        resp = asyncio.run(handle_action_edit_task(req))
+
+    assert resp.status == 409
+    assert any("not a supported transition" in r.getMessage() for r in caplog.records), (
+        f"the refusal was returned to the browser but never logged: {caplog.records}"
+    )
+    assert str(t.number) in resp.body.decode(), "the error text does not name the task"
