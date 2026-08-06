@@ -302,6 +302,30 @@ class SwarmTask:
         self.status = TaskStatus.UNASSIGNED
         self.updated_at = time.time()
 
+    def demote_to_backlog(self) -> None:
+        """Park an OPEN task back into Backlog ("not ready, take it out of play").
+
+        The inverse of :meth:`approve`, and the gap that made the operator's
+        "change a task to Backlog" silently do nothing: BACKLOG was only ever
+        entered by task creation and by :meth:`reopen` (Done/Failed → Backlog), so
+        no open task could be parked back. Every other lane had a way in.
+
+        Drops the owner, like :meth:`reopen` does — a Backlog task is explicitly
+        parked pending operator promotion, and leaving it owned would claim a
+        worker holds work that is out of play.
+
+        SAFE WITH RESPECT TO DISPATCH by construction: BACKLOG is excluded from
+        ``is_available`` (only UNASSIGNED qualifies), so this can only ever make a
+        task LESS dispatchable. Terminal statuses are refused — Done/Failed reach
+        Backlog through :meth:`reopen`, which also clears the resolution.
+        """
+        assert self.status not in (TaskStatus.DONE, TaskStatus.FAILED), (
+            f"Cannot demote a {self.status.value} task to backlog — use reopen()"
+        )
+        self.status = TaskStatus.BACKLOG
+        self.assigned_worker = None
+        self.updated_at = time.time()
+
     def reject(self, resolution: str = "") -> None:
         """Reject a Backlog task, marking it Failed."""
         assert self.status == TaskStatus.BACKLOG, f"Cannot reject task in {self.status.value} state"

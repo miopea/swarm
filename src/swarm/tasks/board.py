@@ -905,6 +905,31 @@ class TaskBoard(EventEmitter):
             self._notify()
         return True
 
+    def demote_to_backlog(self, task_id: str) -> bool:
+        """Park an OPEN task back into BACKLOG. Returns False if not applicable.
+
+        The missing inverse of :meth:`approve_task`. BACKLOG was reachable only
+        from task creation and ``reopen`` (Done/Failed), so an operator changing an
+        open task's status to Backlog hit a transition nothing implemented — and
+        because the web layer reported success regardless, it looked saved and was
+        not. See ``SwarmTask.demote_to_backlog`` for why the owner is dropped.
+
+        Refuses DONE/FAILED rather than asserting: those reach BACKLOG through
+        ``reopen``, which also clears the resolution, and routing them here would
+        leave a completed task's resolution attached to parked work.
+        """
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
+            if task.status in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.BACKLOG):
+                return False
+            task.demote_to_backlog()
+            _log.info("task %s demoted to backlog", task_id)
+            self._persist()
+            self._notify()
+        return True
+
     def reject_task(self, task_id: str, resolution: str = "") -> bool:
         """Reject a PROPOSED task, transitioning to FAILED."""
         with self._lock:

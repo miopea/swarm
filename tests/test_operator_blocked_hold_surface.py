@@ -246,3 +246,78 @@ def test_automated_callers_do_not_get_the_hold_override_by_default():
         f"override_hold defaults to {param.default!r}; every automated caller "
         f"would silently gain the ability to dispatch HOLD tasks"
     )
+
+
+# --- parking an open task back to BACKLOG (operator-reported 2026-08-06) ----
+
+
+@pytest.mark.parametrize("start", ["unassigned", "assigned", "active", "blocked"])
+def test_an_open_task_can_be_parked_back_to_backlog(daemon_with_board, start):
+    """OPERATOR-REPORTED: "when I change a task to backlog I get an 'error' that
+    says it saved but it doesn't save."
+
+    The error text was correct — the transition genuinely was unsupported — but
+    the underlying gap is that BACKLOG had no way in for an OPEN task. It was
+    entered only by task creation and by ``reopen`` (Done/Failed → Backlog), so
+    every open lane could be promoted OUT of backlog and none could be parked
+    back. Before the 409 was added this failed silently, which is why it went
+    unnoticed until the no-op started reporting itself.
+    """
+    from swarm.web.routes.tasks import _apply_status_change
+
+    d = daemon_with_board
+    t = d.task_board.create(title=f"from {start}")
+    if start == "assigned":
+        d.task_board.assign(t.id, "swarm")
+    elif start == "active":
+        d.task_board.assign(t.id, "swarm")
+        d.task_board.activate(t.id)
+    elif start == "blocked":
+        t = _blocked_task(d)
+
+    assert _apply_status_change(d, t.id, start, "backlog") is True, (
+        f"{start} → backlog still unsupported"
+    )
+    after = d.task_board.get(t.id)
+    assert after.status == TaskStatus.BACKLOG
+    assert not after.assigned_worker, "parked work still claims an owner"
+
+
+def test_parking_to_backlog_cannot_make_a_task_dispatchable(daemon_with_board):
+    """BACKLOG is excluded from is_available (only UNASSIGNED qualifies), so this
+    transition can only ever make a task LESS dispatchable. Asserted rather than
+    assumed, since every status change this session carried that constraint."""
+    d = daemon_with_board
+    t = d.task_board.create(title="parked")
+    d.task_board.assign(t.id, "swarm")
+    from swarm.web.routes.tasks import _apply_status_change
+
+    _apply_status_change(d, t.id, "assigned", "backlog")
+    after = d.task_board.get(t.id)
+    assert after.is_available is False
+    assert after.id not in {x.id for x in d.task_board.available_tasks}
+
+
+def test_a_closed_task_still_reaches_backlog_through_reopen(daemon_with_board):
+    """done/failed → backlog must keep routing through ``reopen_task``, which also
+    clears the resolution. Sending them to demote_to_backlog would park a task
+    with a completed resolution still attached."""
+    from swarm.web.routes.tasks import _apply_status_change
+
+    d = daemon_with_board
+    t = d.task_board.create(title="closed")
+    assert _apply_status_change(d, t.id, "done", "backlog") is True
+    d.reopen_task.assert_called_once_with(t.id)
+    # The board-level guard is asserted separately in the next test; asserting it
+    # here as well produced an `or True` that could never fail.
+
+
+def test_the_board_refuses_to_demote_closed_work(daemon_with_board):
+    """The board-level guard behind the routing above."""
+    d = daemon_with_board
+    t = d.task_board.create(title="done work")
+    d.task_board.assign(t.id, "swarm")
+    d.task_board.complete(t.id, "shipped")
+    assert d.task_board.demote_to_backlog(t.id) is False, "demoted closed work"
+    assert d.task_board.get(t.id).status == TaskStatus.DONE
+    assert d.task_board.get(t.id).resolution == "shipped", "resolution lost"

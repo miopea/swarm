@@ -35,6 +35,17 @@ def _apply_status_change(d: SwarmDaemon, task_id: str, current: str, target: str
     #1159's shape, where a verb succeeds and does nothing and the caller stops
     looking. The operator hit this trying to move a task out of BLOCKED.
     """
+    # Every exit from BLOCKED is delegated, so the blocker-row obligation lives in
+    # exactly one place rather than being repeated per target and forgotten on one.
+    if current == "blocked":
+        return _leave_blocked(d, task_id, target)
+
+    if target == "backlog" and current in ("unassigned", "assigned", "active"):
+        # The missing inverse of the promote below. Operator-reported: changing a
+        # task to Backlog reported success and saved nothing, because BACKLOG was
+        # only ever entered by task creation and by reopen (Done/Failed). Parking
+        # something as not-ready is a normal operator action and had no way in.
+        return d.task_board.demote_to_backlog(task_id)
     if target == "unassigned" and current in ("assigned", "active"):
         d.unassign_task(task_id)
     elif target == "unassigned" and current == "backlog":
@@ -43,21 +54,6 @@ def _apply_status_change(d: SwarmDaemon, task_id: str, current: str, target: str
         # BACKLOG precondition and persists + notifies — instead of a raw
         # task.approve() + manual persist.
         d.task_board.approve_task(task_id)
-    elif current == "blocked" and target == "assigned":
-        # The exit the operator actually wants: the wait ended, put it back on
-        # its worker. Owner-PRESERVING, matching #1268 — ``release`` would drop
-        # the owner and make him reassign it by hand. Lands in ASSIGNED, never
-        # ACTIVE, so INV-1 holds by construction and the worker asserts the
-        # start itself.
-        if not d.task_board.unblock(task_id):
-            return False
-        _clear_blocker_rows(d, task_id)
-    elif current == "blocked" and target == "unassigned":
-        # Give it back to the pool. ``release`` accepts BLOCKED (#1059) and drops
-        # the owner, which is the correct semantic for this target.
-        if not d.task_board.release(task_id):
-            return False
-        _clear_blocker_rows(d, task_id)
     elif target == "done" and current in ("assigned", "active"):
         d.complete_task(task_id)
     elif target == "failed" and current == "active":
@@ -65,11 +61,38 @@ def _apply_status_change(d: SwarmDaemon, task_id: str, current: str, target: str
     elif target in ("backlog", "unassigned", "assigned") and current in ("done", "failed"):
         d.reopen_task(task_id)
     else:
-        # Deliberately NOT a fallback that forces the status. BLOCKED → DONE in
+        return False
+    return True
+
+
+def _leave_blocked(d: SwarmDaemon, task_id: str, target: str) -> bool:
+    """Every supported exit from BLOCKED, plus the #529 row cleanup they all owe.
+
+    Kept as one function so the BlockerStore obligation cannot be honoured on
+    some targets and forgotten on others — a stale row is a nudge-forever
+    condition, and the per-target version of this had already grown three copies
+    of the same two lines.
+    """
+    if target == "assigned":
+        # The exit the operator usually wants: the wait ended, put it back on its
+        # worker. Owner-PRESERVING, matching #1268 — ``release`` would drop the
+        # owner and make him reassign by hand. Lands in ASSIGNED, never ACTIVE,
+        # so INV-1 holds by construction and the worker asserts its own start.
+        applied = d.task_board.unblock(task_id)
+    elif target == "unassigned":
+        # Back to the pool. ``release`` accepts BLOCKED (#1059) and drops the
+        # owner, which is the right semantic for this target.
+        applied = d.task_board.release(task_id)
+    elif target == "backlog":
+        applied = d.task_board.demote_to_backlog(task_id)
+    else:
+        # Deliberately no fallback that forces the status. BLOCKED → DONE in
         # particular is force_complete, which records a completion for work that
         # is still open — the falsification #1268 exists to avoid.
         return False
-    return True
+    if applied:
+        _clear_blocker_rows(d, task_id)
+    return applied
 
 
 def _clear_blocker_rows(d: SwarmDaemon, task_id: str) -> None:
