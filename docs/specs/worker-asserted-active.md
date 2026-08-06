@@ -165,3 +165,34 @@ the scope guard above is narrow.
 | `busy_with_operator` flag | New state with no reconciler; a stuck flag silently starves a worker. |
 | Succeed-and-self-assign | Silent cross-worker theft; ownership stops being meaningful. |
 | Boolean refusal | #1057 verbatim — a refusal that withholds the resolving fact. |
+| **Auto-activate when the worker owns exactly ONE assigned task** (#1282) | Removes ambiguity about *which* task, not about *whether* the worker is on a task at all — a BUZZING worker may be doing inline work, which is the operator's own separate concern about not landing tasks on a worker busy inline. It is the "verb preferred, hook as backstop" row wearing a narrower guard, so it still creates two paths to one transition. |
+
+## #1282 — the gap that was real, and it was not the design
+
+Added 2026-08-06. The design above is unchanged; this records what it missed in
+*delivery* rather than in reasoning.
+
+ACTIVE was made worker-asserted, and then **nothing ever taught workers the verb.**
+`swarm_start_task` appeared in no prompt, dispatch template or worker-facing string
+anywhere in `src/` — only in its own arg-type docstring, two comments in
+`drones/state_tracker.py`, and `swarm_unblock_task`'s success text. Meanwhile
+`server/messages.py` appended a block to every dispatch teaching the CLOSING verb
+with no counterpart for starting, and all five inline `WORKFLOW_TEMPLATES` ended
+with a closing step while none opened with marking work in progress.
+
+So "the operator sees tasks stuck in ASSIGNED" was not evidence against the design.
+It was evidence that the mechanism the design depends on was undiscoverable. Fixed
+by adding the instruction at both places, plus the hint on the *existing* idle nudge
+— explicitly **not** the dedicated nudge this document rejects, because that nudge
+already fires and the worker it reaches is the one who can resolve the ambiguity.
+
+**The instruction is conditional on purpose:** assert only for the task you are
+actually working. "Always call this" would move the deleted promoter's inference
+into the worker rather than remove it, reproducing #1159 one layer up.
+
+**Accepted limitation, and how to revisit it honestly:** a worker may still not
+comply. That is not fixable by prompt alone. If compliance turns out poor, that
+measurement — not the assumption — is what would justify reopening the
+auto-promotion question. No new `activate()` caller was added; the property-(f)
+count stayed at exactly 2, which is the evidence this change did not touch the
+state machine.

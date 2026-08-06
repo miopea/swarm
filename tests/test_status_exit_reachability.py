@@ -203,7 +203,22 @@ def test_park_accepts_assigned_so_the_inv2_reconciler_cannot_race_it():
 def test_every_activate_caller_writes_history():
     """Property (f). Absence of a ``task_history`` row is what settled #1159's
     write-failed-vs-write-reverted question, because ``_promote_one_assigned``
-    was the one caller that wrote nothing. It no longer activates at all."""
+    was the one caller that wrote nothing. It no longer activates at all.
+
+    STILL EXACTLY 2 AFTER #1282, deliberately. That task addressed "tasks sit in
+    ASSIGNED" by TEACHING ``swarm_start_task`` — the dispatch instructions and the
+    workflow templates never named it — rather than by adding an automatic
+    promoter. A backstop hook was considered and rejected: it would be a second
+    path to one transition, and the narrower "worker owns exactly one assigned
+    task" variant still infers WHETHER the worker is on a task at all, since a
+    BUZZING worker may be doing inline work. See the rejected-alternatives table
+    in docs/specs/worker-asserted-active.md.
+
+    So this count needing no change is the evidence #1282 did not touch the state
+    machine. If a future change raises it to 3, that must be a deliberate decision
+    recorded alongside, not an incidental consequence of making the board look
+    livelier.
+    """
     src = _src("mcp/handlers") + _src("server") + _src("drones")
     callers = src.count(".activate(")
     assert callers == 2, (

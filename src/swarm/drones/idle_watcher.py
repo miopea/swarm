@@ -64,10 +64,21 @@ def _nudge_message(task_numbers: list[int]) -> str:
         task_ref = f"#{task_numbers[0]}"
     else:
         task_ref = ", ".join(f"#{n}" for n in task_numbers)
+    # "open", not "active": these are bucketed from ``task_board.active_tasks``,
+    # which is ASSIGNED **or** ACTIVE, so calling them all active told the worker
+    # the board said something it did not — the same conflation that put queued
+    # tasks in the worker title bar (#1282).
+    #
+    # The start-verb hint rides on THIS message rather than getting one of its own.
+    # docs/specs/worker-asserted-active.md rejected a dedicated nudge about
+    # unasserted tasks, and rightly: repeated nudges about unactionable state are
+    # how operators learn to ignore nudges. This nudge already fires, and the
+    # worker it reaches is exactly the one that can resolve the ambiguity.
     return (
-        f"You have {task_ref} active but appear idle. "
+        f"You have {task_ref} open but appear idle. "
         "Run `swarm_task_status filter=mine` and `swarm_check_messages`, "
-        "then resume or report a blocker."
+        "then resume or report a blocker. If you are actually working one of them, "
+        "call `swarm_start_task` so the board shows it in progress rather than queued."
     )
 
 

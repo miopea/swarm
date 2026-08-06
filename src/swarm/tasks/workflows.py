@@ -45,32 +45,42 @@ _DEFAULT_SKILL_DESCRIPTIONS: dict[str, tuple[str, list[str]]] = {
 
 # Fallback inline templates for types without a skill.
 WORKFLOW_TEMPLATES: dict[TaskType, str] = {
+    # #1282: every template ended with a closing step and none opened with
+    # marking the work in progress, so ACTIVE — which is worker-asserted since
+    # 2026.8.5.5 — was never asked for. The OPERATOR template below is
+    # deliberately EXCLUDED: it says DO NOT EXECUTE, and telling a worker to
+    # mark in progress a task no worker may perform would contradict it.
     TaskType.CHORE: """\
 ## Workflow: General Task
-1. Complete the task as described
-2. Validate your changes (run tests if applicable)
-3. Commit when done""",
+1. Mark it in progress (swarm_start_task) if it isn't already
+2. Complete the task as described
+3. Validate your changes (run tests if applicable)
+4. Commit when done""",
     TaskType.CONTENT: """\
 ## Workflow: Content Task
-1. Research and gather source material
-2. Draft the content (script, article, plan)
-3. Review and refine
-4. Mark complete when ready for next step""",
+1. Mark it in progress (swarm_start_task) if it isn't already
+2. Research and gather source material
+3. Draft the content (script, article, plan)
+4. Review and refine
+5. Mark complete when ready for next step""",
     TaskType.REVIEW: """\
 ## Workflow: Review Task
-1. Review the deliverable against acceptance criteria
-2. Provide feedback or approve
-3. Mark complete when satisfied""",
+1. Mark it in progress (swarm_start_task) if it isn't already
+2. Review the deliverable against acceptance criteria
+3. Provide feedback or approve
+4. Mark complete when satisfied""",
     TaskType.PUBLISH: """\
 ## Workflow: Publish Task
-1. Prepare the content for the target platform
-2. Publish or schedule publication
-3. Verify the published content""",
+1. Mark it in progress (swarm_start_task) if it isn't already
+2. Prepare the content for the target platform
+3. Publish or schedule publication
+4. Verify the published content""",
     TaskType.INGEST: """\
 ## Workflow: Ingest Task
-1. Connect to the data source
-2. Extract and transform the data
-3. Store results for downstream processing""",
+1. Mark it in progress (swarm_start_task) if it isn't already
+2. Connect to the data source
+3. Extract and transform the data
+4. Store results for downstream processing""",
     # #405: operator-only action — no worker can execute it. If this ever
     # reaches a worker PTY, the worker should NOT attempt it.
     TaskType.OPERATOR: """\

@@ -33,7 +33,24 @@ _PDF_EXTENSIONS = frozenset({".pdf"})
 _XLSX_EXTENSIONS = frozenset({".xlsx", ".xls", ".ods"})
 _PPTX_EXTENSIONS = frozenset({".pptx", ".ppt", ".odp"})
 
-_COMPLETION_INSTRUCTIONS = """\
+# Both ends of the task lifecycle. #1282: this block taught the CLOSING verb and
+# had no counterpart for STARTING one, while 2026.8.5.5 had made ACTIVE
+# worker-asserted via swarm_start_task and removed the daemon's guessing promoter.
+# So the sanctioned mechanism existed and appeared in no prompt, template or
+# worker-facing string anywhere in the tree — a task stayed ASSIGNED because
+# nothing ever told anyone the verb.
+#
+# THE WORDING IS CONDITIONAL ON PURPOSE. "Always call this" would move the
+# inference the promoter was deleted for into the worker instead of removing it: a
+# worker asserting ACTIVE on a task it is not really working reproduces #1159 one
+# layer up. Assert only for the task actually being worked.
+_LIFECYCLE_INSTRUCTIONS = """\
+
+Before you start working, call swarm_start_task so the board shows this task in
+progress instead of merely queued — the daemon does not infer which task you are on.
+If this task was just dispatched to you it is already in progress; the call is what
+you need when you resume parked work, pick up something already queued, or continue
+after a compact. Only assert it for the task you are actually working.
 
 When done, use the swarm_complete_task MCP tool with a brief resolution summary.
 If the task originated from another worker, send them a swarm_send_message with your findings."""
@@ -243,7 +260,7 @@ def build_task_message(
     """
     from swarm.tasks.workflows import get_skill_command
 
-    completion = _COMPLETION_INSTRUCTIONS.format(task_id=task.id)
+    completion = _LIFECYCLE_INSTRUCTIONS.format(task_id=task.id)
 
     skill = get_skill_command(task.task_type) if supports_slash_commands else None
     if skill:
