@@ -2748,6 +2748,34 @@
             .filter-chip { font-size: 0.75rem; padding: 0.15rem 0.4rem; }
             .drone-entry { font-size: 0.75rem; padding: 0.15rem 0.3rem; }
             .task-item { padding: 0.3rem 0.5rem; font-size: 0.8rem; }
+
+            /* #1291 item 7 — the task panel at 390px. Operator: "on mobile the task
+               panel looks terrible"; evidence 084114 shows titles broken to one or two
+               words per line ("has no / correction / path, and / is re- / served").
+               CAUSE: the row is a SINGLE flex line carrying ~10 children — status icon,
+               #number, status badge, target, title, worker, age, blocked/verify badges,
+               then Edit/Unassign/Log/x. Only .task-title has flex:1, so it is the only
+               child that can shrink, and the fixed ones consume the whole 390px before
+               it gets any. The title did not wrap badly; it was starved.
+               FIX: let the row wrap, and give the title a line of its own. Everything
+               before it stays on line 1 (#number + badge are what you scan by), the
+               title gets full width on line 2, and the meta + buttons fall to line 3.
+               NOT TOUCHED: the tab strip and filter chips in the same screenshot. They
+               clip because they deliberately scroll their own container (see the
+               .filter-bar / .tab-group rules above, added because a tab was once
+               rendered permanently off-screen). That is the affordance working, not a
+               bug, so overriding it here would undo a documented fix. */
+            .task-item > .flex-center { flex-wrap: wrap; row-gap: 0.2rem; }
+            .task-item .task-title {
+                flex: 1 1 100%;
+                min-width: 0;
+                overflow-wrap: anywhere;
+            }
+            /* Buttons keep their size and wrap as a group rather than squeezing the
+               title back down. */
+            .task-item .flex-center > .btn { flex: 0 0 auto; }
+            /* The list itself must not scroll sideways — the row wraps instead. */
+            #task-list, .task-item { max-width: 100%; }
         }
 
         /* Fullscreen terminal overlay (mobile scroll mode) */

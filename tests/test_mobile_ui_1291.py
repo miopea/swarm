@@ -121,3 +121,34 @@ def test_the_dpad_has_a_light_mode_contrast_override():
     assert re.search(r'\[data-theme="light"\][^}]*\.term-dpad-btn', _BASE), (
         "no light-theme override for the d-pad buttons"
     )
+
+
+# --- item 7: the task panel at 390px -------------------------------------
+
+
+def test_task_rows_wrap_and_the_title_gets_its_own_line_on_mobile():
+    """Item 7. The row is one flex line with ~10 children and only .task-title has
+    flex:1, so the title was the only child that could shrink and the fixed ones ate
+    the whole 390px — titles came out as one or two words per line. The fix lets the
+    row wrap and gives the title a full-width line."""
+    assert re.search(
+        r"@media[^{]*max-width:\s*768px.*?\.task-item\s*>\s*\.flex-center\s*\{[^}]*flex-wrap:\s*wrap",
+        _BASE,
+        re.S,
+    ), "no mobile rule letting the task row wrap"
+    assert re.search(r"\.task-item\s+\.task-title\s*\{[^}]*flex:\s*1\s+1\s+100%", _BASE, re.S), (
+        "the title does not get a full-width line on mobile"
+    )
+
+
+def test_the_filter_bar_still_scrolls_its_own_container():
+    """PRIOR ART, deliberately preserved. The filter chips and tab strip clip in the
+    same screenshot, but that is a scroll affordance added because a tab was once
+    rendered permanently off-screen with no way to reach it. #1291 read the clipping as
+    a defect; overriding it would undo a documented fix, so it is left alone."""
+    assert re.search(r"\.filter-bar\s*\{[^}]*overflow-x:\s*auto", _BASE, re.S), (
+        "the filter bar's own-container scrolling was removed"
+    )
+    assert re.search(r"\.tab-group\s*\{[^}]*overflow-x:\s*auto", _BASE, re.S), (
+        "the tab strip's own-container scrolling was removed"
+    )
