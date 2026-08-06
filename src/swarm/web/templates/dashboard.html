@@ -221,7 +221,6 @@
                         data-action="doAction" data-do-action="{{ btn.action }}" data-do-command="{{ btn.command|tojson|forceescape }}">{{ btn.label }}</button>
                 {% endfor %}
                 <button type="button" class="btn btn-secondary hide-mobile" id="btn-fullscreen-term" data-action="openTerminalFullscreen" style="display:none">Fullscreen</button>
-                <button type="button" class="btn btn-secondary hide-desktop" id="btn-focus-mode" data-action="toggleFocusMode">Focus</button>
                 {% if is_dev %}
                 <div class="term-debug hide-mobile">
                     <label><input type="checkbox" id="term-debug-toggle"> Debug</label>

@@ -202,7 +202,6 @@
         ccMobileFocus: function(el) { ccMobileFocus(el.dataset.ccFocus); },
         toggleResourcePopover: function(el, e) { e.stopPropagation(); toggleResourcePopover(); },
         toggleBottomPanel: function() { toggleBottomPanel(); },
-        toggleFocusMode: function() { toggleFocusMode(); },
         toggleTabUtils: function(el, e) { e.stopPropagation(); toggleTabUtils(); },
         showShortcuts: function() { document.getElementById('shortcuts-modal').style.display = 'flex'; },
         hideShortcuts: function() { document.getElementById('shortcuts-modal').style.display = 'none'; },
@@ -5500,11 +5499,11 @@
     };
 
     // --- Tab switcher ---
-    // `restoring` skips the focus-mode/panel side effects so the on-load
-    // tab restore doesn't fight the collapse/focus restores that ran above.
+    // `restoring` skips the panel side effect so the on-load tab restore doesn't
+    // fight the collapse restore that ran above. (#1291 item 2: the focus-mode
+    // side effect went with the Focus button.)
     window.switchTab = function(tab, restoring) {
         if (!restoring) {
-            exitFocusMode();
             expandBottomPanel();
         }
         try { sessionStorage.setItem('swarm_bottom_tab', tab); } catch(e) {}
@@ -6213,31 +6212,6 @@
     document.addEventListener('click', function() { closeMobileMenu(); closeTabUtils(); });
 
     // --- Focus mode (mobile): hide entire bottom panel ---
-    function toggleFocusMode() {
-        var area = document.querySelector('.detail-area');
-        if (!area) return;
-        var active = area.classList.toggle('focus-mode');
-        var btn = document.getElementById('btn-focus-mode');
-        if (btn) btn.textContent = active ? 'Exit Focus' : 'Focus';
-        try { sessionStorage.setItem('swarm_focus_mode', active ? '1' : ''); } catch(e) {}
-        // Re-fit terminal to fill new space
-        if (activeTermWorker) {
-            var entry = termCache.get(activeTermWorker);
-            if (entry && entry.fitAddon && entry.term) {
-                setTimeout(function() { entry.fitAddon.fit(); sendResizeIfChanged(activeTermWorker, entry); }, 50);
-            }
-        }
-    }
-
-    function exitFocusMode() {
-        var area = document.querySelector('.detail-area');
-        if (!area || !area.classList.contains('focus-mode')) return;
-        area.classList.remove('focus-mode');
-        var btn = document.getElementById('btn-focus-mode');
-        if (btn) btn.textContent = 'Focus';
-        try { sessionStorage.setItem('swarm_focus_mode', ''); } catch(e) {}
-    }
-
     // --- Bottom panel collapse (mobile) ---
     function updateBottomPanelState(collapsed) {
         // FAB visibility
@@ -6325,21 +6299,9 @@
         if (shouldCollapse) setBottomCollapsed(true, false);
     })();
 
-    // Init: restore focus mode on mobile
-    (function initFocusMode() {
-        var focusStored = null;
-        try { focusStored = sessionStorage.getItem('swarm_focus_mode'); } catch(e) {}
-        if (focusStored === '1' && window.innerWidth < 768) {
-            var area = document.querySelector('.detail-area');
-            if (area) area.classList.add('focus-mode');
-            var fbtn = document.getElementById('btn-focus-mode');
-            if (fbtn) fbtn.textContent = 'Exit Focus';
-        }
-    })();
-
     // Init: restore the active bottom-panel tab across reloads. Runs after
     // the collapse/focus restores so switchTab's restore path (which skips
-    // expandBottomPanel/exitFocusMode) can't undo them.
+    // expandBottomPanel) can't undo them.
     (function initBottomTab() {
         var storedTab = null;
         try { storedTab = sessionStorage.getItem('swarm_bottom_tab'); } catch(e) {}

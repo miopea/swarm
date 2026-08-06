@@ -455,6 +455,15 @@
         /* --- Text utilities --- */
         .no-underline { text-decoration: none; }
         .fw-bold { font-weight: bold; }
+        /* #1291 item 5: this class was used 8 times in config.html and DEFINED
+           NOWHERE, so every one of them was a silent no-op. The visible symptom was
+           the notification event-filter matrix: the Desktop/Terminal/Email/Webhook
+           headers appeared offset to the RIGHT of their checkbox columns, and the
+           offset grew with the length of the header word (Email ~15px, Webhook ~36px)
+           — because header and checkbox both started at the column's left edge and
+           only the header was wide. Defining it fixes the matrix and the other seven
+           usages that have never done anything. */
+        .text-center { text-align: center; }
         .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         /* --- Width --- */
         .w-input { width: 550px; }
@@ -1741,7 +1750,18 @@
             width: 550px;
             max-width: 100%;
             flex-shrink: 1;
+            /* Right-aligned ON PURPOSE for the desktop layout: the input is 550px in
+               a label-left / value-right row, so the value sits next to its label.
+               #1291 item 4 does NOT reverse that — it scopes it. On mobile the input
+               goes full-width, which pushes the value to the far edge, metres from the
+               label it belongs to, and reads as broken (operator-reported, evidence
+               084224: session_name "rcg-v6", projects_dir "~/projects"). The two
+               opt-out classes below predate this and are unchanged. */
             text-align: right;
+        }
+        /* #1291 item 4: mobile only. Desktop keeps the deliberate look above. */
+        @media (max-width: 768px) {
+            .config-input { text-align: left; }
         }
         textarea.config-input { text-align: left; }
         .config-input.text-left { text-align: left; }
@@ -1902,6 +1922,42 @@
         .approval-rule-row input { flex: 1; }
         .approval-rule-row select { width: 110px; }
         #task-buttons-list .task-btn-label { flex: 0 0 160px; }
+
+        /* #1291 item 3 — THE PAGE MUST NEVER SCROLL SIDEWAYS. Operator-reported that
+           /config "has tons of issues on mobile"; evidence 084423 and 084512 show
+           content clipped at the LEFT with empty space at the right, i.e. the page
+           itself was horizontally scrolled and part of it was UNREACHABLE — worse than
+           merely ugly.
+
+           Causes, in order of contribution:
+             1. .config-input / .w-input are a fixed 550px. max-width:100% bounds them
+                against their parent, but the parent is a flex row that is itself sized
+                by content, so the row wins and pushes the page wide.
+             2. .approval-rule-row packs six controls (handle, label, action select,
+                command, style select, M/D pills) into one flex line — hopeless at
+                390px, and the third column was cut off in 084512.
+             3. Wide tables. The Per-Worker Breakdown is already wrapped in
+                .overflow-x-auto (which, unlike .text-center, IS defined) so it scrolls
+                inside itself and is not a page-level cause.
+
+           The rule adopted: wide content scrolls inside its OWN container; the page
+           never does. */
+        @media (max-width: 768px) {
+            .config-input, .w-input { width: 100%; }
+            /* Stack the multi-control rows instead of clipping their tail. */
+            .approval-rule-row {
+                flex-wrap: wrap;
+                gap: 0.35rem;
+            }
+            .approval-rule-row input,
+            .approval-rule-row select { width: 100%; flex: 1 1 100%; }
+            /* The visibility pills stay side by side — they are tiny and pair up. */
+            .approval-rule-row .vis-pill { flex: 0 0 auto; width: auto; }
+            .approval-rule-row .drag-handle { flex: 0 0 auto; }
+            #task-buttons-list .task-btn-label { flex: 1 1 100%; }
+            /* Belt and braces: nothing in the config body may widen the page. */
+            .config-section { max-width: 100%; overflow-wrap: anywhere; }
+        }
         /* Drag-and-drop reorder */
         .drag-handle {
             cursor: grab;
@@ -2162,6 +2218,11 @@
             -webkit-appearance: none;
             appearance: none;
             border: 1px solid rgba(255,255,255,0.18);
+            /* Dark translucent pad + leaf-green glyph. Tuned for the dark theme; in
+               LIGHT mode it renders as grey-on-grey and the arrows are close to
+               invisible (operator, #1291 item 6 — raised during the interview, not in
+               the original report). The light-mode override below restores contrast
+               rather than changing the dark look. */
             background: rgba(20,16,10,0.62);
             color: var(--leaf);
             font-size: 20px;
@@ -2179,6 +2240,25 @@
         }
         .term-dpad-btn:active { transform: scale(0.92); background: rgba(140,179,105,0.30); }
         .term-dpad-btn:focus-visible { outline: 2px solid var(--leaf); outline-offset: 2px; }
+        /* #1291 item 6: light mode needs a light pad and a dark glyph, or the arrows
+           vanish. Keyed off the same data-theme attribute the theme toggle stamps, and
+           on prefers-color-scheme for the untoggled default. */
+        @media (prefers-color-scheme: light) {
+            :root:not([data-theme="dark"]) .term-dpad-btn {
+                background: rgba(252,250,245,0.92);
+                border-color: rgba(60,48,30,0.28);
+                color: #2c2418;
+            }
+            :root:not([data-theme="dark"]) .term-dpad-center {
+                background: var(--leaf); color: #1a1209;
+            }
+        }
+        :root[data-theme="light"] .term-dpad-btn {
+            background: rgba(252,250,245,0.92);
+            border-color: rgba(60,48,30,0.28);
+            color: #2c2418;
+        }
+        :root[data-theme="light"] .term-dpad-center { background: var(--leaf); color: #1a1209; }
         .term-dpad-up    { grid-column: 2; grid-row: 1; }
         .term-dpad-left  { grid-column: 1; grid-row: 2; }
         .term-dpad-center {
@@ -2463,19 +2543,6 @@
             .detail-area.bottom-collapsed > .resize-handle {
                 display: none;
             }
-            /* Focus mode: hide bottom panel entirely */
-            .detail-area.focus-mode {
-                grid-template-rows: 1fr 0 0 !important;
-            }
-            .detail-area.focus-mode > .resize-handle,
-            .detail-area.focus-mode > .bottom-tabbed {
-                overflow: hidden;
-                height: 0;
-                min-height: 0;
-                border: none;
-                padding: 0;
-            }
-
             /* Action bar: wrap into rows on mobile */
             .action-bar {
                 flex-wrap: wrap;
