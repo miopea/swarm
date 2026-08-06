@@ -1035,6 +1035,58 @@ class TaskBoard(EventEmitter):
             self._notify()
         return True
 
+    # Annotation kinds for :meth:`annotate_resolution`.
+    RESOLUTION_NOTE_KINDS = ("stale", "wrong")
+
+    def annotate_resolution(self, task_id: str, *, kind: str, note: str) -> bool:
+        """Mark a CLOSED task's resolution stale or wrong WITHOUT rewriting it (#1274).
+
+        Returns False if the task is missing, still open, or ``kind`` is not one of
+        ``RESOLUTION_NOTE_KINDS``.
+
+        THE RESOLUTION TEXT IS NEVER TOUCHED, and that is the whole design. An edit
+        would be WRONG here, unlike #1270's HOLD-class edit gap where the fix was to
+        allow one: rewriting a closed resolution destroys the record of what was
+        actually believed and done at the time. So this ANNOTATES alongside.
+        ``TaskBoard.update`` does not even accept a ``resolution`` kwarg, so the
+        immutability is structural rather than a policy anyone can soften.
+
+        WHY IT IS WORTH THE COLUMNS: a resolution is not an archived note. It becomes
+        ``learnings``, and learnings are recalled into future dispatches, so a stale
+        one is actively re-served as advice carrying a completed task's authority.
+        #1174's ``delete_branch_on_merge`` claim was true when written and wrong by
+        the time #1267 read it, and nothing in the record said so.
+
+        ``kind`` is deliberately two-valued rather than one flag: 'wrong' (never true)
+        impugns the original work, 'stale' (was true, no longer) does not and tells
+        the reader what changed. Collapsing them would lose the distinction that makes
+        the annotation trustworthy enough to be worth writing.
+
+        OPEN TASKS ARE REFUSED. A live task's requirements are corrected by editing it
+        (``swarm_edit_task``) — annotating a resolution that does not exist yet would
+        be a note about nothing, and the refusal names the verb that does apply.
+        """
+        if kind not in self.RESOLUTION_NOTE_KINDS:
+            return False
+        if not (note or "").strip():
+            return False
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None or task.status not in (TaskStatus.DONE, TaskStatus.FAILED):
+                return False
+            import time
+
+            before = task.resolution
+            task.resolution_note = note.strip()
+            task.resolution_note_kind = kind
+            task.updated_at = time.time()
+            # Belt and braces: the point of the feature is that this cannot change.
+            assert task.resolution == before, "annotate_resolution mutated the resolution"
+            _log.info("task %s resolution annotated as %s: %s", task_id, kind, note[:80])
+            self._persist()
+            self._notify()
+        return True
+
     def reject_task(self, task_id: str, resolution: str = "") -> bool:
         """Reject a PROPOSED task, transitioning to FAILED."""
         with self._lock:

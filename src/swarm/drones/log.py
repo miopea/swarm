@@ -113,6 +113,12 @@ class SystemAction(Enum):
     # be misled by either. What changed is which batch the operator sees it in.
     TASK_BLOCKER_RELABELLED = "TASK_BLOCKER_RELABELLED"
 
+    # #1274: a CLOSED task's resolution was flagged stale or wrong. Its own member
+    # rather than EDITED, because the resolution text did NOT change — only an
+    # annotation was added beside it, and an audit reader filtering for edits would
+    # otherwise be told the record was rewritten when it was not.
+    TASK_RESOLUTION_ANNOTATED = "TASK_RESOLUTION_ANNOTATED"
+
     # #1265: an EXTERNAL tool raised an operator notification through
     # POST /api/notifications. One closed enum member rather than an open string,
     # because this value is used for routing, filtering and priority mapping —

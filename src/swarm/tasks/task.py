@@ -182,6 +182,25 @@ class SwarmTask:
     _token_ceiling_breached: bool = field(default=False, repr=False)
     # Knowledge consolidation: learnings captured on completion
     learnings: str = ""
+
+    # #1274: an ADDITIVE annotation on a CLOSED task's resolution, never an
+    # amendment to it. The resolution text stays immutable — ``TaskBoard.update``
+    # does not accept a ``resolution`` kwarg at all — because rewriting a closed
+    # resolution destroys the record of what was actually believed and done at the
+    # time, which is the thing an audit trail exists to preserve.
+    #
+    # WHY IT MATTERS THAT THIS EXISTS AT ALL: a resolution is not an archived note.
+    # It becomes ``learnings``, and learnings are recalled into future dispatches
+    # (``playbook_ops.recall_learnings_for_task``), so a stale resolution is
+    # re-served as advice, with a completed task's authority behind it, to a worker
+    # with no way to know it aged out. #1174's delete_branch_on_merge claim was true
+    # when written and wrong by the time #1267 read it.
+    resolution_note: str = ""
+    # '' | 'stale' (was true, no longer) | 'wrong' (never true). Kept distinct
+    # because "this was never true" impugns the original work while "this was true
+    # until X changed" does not — and the second is what makes the note trustworthy
+    # enough to be worth writing.
+    resolution_note_kind: str = ""
     # Verifier drone state (item 4 of the 10-repo bundle).
     # ``verification_status`` flips through NOT_RUN → VERIFIED / REOPENED
     # / ESCALATED / SKIPPED as the verifier acts. ``verification_reason``

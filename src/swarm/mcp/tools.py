@@ -19,6 +19,9 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from swarm.mcp.handlers._annotate import HANDLERS as _ANNOTATE_H
+from swarm.mcp.handlers._annotate import TOOLS as _ANNOTATE_T
+
 # Per-domain modules contribute both their schemas and their handlers.
 from swarm.mcp.handlers._batch import HANDLERS as _BATCH_H
 from swarm.mcp.handlers._batch import TOOLS as _BATCH_T
@@ -139,6 +142,7 @@ TOOLS: list[dict[str, Any]] = [
     *_BLOCK_EXT_T,
     *_PARK_T,
     *_START_T,
+    *_ANNOTATE_T,
     *_RELABEL_T,
     *_UNBLOCK_T,
     *_EMAIL_T,
@@ -159,6 +163,7 @@ _HANDLERS = {
     **_BLOCK_EXT_H,
     **_PARK_H,
     **_START_H,
+    **_ANNOTATE_H,
     **_RELABEL_H,
     **_UNBLOCK_H,
     **_EMAIL_H,

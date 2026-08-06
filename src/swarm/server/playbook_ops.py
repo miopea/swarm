@@ -66,6 +66,46 @@ _LEARNING_MIN_OVERLAP = 2
 # ``swarm_get_learnings``, the deliberate pull path, which stays uncapped.
 _LEARNING_CHARS_PER_ITEM = 800
 _LEARNING_BLOCK_CHARS = 2400
+
+
+def _learning_age(task: object) -> str:
+    """`, closed 2026-07-30` for a recalled learning, '' when unknown.
+
+    #1274: **a date alone would have prevented the incident that filed this.**
+    #1174's ``delete_branch_on_merge`` claim was true when written and wrong by the
+    time #1267 read it, and the recalled text carried no timestamp — so nothing
+    prompted the reader to ask how old the advice was. This is the cheapest half of
+    the fix and it applies to EVERY recalled learning, annotated or not, which is why
+    it is unconditional rather than gated on the annotation existing.
+    """
+    ts = getattr(task, "completed_at", None) or getattr(task, "updated_at", None)
+    if not ts:
+        return ""
+    import datetime as _dt
+
+    try:
+        return f", closed {_dt.datetime.fromtimestamp(float(ts)):%Y-%m-%d}"
+    except (TypeError, ValueError, OSError):
+        return ""
+
+
+def _supersede_caveat(task: object) -> str:
+    """A loud inline caveat when a recalled learning has been annotated (#1274).
+
+    Rendered INSIDE the recalled entry rather than appended after the block, because
+    the failure mode is a reader who takes one entry at face value — a footnote at the
+    bottom is read after the damage. Wording differs by kind: 'wrong' says the claim
+    was never true, 'stale' says it has expired, and conflating them would either
+    impugn correct original work or understate a real error.
+    """
+    kind = (getattr(task, "resolution_note_kind", "") or "").strip().lower()
+    note = (getattr(task, "resolution_note", "") or "").strip()
+    if not kind or not note:
+        return ""
+    label = "NO LONGER TRUE" if kind == "stale" else "WAS NEVER CORRECT"
+    return f"\n  !! {label} — {note[:300]}"
+
+
 # Common >=4-char words that carry no topical signal — excluded from the
 # keyword-overlap relevance so learnings aren't matched on boilerplate.
 _LEARNING_STOPWORDS = frozenset(
@@ -276,7 +316,10 @@ class PlaybookOps:
             # feature of the message, not an afterthought.
             budget = _LEARNING_BLOCK_CHARS
             for t in chosen:
-                entry = f"\n[#{t.number} {t.title}]\n{self._clip_learning(t.learnings)}"
+                entry = (
+                    f"\n[#{t.number} {t.title}{_learning_age(t)}]"
+                    f"{_supersede_caveat(t)}\n{self._clip_learning(t.learnings)}"
+                )
                 if lines[2:] and len(entry) > budget:
                     break
                 lines.append(entry)

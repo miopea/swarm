@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 16
+CURRENT_VERSION = 17
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -115,7 +115,13 @@ CREATE TABLE IF NOT EXISTS tasks (
   verification_status        TEXT    NOT NULL DEFAULT 'not_run',
   verification_reason        TEXT    NOT NULL DEFAULT '',
   verification_reopen_count  INTEGER NOT NULL DEFAULT 0,
-  effort_tier                TEXT    NOT NULL DEFAULT ''
+  effort_tier                TEXT    NOT NULL DEFAULT '',
+  -- #1274: an ADDITIVE annotation on a closed task's resolution. The
+  -- resolution text itself stays immutable (TaskBoard.update refuses a
+  -- `resolution` kwarg at all) because rewriting it would destroy the record
+  -- of what was believed at the time. kind is '' | 'stale' | 'wrong'.
+  resolution_note            TEXT    NOT NULL DEFAULT '',
+  resolution_note_kind       TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);

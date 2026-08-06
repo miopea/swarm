@@ -117,6 +117,7 @@ class SwarmDB:
             (14, self._migrate_v14_started_at),
             (15, self._migrate_v15_external_blocker_ref),
             (16, self._migrate_v16_effort_tier),
+            (17, self._migrate_v17_resolution_note),
         ]
         for version, migrate in migrations:
             if from_version < version:
@@ -403,6 +404,30 @@ class SwarmDB:
             _log.info("v16: added tasks.effort_tier")
         except sqlite3.OperationalError:
             _log.debug("v16 migration: effort_tier column likely already exists")
+
+    def _migrate_v17_resolution_note(self) -> None:
+        """v17 (#1274): add ``tasks.resolution_note`` + ``resolution_note_kind`` — an
+        ADDITIVE annotation marking a closed task's resolution stale or wrong.
+
+        The resolution text is deliberately NOT made editable: ``TaskBoard.update``
+        does not accept a ``resolution`` kwarg at all, and rewriting a closed
+        resolution would destroy the record of what was actually believed and done at
+        the time, which is what an audit trail exists to preserve. So the correction
+        is an annotation ALONGSIDE the original, never an amendment to it.
+
+        ``kind`` is '' | 'stale' (was true, no longer) | 'wrong' (never true). Kept
+        distinguishable because "this was never true" impugns the original work while
+        "this was true until X changed" does not, and the second is what makes the
+        annotation trustworthy. Defaults to '' for legacy rows. ALTER wrapped in
+        try/except — fresh DBs already have both via SCHEMA_V1.
+        """
+        assert self._conn is not None
+        for col in ("resolution_note", "resolution_note_kind"):
+            try:
+                self._conn.execute(f"ALTER TABLE tasks ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+                _log.info("v17: added tasks.%s", col)
+            except sqlite3.OperationalError:
+                _log.debug("v17 migration: %s column likely already exists", col)
 
     def _migrate_v14_started_at(self) -> None:
         """v14 (#611 P2): add ``tasks.started_at`` (when the task last went
