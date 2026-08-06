@@ -307,13 +307,23 @@ class TaskBoard(EventEmitter):
         if source_worker or target_worker:
             task.is_cross_project = True
 
-    def assign(self, task_id: str, worker_name: str) -> bool:
-        """Assign a task to a worker."""
+    def assign(self, task_id: str, worker_name: str, override_hold: bool = False) -> bool:
+        """Assign a task to a worker.
+
+        ``override_hold`` permits assigning a HOLD-tagged task, for a deliberate
+        operator action only. ``is_available`` means "the auto-assign DRONE may
+        take this" and #894 excludes HOLD from it, so using it as the gate here
+        also refused explicit routing — the operator could not hand a parked task
+        to anyone. Opt-in, so the drone and Queen paths are unchanged; they select
+        candidates through ``available_tasks``, which still excludes HOLD.
+        """
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
                 return False
-            if not task.is_available:
+            if not task.is_available and not (
+                override_hold and task.status == TaskStatus.UNASSIGNED and task.is_on_hold
+            ):
                 return False
             task.assign(worker_name)
             _log.info("task %s assigned to %s", task_id, worker_name)

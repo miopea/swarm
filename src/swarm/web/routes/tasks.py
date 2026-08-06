@@ -25,8 +25,16 @@ if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
 
 
-def _apply_status_change(d: SwarmDaemon, task_id: str, current: str, target: str) -> None:
-    """Dispatch a status transition to the appropriate daemon lifecycle method."""
+def _apply_status_change(d: SwarmDaemon, task_id: str, current: str, target: str) -> bool:
+    """Dispatch a status transition to the appropriate lifecycle method.
+
+    Returns True when a transition was applied, False when the pair is not
+    supported. **The return value is load-bearing.** This used to return None for
+    every unmatched pair while the caller answered ``{"status": "updated"}``
+    regardless, so an unsupported change looked exactly like a successful one —
+    #1159's shape, where a verb succeeds and does nothing and the caller stops
+    looking. The operator hit this trying to move a task out of BLOCKED.
+    """
     if target == "unassigned" and current in ("assigned", "active"):
         d.unassign_task(task_id)
     elif target == "unassigned" and current == "backlog":
@@ -35,12 +43,66 @@ def _apply_status_change(d: SwarmDaemon, task_id: str, current: str, target: str
         # BACKLOG precondition and persists + notifies — instead of a raw
         # task.approve() + manual persist.
         d.task_board.approve_task(task_id)
+    elif current == "blocked" and target == "assigned":
+        # The exit the operator actually wants: the wait ended, put it back on
+        # its worker. Owner-PRESERVING, matching #1268 — ``release`` would drop
+        # the owner and make him reassign it by hand. Lands in ASSIGNED, never
+        # ACTIVE, so INV-1 holds by construction and the worker asserts the
+        # start itself.
+        if not d.task_board.unblock(task_id):
+            return False
+        _clear_blocker_rows(d, task_id)
+    elif current == "blocked" and target == "unassigned":
+        # Give it back to the pool. ``release`` accepts BLOCKED (#1059) and drops
+        # the owner, which is the correct semantic for this target.
+        if not d.task_board.release(task_id):
+            return False
+        _clear_blocker_rows(d, task_id)
     elif target == "done" and current in ("assigned", "active"):
         d.complete_task(task_id)
     elif target == "failed" and current == "active":
         d.fail_task(task_id)
     elif target in ("backlog", "unassigned", "assigned") and current in ("done", "failed"):
         d.reopen_task(task_id)
+    else:
+        # Deliberately NOT a fallback that forces the status. BLOCKED → DONE in
+        # particular is force_complete, which records a completion for work that
+        # is still open — the falsification #1268 exists to avoid.
+        return False
+    return True
+
+
+def _clear_blocker_rows(d: SwarmDaemon, task_id: str) -> None:
+    """Clear BlockerStore rows when a task leaves BLOCKED.
+
+    #529: the board has no handle on that store, so whoever changes the status
+    owns the rows. Clearing the status but not the rows leaves the IdleWatcher
+    nudging about a blocker that is gone. The worker and Queen MCP surfaces do
+    this through ``mcp/handlers/_unblock.record_unblock``; this is the same
+    obligation on the third surface, and skipping it here would reproduce #529 on
+    the operator's surface only — the hardest kind of gap to notice.
+    """
+    task = d.task_board.get(task_id)
+    store = getattr(d, "blocker_store", None)
+    if task is None or store is None:
+        return
+    try:
+        # clear_for_task, NOT clear(worker, n): a BLOCKED task can carry rows
+        # filed by more than one worker and the per-worker variant leaves the
+        # others behind.
+        store.clear_for_task(task.number)
+    except Exception:
+        # The status change already succeeded; failing here must not make the
+        # call look like it did nothing. WARNING because an orphaned row is a
+        # nudge-forever condition an operator needs a forensic anchor for.
+        import logging
+
+        logging.getLogger("swarm.web.tasks").warning(
+            "left BLOCKED on #%s but could not clear its blocker rows — the "
+            "IdleWatcher may keep nudging (#529)",
+            task.number,
+            exc_info=True,
+        )
 
 
 if TYPE_CHECKING:
@@ -147,8 +209,19 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
         elif existing.status == TaskStatus.BACKLOG:
             existing.approve()  # BACKLOG → UNASSIGNED (same as promote)
             d.task_board.persist(existing)
+        elif existing.status == TaskStatus.BLOCKED:
+            # BLOCKED was the one lane with no normalisation, so reassigning a
+            # blocked task 409'd the same way a HOLD task did. release accepts
+            # BLOCKED (#1059); the rows must go with the status (#529).
+            d.task_board.release(task_id)
+            _clear_blocker_rows(d, task_id)
 
-    await d.assign_task(task_id, worker_name)
+    # override_hold: this is an explicit operator action, and a HOLD task is
+    # UNASSIGNED by design — so the tag was the only thing making it
+    # unassignable, and the normalisation above could never fix that because the
+    # status was already correct. #894's exclusion stays intact for the
+    # auto-assigner, which selects through board.available_tasks, not this call.
+    await d.assign_task(task_id, worker_name, override_hold=True)
 
     started = False
     if auto_start:
@@ -345,7 +418,17 @@ async def handle_action_edit_task(request: web.Request) -> web.Response:
     if new_status:
         task = d.task_board.get(task_id)
         if task and task.status.value != new_status:
-            _apply_status_change(d, task_id, task.status.value, new_status)
+            before = task.status.value
+            if not _apply_status_change(d, task_id, before, new_status):
+                # Say so instead of answering "updated". The field edits above
+                # already persisted, so this names what did and did not happen —
+                # reporting success on a status change that never applied is how
+                # the operator was left unable to tell a no-op from a move.
+                return json_error(
+                    f"Field changes saved, but status {before} → {new_status} is not a "
+                    f"supported transition, so the status is unchanged.",
+                    status=409,
+                )
 
     console_log(f"Task edited: {task_id[:8]}")
     return web.json_response({"status": "updated", "task_id": task_id})

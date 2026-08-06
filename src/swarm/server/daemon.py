@@ -2450,8 +2450,16 @@ class SwarmDaemon(EventEmitter):
     def _check_ownership(self, worker_name: str) -> None:
         self.tasks_coord.check_ownership(worker_name)
 
-    async def assign_task(self, task_id: str, worker_name: str, actor: str = "user") -> bool:
-        return await self.tasks_coord.assign_task(task_id, worker_name, actor=actor)
+    async def assign_task(
+        self,
+        task_id: str,
+        worker_name: str,
+        actor: str = "user",
+        override_hold: bool = False,
+    ) -> bool:
+        return await self.tasks_coord.assign_task(
+            task_id, worker_name, actor=actor, override_hold=override_hold
+        )
 
     async def start_task(
         self, task_id: str, actor: str = "user", message: str | None = None

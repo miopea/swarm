@@ -786,6 +786,11 @@
                         <option value="unassigned">Unassigned</option>
                         <option value="assigned">Assigned</option>
                         <option value="active">In Progress</option>
+                        {# Present so a BLOCKED task's own status can be shown at
+                           all. Without it the select landed on selectedIndex=-1,
+                           submitted an empty value, and the status change was
+                           skipped — the operator had no way out of BLOCKED. #}
+                        <option value="blocked">Blocked</option>
                         <option value="done">Done</option>
                         <option value="failed">Failed</option>
                     </select>

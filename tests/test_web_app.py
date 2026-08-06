@@ -594,7 +594,12 @@ async def test_action_assign_task():
     with patch("swarm.server.daemon.console_log"):
         resp = await handle_action_assign_task(req)
     assert resp.status == 200
-    d.assign_task.assert_called_once_with("t1", "api")
+    # override_hold=True: this route is a deliberate operator assignment, and a
+    # HOLD task is UNASSIGNED by design, so without it the tag alone made the
+    # task unassignable from the dashboard (the operator hit this on #1270).
+    # Asserted explicitly rather than relaxed to ANY — the flag is the fix, so a
+    # regression that drops it must fail here.
+    d.assign_task.assert_called_once_with("t1", "api", override_hold=True)
 
 
 @pytest.mark.asyncio

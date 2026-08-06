@@ -192,11 +192,31 @@ class TaskCoordinator:
         task_id: str,
         worker_name: str,
         actor: str = "user",
+        override_hold: bool = False,
     ) -> bool:
         """Assign (queue) a task to a worker without sending it.
 
         The task moves to ASSIGNED status. Call :meth:`start_task` to
         actually send the task message to the worker's PTY.
+
+        ``override_hold`` permits assigning a HOLD-tagged task. Pass it ONLY from
+        a deliberate operator action.
+
+        WHY IT EXISTS. ``task.is_available`` answers "may the AUTO-ASSIGN DRONE
+        pick this up?" — its own docstring says so, and #894 excludes HOLD from it
+        so parked work is never auto-dispatched. This method used that same
+        predicate to answer a different question, "may this caller route the task
+        deliberately?", so the mechanism that stops the drone also stopped the
+        operator and HOLD became a trap nobody could route out of. The operator
+        hit it assigning #1270, whose subject is HOLD tasks being unreachable
+        because a precondition is unsatisfiable for the whole class.
+
+        IT IS OPT-IN ON PURPOSE. Defaulting it True would hand the capability to
+        the Queen's directive path and the proposal coordinator as well, which
+        would trade a routing defect for exactly the auto-dispatch of parked work
+        that #894 prevents. Explicit is not automatic. The auto-assigner selects
+        through ``board.available_tasks`` — a separate mechanism this does not
+        touch — so HOLD stays out of the drone's candidate set either way.
         """
         from swarm.server.daemon import TaskOperationError
 
@@ -207,12 +227,25 @@ class TaskCoordinator:
         task = d.task_board.get(task_id)
         if not task:
             raise TaskOperationError(f"Task '{task_id}' not found")
-        if not task.is_available:
+        # A HOLD task is UNASSIGNED by design — that is the hold mechanism — so
+        # the only thing separating it from an assignable task is the tag.
+        assignable = task.is_available or (
+            override_hold and task.status == TaskStatus.UNASSIGNED and task.is_on_hold
+        )
+        if not assignable:
+            detail = (
+                " — it is on hold; assign it explicitly from the dashboard"
+                if (task.is_on_hold and not override_hold)
+                else ""
+            )
             raise TaskOperationError(
-                f"Task '{task_id}' is not available ({task.status.value})", status_code=409
+                f"Task '{task_id}' is not available ({task.status.value}){detail}",
+                status_code=409,
             )
 
-        result = d.task_board.assign(task_id, worker_name)
+        # Threaded through: board.assign gates on is_available too, so relaxing
+        # only this method's check would still refuse at the board layer.
+        result = d.task_board.assign(task_id, worker_name, override_hold=override_hold)
         if result:
             d.task_history.append(task_id, TaskAction.ASSIGNED, actor=actor, detail=worker_name)
             d.drone_log.add(
