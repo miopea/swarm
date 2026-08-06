@@ -192,23 +192,33 @@ def test_relabelling_broadcasts_so_the_dashboard_sees_it(board):
     assert events, "re-label persisted without firing a change event"
 
 
-def test_block_for_operator_does_not_set_the_awaiting_operator_sentinel(board):
-    """DOCUMENTS CURRENT BEHAVIOUR, which is inconsistent and is NOT fixed here.
+def test_block_for_operator_registers_as_an_operator_ask(board):
+    """#1287, OPERATOR DECISION 2026-08-06 — changed deliberately, not incidentally.
 
-    ``board.block_for_operator`` — the verb named for operator blocking — calls
-    ``task.block(reason)`` with no ``external_ref``, so ``external_blocker_ref``
-    stays empty and ``is_awaiting_operator`` is FALSE. The sentinel is set only by
-    the worker-facing ``swarm_block_on_operator``, which routes through
-    ``block_on_external`` with ``AWAITING_OPERATOR_REF``.
+    This test previously asserted the OPPOSITE and existed to fail if anyone changed
+    it, precisely so the change would be a decision rather than a drift. It failed;
+    this is the revisit it demanded.
 
-    So the Queen's auto-park path produces tasks that are operator-blocked in
-    substance but do not appear in the awaiting-operator batch that exists to collect
-    exactly those. Filed separately rather than fixed inside #1269: changing what
-    ``block_for_operator`` writes alters which tasks the Queen surfaces to the
-    operator, which is a behaviour change needing its own decision.
+    ``block_for_operator`` used to call ``task.block(reason)`` with no ref, so the
+    verb NAMED for operator blocking left ``is_awaiting_operator`` FALSE — producing
+    tasks that were operator-blocked in substance and appeared in no batch at all.
+    The operator was never asked. Same failure #1070 created the sentinel to fix, on
+    a different entry point.
 
-    This test exists so the inconsistency is recorded rather than discovered again,
-    and so that fixing it fails HERE and forces this note to be revisited.
+    THE OPERATOR'S REASONING, verbatim: "if we park it either is me telling the queen
+    or I need to know." Both callers match — ``server/proposals.py`` is an
+    operator-APPROVED park proposal (he told the Queen), and ``server/daemon.py``'s
+    #762 token-ceiling governor is the case he needs to know about. So both belong in
+    the batch.
+
+    AND THE TWO ARE DELIBERATELY NOT DISTINGUISHED. #1287 asked whether "the Queen
+    parked a stalled worker" should stay separable from "a worker asked a question".
+    The operator's answer collapses them: both need the same outcome, which is
+    reaching him. Recorded here rather than only in the task, because this is where
+    someone would try to re-split them.
+
+    VOLUME, measured before deciding: 39 TASK_PARKED and 46 PARK_PROPOSED entries
+    across a 1243-task board, so this adds a trickle to the batch, not a flood.
     """
     t = board.create(title="queen auto-park")
     board.assign(t.id, "swarm")
@@ -217,30 +227,33 @@ def test_block_for_operator_does_not_set_the_awaiting_operator_sentinel(board):
 
     after = board.get(t.id)
     assert after.status == TaskStatus.BLOCKED
-    assert after.external_blocker_ref == "", "block_for_operator started recording a ref"
-    assert after.is_awaiting_operator is False, (
-        "block_for_operator now registers as awaiting-operator — that is arguably the "
-        "correct fix, but it changes which tasks the Queen batches to the operator, so "
-        "update this test deliberately and revisit its docstring"
+    assert after.external_blocker_ref == AWAITING_OPERATOR_REF
+    assert after.is_awaiting_operator is True, (
+        "a Queen auto-park is not in the operator's batch — he is not being asked"
     )
+    assert after.assigned_worker == "swarm", "the park dropped the owner"
+    assert after.block_reason == "stalled on a human decision", "the reason was lost"
 
 
-def test_relabel_can_promote_a_queen_autopark_into_an_operator_ask(board):
-    """The practical value of the new verb for the inconsistency above: whatever
-    ``block_for_operator`` failed to record can now be corrected in place, without
-    the task leaving BLOCKED."""
+def test_a_queen_autopark_can_be_relabelled_to_an_artifact_wait(board):
+    """The reverse direction, now that an auto-park starts as an operator ask. If the
+    operator answers and the task turns out to be waiting on a release instead, it can
+    be re-labelled in place — and it must LEAVE the batch, or he keeps being asked
+    about something he has already settled."""
     t = board.create(title="queen auto-park")
     board.assign(t.id, "swarm")
     board.activate(t.id)
-    board.block_for_operator(t.id, "stalled")
-    assert board.get(t.id).is_awaiting_operator is False
+    board.block_for_operator(t.id, "over token ceiling")
+    assert board.get(t.id).is_awaiting_operator is True
 
     board.relabel_blocker(
-        t.id, external_ref=AWAITING_OPERATOR_REF, reason="operator decision required"
+        t.id, external_ref="vendor-pr#88", reason="operator raised the ceiling; waiting on vendor"
     )
 
-    assert board.get(t.id).is_awaiting_operator is True
-    assert board.get(t.id).status == TaskStatus.BLOCKED
+    after = board.get(t.id)
+    assert after.is_awaiting_operator is False, "still in the batch after being settled"
+    assert after.status == TaskStatus.BLOCKED
+    assert after.assigned_worker == "swarm"
 
 
 # --- the MCP surface, and AC-2's history row -------------------------------

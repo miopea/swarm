@@ -8,7 +8,14 @@ from typing import TYPE_CHECKING
 
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
-from swarm.tasks.task import PARKED_TAG, SwarmTask, TaskPriority, TaskStatus, TaskType
+from swarm.tasks.task import (
+    AWAITING_OPERATOR_REF,
+    PARKED_TAG,
+    SwarmTask,
+    TaskPriority,
+    TaskStatus,
+    TaskType,
+)
 
 if TYPE_CHECKING:
     from swarm.tasks.store import TaskStore
@@ -785,7 +792,21 @@ class TaskBoard(EventEmitter):
             task = self._tasks.get(task_id)
             if task is None or task.status != TaskStatus.ACTIVE:
                 return False
-            task.block(reason)
+            # #1287: record the AWAITING_OPERATOR_REF sentinel, so the task enters
+            # the operator's batch of asks. It previously called ``task.block(reason)``
+            # with no ref, leaving ``is_awaiting_operator`` FALSE — so the verb NAMED
+            # for operator blocking produced tasks that were operator-blocked in
+            # substance and appeared in no batch at all, and the operator was never
+            # asked. Same failure #1070 created this sentinel to fix, on a different
+            # entry point.
+            #
+            # OPERATOR DECISION 2026-08-06, verbatim reasoning: "if we park it either
+            # is me telling the queen or I need to know." Both callers match that —
+            # ``proposals.py`` is an operator-approved park proposal (he told the
+            # Queen) and ``daemon.py``'s #762 token-ceiling governor is the case he
+            # needs to know about. So both belong in the batch, and the two are NOT
+            # kept distinguishable: the operator stated they need the same outcome.
+            task.block(reason, AWAITING_OPERATOR_REF)
             self._persist()
             self._notify()
             _log.info("task %s blocked (operator-park): %s", task_id, reason[:80])
