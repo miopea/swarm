@@ -196,7 +196,56 @@ def test_on_a_running_loop_nothing_warns_and_the_frame_is_scheduled(caplog):
         assert not [r for r in caplog.records if r.levelno >= logging.WARNING], (
             "warned about a frame that was scheduled normally"
         )
-        for h in hub._broadcast_pending.values():
+        for _loop, h in hub._broadcast_pending.values():
             h.cancel()
 
     asyncio.run(_go())
+
+
+# --- the debounce latch: one orphaned handle kills a frame type forever (#1294) ---
+
+
+def test_a_debounced_frame_does_not_latch_when_its_flush_never_fires():
+    """THE LATCH, and it explains "it only updates when I click".
+
+    ``broadcast`` debounces ``tasks_changed`` by storing a TimerHandle in
+    ``_broadcast_pending`` and returning. The ONLY thing that ever removes that entry
+    is ``_flush_broadcast``, which runs when the handle fires. So if a handle is ever
+    scheduled on a loop that stops before the 100ms elapses, the entry is never
+    removed — and every subsequent ``tasks_changed`` sees ``msg_type in
+    self._broadcast_pending``, schedules nothing, and returns. The frame type is dead
+    for the remaining life of the process, silently: no exception, no warning, and the
+    RuntimeError branch is never reached because there IS a running loop.
+
+    That matches the operator's report precisely. ``tasks_changed`` and
+    ``worker_changed`` are debounced; his Activity events are not, so they keep
+    arriving over the same live socket while the task panel never updates. Clicking a
+    filter chip issues a plain HTTP fetch, which has nothing to do with the hub — so
+    the board is always correct the instant he interacts, and never before.
+    """
+    hub = BroadcastHub(track_task=lambda t: None)
+    hub.ws_clients.add(_FakeWs())  # type: ignore[arg-type]
+
+    async def _arm() -> None:
+        hub.broadcast({"type": "tasks_changed"})  # schedules, then this loop closes
+
+    asyncio.run(_arm())
+    assert "tasks_changed" in hub._broadcast_pending, (
+        "positive control: the orphaned handle must actually be registered, otherwise "
+        "this test proves nothing about the latch"
+    )
+
+    sent: list[dict] = []
+    hub._send_ws_now = lambda data: sent.append(data)  # type: ignore[method-assign]
+
+    async def _later() -> None:
+        hub.broadcast({"type": "tasks_changed"})
+        await asyncio.sleep(0.3)
+
+    asyncio.run(_later())
+    assert sent, (
+        "a later tasks_changed was SWALLOWED because a stale entry from a dead loop "
+        "still sat in _broadcast_pending. Nothing cancels or expires that entry, so "
+        "the frame type stays dead until the daemon restarts — the task panel then "
+        "only ever updates when the operator clicks something"
+    )

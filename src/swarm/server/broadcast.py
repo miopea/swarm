@@ -41,7 +41,13 @@ class BroadcastHub:
         # Hook for intercepting WS broadcasts (used by test runner)
         self._broadcast_hook: Callable[[dict[str, Any]], None] | None = None
         # Debounce: coalesce same-type broadcasts within 100ms
-        self._broadcast_pending: dict[str, asyncio.TimerHandle] = {}
+        # The LOOP is stored alongside the handle deliberately. A TimerHandle does not
+        # expose the loop it was scheduled on through any public API, and without that
+        # we cannot tell a live debounce from one stranded on a loop that has since
+        # stopped — which is the difference between a working task panel and one that
+        # only updates when the operator clicks something. See broadcast().
+        self._broadcast_pending: dict[str, tuple[asyncio.AbstractEventLoop, asyncio.TimerHandle]]
+        self._broadcast_pending = {}
         self._broadcast_latest: dict[str, dict[str, Any]] = {}
         self._track_task = track_task
 
@@ -58,34 +64,77 @@ class BroadcastHub:
         if msg_type in self._DEBOUNCE_TYPES:
             # Store latest payload; schedule flush if not already pending
             self._broadcast_latest[msg_type] = data
-            if msg_type not in self._broadcast_pending:
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    # No loop: the frame is gone. Silent in CLI/test contexts is
-                    # correct (nobody is listening), but dropping a frame that
-                    # CONNECTED CLIENTS were owed is the stale-dashboard shape —
-                    # the mutation is real and durable and nothing can see it —
-                    # and it left no forensic anchor at all. Operators run at
-                    # default WARNING, so this is the level that reaches them.
-                    if self.ws_clients:
-                        _log.warning(
-                            "dropped %r broadcast owed to %d client(s): no running "
-                            "event loop on this call path",
-                            msg_type,
-                            len(self.ws_clients),
-                            stack_info=True,
-                        )
-                    return
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No loop: the frame is gone. Silent in CLI/test contexts is
+                # correct (nobody is listening), but dropping a frame that
+                # CONNECTED CLIENTS were owed is the stale-dashboard shape —
+                # the mutation is real and durable and nothing can see it —
+                # and it left no forensic anchor at all. Operators run at
+                # default WARNING, so this is the level that reaches them.
+                if self.ws_clients:
+                    _log.warning(
+                        "dropped %r broadcast owed to %d client(s): no running "
+                        "event loop on this call path",
+                        msg_type,
+                        len(self.ws_clients),
+                        stack_info=True,
+                    )
+                return
+
+            # THE LATCH THIS GUARDS AGAINST, because it is not obvious and it is
+            # permanent. The only thing that ever removed an entry from
+            # _broadcast_pending was _flush_broadcast, which runs when the handle
+            # FIRES. Schedule one on a loop that stops before the 100ms elapses and
+            # the entry is never removed, so every later broadcast of that type found
+            # the key present, scheduled nothing and returned. The frame type was then
+            # dead for the whole life of the process — no exception, no warning, and
+            # not even the RuntimeError branch above, because there IS a running loop.
+            #
+            # The operator saw exactly that: tasks_changed and worker_changed are
+            # debounced while his Activity events are not, so those kept arriving over
+            # the same live socket while the task panel never updated once. Clicking a
+            # filter chip issues a plain HTTP fetch that never touches this hub, which
+            # is why the board was always right the instant he interacted and never
+            # before.
+            pending = self._broadcast_pending.get(msg_type)
+            if pending is not None and not self._pending_is_live(pending, loop):
+                pending[1].cancel()
+                del self._broadcast_pending[msg_type]
+                pending = None
+                # Loud, because a stranded debounce means frames of this type have
+                # been silently swallowed since it was stranded.
+                _log.warning(
+                    "discarding a stranded %r debounce scheduled on a loop that is no "
+                    "longer running; frames of this type were being dropped silently",
+                    msg_type,
+                    stack_info=True,
+                )
+            if pending is None:
                 handle = loop.call_later(
                     self._DEBOUNCE_DELAY,
                     self._flush_broadcast,
                     msg_type,
                 )
-                self._broadcast_pending[msg_type] = handle
+                self._broadcast_pending[msg_type] = (loop, handle)
             return
 
         self._send_ws_now(data)
+
+    @staticmethod
+    def _pending_is_live(
+        pending: tuple[asyncio.AbstractEventLoop, asyncio.TimerHandle],
+        loop: asyncio.AbstractEventLoop,
+    ) -> bool:
+        """Can this pending debounce still fire and clear itself?
+
+        Only if it belongs to the loop we are on now, that loop is open, and the handle
+        was not cancelled. Anything else is stranded: it will never run _flush_broadcast,
+        so it will never remove its own key.
+        """
+        prev_loop, handle = pending
+        return prev_loop is loop and not prev_loop.is_closed() and not handle.cancelled()
 
     def _flush_broadcast(self, msg_type: str) -> None:
         """Flush a debounced broadcast for *msg_type*."""
