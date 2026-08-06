@@ -290,6 +290,18 @@
         else if (el.dataset.inputAction === 'msgFilterChanged') msgFilterChanged();
     });
 
+    // #1291 item 1: the mobile worker switcher.
+    // DELEGATED on document, deliberately: partials/worker_list.html is re-rendered on
+    // every workers_changed swap, so a listener bound directly to the <select> would be
+    // dropped on the first worker state change and the dropdown would go dead — the
+    // kind of failure that looks intermittent rather than broken.
+    // Calls window.selectWorker, the same entry point the desktop pills use.
+    document.addEventListener('change', function(e) {
+        if (!e.target || e.target.id !== 'worker-switcher-select') return;
+        var name = e.target.value;
+        if (name && typeof window.selectWorker === 'function') window.selectWorker(name);
+    });
+
     // Mobile email file upload (visible button for touch devices)
     document.addEventListener('change', function(e) {
         if (e.target.id !== 'mobile-email-upload') return;

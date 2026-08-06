@@ -45,6 +45,39 @@
     </div>
 </div>
 {% endmacro %}
+{# #1291 item 1: MOBILE SWITCHER. The pill strip below stays for desktop; on mobile
+   CSS hides it and shows this instead. Rendered HERE, inside the partial, on purpose:
+   the partial re-renders on every workers_changed swap, so the dropdown stays in sync
+   with worker state for free rather than needing its own JS sync path.
+   Sorted active-first (BUZZING/WAITING before RESTING/SLEEPING/STUNG) because the
+   operator's complaint was scrolling to FIND the active worker. #}
+{# Explicit state order, NOT sort(attribute='state'): alphabetical would put
+   WAITING last, and WAITING is the state that needs the operator most. #}
+{% set _states = ['WAITING', 'BUZZING', 'STUNG', 'RESTING', 'SLEEPING'] %}
+<div class="worker-switcher">
+    <select id="worker-switcher-select" aria-label="Switch worker">
+        {% for st in _states %}
+        {% for w in workers | selectattr('state', 'equalto', st) | sort(attribute='name') %}
+        <option value="{{ w.name }}" {% if w.name == selected_worker %}selected{% endif %}>{{ w.state }} · {{ w.name }} ({{ w.provider }})</option>
+        {% endfor %}
+        {% endfor %}
+        {# Any state not in the list above still has to appear, or a worker becomes
+           unreachable from the only mobile switcher. #}
+        {% for w in workers if w.state not in _states %}
+        <option value="{{ w.name }}" {% if w.name == selected_worker %}selected{% endif %}>{{ w.state }} · {{ w.name }} ({{ w.provider }})</option>
+        {% endfor %}
+    </select>
+    {# The pinned active chip: the operator chose "dropdown PLUS the active worker
+       always visible", so switching never loses sight of who you are looking at. #}
+    {% if selected_worker %}
+    {% for w in workers if w.name == selected_worker %}
+    <span class="worker-switcher-active {{ state_color(w.state) }}" data-state="{{ w.state }}"
+          title="{{ w.name }} — {{ w.state }} for {{ w.state_duration }}">
+        {{ worker_bee(w.state) }}<span class="worker-switcher-active-name">{{ w.name }}</span>
+    </span>
+    {% endfor %}
+    {% endif %}
+</div>
 {% for w in workers %}
 {{ worker_row(w, selected_worker, worker_tasks) }}
 {% endfor %}

@@ -1708,6 +1708,9 @@
             outline-offset: 2px;
         }
         .worker-item:focus-visible { outline: 2px solid var(--lavender); outline-offset: -2px; }
+        /* #1291 item 1: the mobile worker switcher. Hidden at desktop widths, where
+           the pill/card list is fine and has room for meta + context bar. */
+        .worker-switcher { display: none; }
 
         /* Config page */
         .config-section {
@@ -2528,6 +2531,64 @@
             .worker-item .context-bar { display: none; }
             .worker-item.selected { border-color: var(--lavender); background: rgba(168,143,217,0.2); }
             .worker-list > .action-bar { display: none; }
+
+            /* #1291 item 1 — REPLACE THE HORIZONTAL STRIP ON MOBILE.
+               Operator: "I find myself scrolling left and right all the time to find
+               active workers." Evidence 084049 + 095352: the strip clipped mid-word
+               ("sculpt-studio (cla…"), and with 16 workers the active one can sit
+               entirely off-screen. A scroller's cost grows with worker count; a
+               dropdown's does not.
+               Affordance chosen by the operator in interview: dropdown for switching
+               PLUS the active worker pinned beside it, so switching never loses sight
+               of who you are looking at.
+               The pills are hidden rather than deleted — desktop still uses them, and
+               they remain the drag-to-reorder surface there. */
+            .worker-switcher {
+                display: flex;
+                align-items: center;
+                gap: 0.4rem;
+                padding: 0.3rem;
+                min-width: 0;
+            }
+            .worker-switcher > select {
+                flex: 1 1 auto;
+                min-width: 0;
+                font-family: inherit;
+                font-size: 0.8rem;
+                padding: 0.35rem 0.5rem;
+                border-radius: 6px;
+                border: 1px solid var(--border);
+                background: var(--surface);
+                color: var(--text);
+            }
+            .worker-switcher-active {
+                flex: 0 0 auto;
+                display: inline-flex;
+                align-items: center;
+                gap: 0.25rem;
+                max-width: 45%;
+                font-size: 0.8rem;
+                font-weight: bold;
+                padding: 0.25rem 0.5rem;
+                border-radius: 16px;
+                border: 1px solid var(--lavender);
+                background: rgba(168,143,217,0.18);
+            }
+            .worker-switcher-active-name {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+            /* The pills and their scroll-fade are what the dropdown replaces. The
+               ::after fade exists only because the row scrolled (#543); with no
+               scroller there is nothing to fade, and leaving it would paint a
+               gradient over the switcher. */
+            .worker-list > .panel-body > .worker-item { display: none; }
+            .worker-list > .panel-body {
+                flex-direction: column;
+                overflow-x: hidden;
+            }
+            .worker-list::after { content: none; }
 
             /* Detail area: terminal gets 2/3, bottom panel 1/3 */
             .detail-area {

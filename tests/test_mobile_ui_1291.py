@@ -152,3 +152,124 @@ def test_the_filter_bar_still_scrolls_its_own_container():
     assert re.search(r"\.tab-group\s*\{[^}]*overflow-x:\s*auto", _BASE, re.S), (
         "the tab strip's own-container scrolling was removed"
     )
+
+
+# --- item 1: the worker strip becomes a dropdown on mobile ----------------
+
+
+_PARTIAL = (_WEB / "partials" / "worker_list.html").read_text()
+
+
+def test_the_mobile_switcher_is_rendered_by_the_partial():
+    """Item 1. Rendered INSIDE the partial on purpose: it re-renders on every
+    workers_changed swap, so the dropdown stays in sync with worker state without a
+    separate JS sync path that could drift."""
+    assert "worker-switcher-select" in _PARTIAL, "no mobile switcher in the worker partial"
+    assert "worker-switcher-active" in _PARTIAL, "the pinned active-worker chip is missing"
+
+
+def test_waiting_workers_are_not_sorted_last():
+    """The switcher orders states EXPLICITLY. sort(attribute='state') is alphabetical,
+    which would put WAITING last — and WAITING is the state that needs the operator
+    most, so burying it would defeat the point of the change."""
+    # Strip Jinja comments first: the template's own comment EXPLAINS why the
+    # alphabetical sort is not used, and an earlier version of this test matched that
+    # explanation and failed. A scan that matches the prose describing a bug reports
+    # the bug as present.
+    code = re.sub(r"\{#.*?#\}", "", _PARTIAL, flags=re.S)
+    assert "sort(attribute='state')" not in code, "alphabetical state sort would bury WAITING"
+    order = re.search(r"_states\s*=\s*\[([^\]]*)\]", _PARTIAL)
+    assert order, "no explicit state order found"
+    states = [x.strip().strip("'\"") for x in order.group(1).split(",")]
+    assert states.index("WAITING") < states.index("SLEEPING"), f"bad order: {states}"
+
+
+def test_a_worker_in_an_unlisted_state_still_appears():
+    """If a new WorkerState is added, an explicit order list would silently drop it —
+    and the dropdown is the ONLY way to reach a worker on mobile, so a dropped worker
+    is an unreachable worker."""
+    assert "w.state not in _states" in _PARTIAL, "workers in unlisted states would vanish"
+
+
+def test_the_switcher_change_handler_is_delegated():
+    """A directly-bound listener would die on the first htmx swap of the worker list,
+    which presents as an intermittently dead dropdown rather than a broken one."""
+    assert "worker-switcher-select" in _JS
+    m = re.search(
+        r"document\.addEventListener\('change'[^)]*\)[^{]*\{[^}]*worker-switcher-select", _JS, re.S
+    )
+    assert m, "the switcher handler is not delegated on document"
+
+
+def test_the_pills_and_their_scroll_fade_are_hidden_on_mobile_not_deleted():
+    """Desktop still uses the pill list (it is also the drag-to-reorder surface), so
+    they are hidden on mobile rather than removed. The ::after scroll fade goes with
+    them — it exists only because the row scrolled (#543), and leaving it would paint a
+    gradient over the new switcher."""
+    assert re.search(
+        r"\.worker-list\s*>\s*\.panel-body\s*>\s*\.worker-item\s*\{\s*display:\s*none", _BASE
+    ), "the mobile pills are not hidden"
+    assert re.search(r"\.worker-list::after\s*\{\s*content:\s*none", _BASE), (
+        "the scroll fade still paints with no scroller under it"
+    )
+    assert ".worker-item {" in _BASE, "the pill styles were deleted; desktop needs them"
+
+
+def _render_worker_partial(workers, selected="swarm"):
+    """Render the real partial with PRODUCTION-SHAPED data (plain dicts, as
+    ``web/app.py::_worker_dicts`` emits).
+
+    NOT MagicMock, and that distinction cost me a near-miss worth recording: Jinja's
+    ``selectattr('state','equalto',X)`` returns ZERO matches against MagicMock objects
+    while working correctly on dicts and real objects. A mock-based render made the
+    switcher look broken — every normal worker missing, only the unlisted-state
+    fallback rendering — and I nearly "fixed" correct template code because of it.
+    That is the mirror of #1281, where a MagicMock board made a genuinely broken fix
+    look fine. Assert against the shape production actually passes.
+    """
+    import jinja2
+
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader(str(_WEB)), autoescape=True)
+    return env.get_template("partials/worker_list.html").render(
+        workers=workers, selected_worker=selected, worker_tasks={}, queen=None
+    )
+
+
+def _w(name, state, provider="claude"):
+    return {
+        "name": name,
+        "state": state,
+        "provider": provider,
+        "path": "/tmp",
+        "revive_count": 0,
+        "worktree_branch": "",
+        "state_duration": "2m",
+        "in_config": True,
+        "needs_operator_input": state == "WAITING",
+        "context_pct": 0.0,
+        "state_icon": "",
+        "tokens": 0,
+    }
+
+
+def test_the_switcher_renders_every_worker_in_the_intended_order():
+    """The load-bearing render test. The dropdown is the ONLY way to reach a worker on
+    mobile once the pills are hidden, so a worker missing from it is a worker that
+    cannot be opened at all."""
+    workers = [
+        _w("swarm", "BUZZING"),
+        _w("sculpt-studio", "WAITING"),
+        _w("api", "SLEEPING"),
+        _w("zz", "WEIRD_STATE"),
+    ]
+    html = _render_worker_partial(workers)
+    opts = re.findall(r'<option value="([^"]+)"', html)
+
+    assert sorted(opts) == sorted(["swarm", "sculpt-studio", "api", "zz"]), (
+        f"a worker is missing from the switcher and is unreachable on mobile: {opts}"
+    )
+    assert opts[0] == "sculpt-studio", f"WAITING must come first, got {opts}"
+    assert opts.index("api") > opts.index("swarm"), "SLEEPING sorted above BUZZING"
+    assert 'value="swarm" selected' in html, "the current worker is not preselected"
+    assert "worker-switcher-active" in html, "no pinned active chip"
+    assert html.count('class="worker-item') >= 4, "desktop pills were lost"
