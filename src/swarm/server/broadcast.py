@@ -62,6 +62,20 @@ class BroadcastHub:
                 try:
                     loop = asyncio.get_running_loop()
                 except RuntimeError:
+                    # No loop: the frame is gone. Silent in CLI/test contexts is
+                    # correct (nobody is listening), but dropping a frame that
+                    # CONNECTED CLIENTS were owed is the stale-dashboard shape —
+                    # the mutation is real and durable and nothing can see it —
+                    # and it left no forensic anchor at all. Operators run at
+                    # default WARNING, so this is the level that reaches them.
+                    if self.ws_clients:
+                        _log.warning(
+                            "dropped %r broadcast owed to %d client(s): no running "
+                            "event loop on this call path",
+                            msg_type,
+                            len(self.ws_clients),
+                            stack_info=True,
+                        )
                     return
                 handle = loop.call_later(
                     self._DEBOUNCE_DELAY,
@@ -87,7 +101,17 @@ class BroadcastHub:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return  # No running event loop (CLI/test context)
+            # Reached only when ws_clients is non-empty (checked above), so a
+            # real frame is being dropped — see the sibling warning in
+            # broadcast(). Never silent here.
+            _log.warning(
+                "dropped %r broadcast owed to %d client(s): no running event "
+                "loop on this call path",
+                data.get("type", ""),
+                len(self.ws_clients),
+                stack_info=True,
+            )
+            return
         # Pre-filter closed clients synchronously
         dead: list[web.WebSocketResponse] = [ws for ws in self.ws_clients if ws.closed]
         for ws in dead:

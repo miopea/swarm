@@ -27,6 +27,17 @@
     let reconnectTimer = null;
     let reconnectDelay = 1000;
     const MAX_RECONNECT_DELAY = 30000;
+    // Has this page ever had an open main WS? Gates the on-reconnect panel
+    // resync in ws.onopen. It used to be gated on `reconnectDelay > 1000`,
+    // which was a proxy for "we retried at least once" and silently failed on
+    // the two paths that reconnect WITHOUT going through onclose's backoff
+    // doubling: forceReconnectMainWs() resets the delay to 1000 itself, and the
+    // restart watchdog reconnects while `_restarting` makes onclose return
+    // early, before the doubling. Both land in onopen with the delay still at
+    // 1000, so `1000 > 1000` was false and every panel stayed stale behind a
+    // green connection dot. The real question was never the backoff value but
+    // "is this a RE-connect", so ask that directly.
+    let hasConnectedBefore = false;
     let prevWorkerStates = {}; // track states for STUNG detection
 
     // Tracked intervals for bulk cleanup on page unload
@@ -536,7 +547,7 @@
         ws.onopen = function() {
             var wasDisconnected = !document.getElementById('ws-dot').classList.contains('connected');
             document.getElementById('ws-dot').classList.add('connected');
-            if (wasDisconnected && reconnectDelay > 1000) {
+            if (wasDisconnected && hasConnectedBefore) {
                 showToast('Connection restored');
                 // Dev-only: if the daemon came back on a new build, reload the
                 // page so we don't keep running stale cached assets. No-op in
@@ -554,6 +565,10 @@
                 if (typeof refreshPipelines === 'function') refreshPipelines();
             }
             reconnectDelay = 1000;
+            // Set LAST: the resync above must see the pre-open value, so the
+            // first connect on a freshly-rendered page doesn't re-fetch panels
+            // that the server just rendered.
+            hasConnectedBefore = true;
             if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
         };
 
