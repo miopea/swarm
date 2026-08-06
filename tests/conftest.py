@@ -132,6 +132,11 @@ def _isolate_logging():
     with (
         patch.object(_swarm_logging, "setup_logging", _test_setup),
         patch.object(_cli, "setup_logging", _test_setup),
+        # #1285: ALSO redirect the default path. Patching setup_logging only helps
+        # when the call goes through this module's attribute; anything that reaches
+        # the real function with log_file=None would still land on the production
+        # log. Belt and braces, because the failure is silent.
+        patch.object(_swarm_logging, "_DEFAULT_LOG_FILE", "/dev/null"),
     ):
         # Also neutralise the logger right now for tests that never
         # call setup_logging but still emit warnings.
@@ -424,3 +429,65 @@ def make_daemon(
 
     d.tasks_coord = TaskCoordinator(d)
     return d
+
+
+# --- #1285: nothing may reattach a handler on the production log -------------
+#
+# The session fixture above clears the ``swarm`` logger once and patches the two
+# call sites it knows about. That was not enough: 3400 test-generated lines
+# (pytest socket paths, mock tracebacks) reached ~/.swarm/swarm.log across
+# 2026-08-05/06, and they were INFO-level, so something re-configured logging
+# MID-SESSION — after the one-time clear. An isolated run of the tests that
+# emitted them is clean, which is why this leaked for so long: it only appears
+# when an earlier test in the same session re-attaches a real file handler.
+#
+# So the guard is per-test and behavioural rather than a one-time patch of the
+# paths we happen to know about. It does not care WHO attached the handler.
+
+_PROD_LOG = str(Path.home() / ".swarm" / "swarm.log")
+
+# Tests that were caught re-attaching, reported at session end so the culprit is
+# named rather than merely neutralised.
+_LOG_REATTACHERS: list[str] = []
+
+
+def _strip_prod_log_handlers() -> bool:
+    """Remove any handler writing to the production log. True if one was found."""
+    found = False
+    for name in ("swarm", ""):  # the swarm namespace, and the root logger
+        logger = logging.getLogger(name)
+        for h in list(logger.handlers):
+            target = getattr(h, "baseFilename", None)
+            if target and os.path.abspath(target) == os.path.abspath(_PROD_LOG):
+                logger.removeHandler(h)
+                try:
+                    h.close()
+                except Exception:
+                    pass
+                found = True
+    return found
+
+
+@pytest.fixture(autouse=True)
+def _no_production_log_writes(request):
+    """Strip production-log handlers before AND after every test.
+
+    Before: so a handler attached by an earlier test cannot pollute this one.
+    After: so this test's own re-attachment is recorded against its name, which is
+    what turns "the log is dirty" into "this test dirtied it".
+    """
+    _strip_prod_log_handlers()
+    yield
+    if _strip_prod_log_handlers():
+        _LOG_REATTACHERS.append(request.node.nodeid)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Name the tests that re-attached a production-log handler."""
+    if _LOG_REATTACHERS:
+        print(
+            f"\n#1285: {len(_LOG_REATTACHERS)} test(s) re-attached a handler on "
+            f"{_PROD_LOG} (stripped, but fix at source):"
+        )
+        for nodeid in dict.fromkeys(_LOG_REATTACHERS):
+            print(f"  - {nodeid}")
