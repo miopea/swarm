@@ -8226,7 +8226,16 @@
                 else c.classList.toggle('active', activePriorityFilters.has(c.dataset.priority));
             });
             if (activeTaskFilters.size || activePriorityFilters.size) refreshTasks();
-        } catch(e) {}
+        } catch(e) {
+            // Never silent. If this throws part-way, activeTaskFilters can be left
+            // EMPTY while the chips still read as active from the previous render —
+            // and then refreshTasks() sends no status= param, re-fetches the
+            // UNFILTERED list, and a closed task stays on screen until the operator
+            // clicks a chip. That is #1294's exact symptom, produced entirely
+            // client-side and previously swallowed by `catch(e) {}`.
+            console.error('[swarm] restoring saved task filters failed; the panel may be '
+                + 'running unfiltered while the chips look active', e);
+        }
     })();
 
     // --- Bee icon map for toasts & notifications ---
