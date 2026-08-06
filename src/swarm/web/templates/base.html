@@ -2290,16 +2290,18 @@
            a menu is up. :has() is already the idiom here (see .detail-area:has(...)). */
         body:has(.mobile-overflow-menu.open) .term-dpad { display: none !important; }
 
-        /* #1291 item 6, OBSCURED TEXT. Evidence 084049 + 095352: the pad sits over live
-           transcript text and hid words mid-sentence. It is anchored top-right ON
-           PURPOSE — it was moved there so it would stop colliding with the mobile
-           composer — so moving it back down would recreate that. Instead it idles
-           translucent and comes to full strength on touch/hover/focus, so the text
-           underneath stays readable without the control moving or shrinking. */
-        .term-dpad { opacity: 0.55; transition: opacity 140ms ease; }
-        .term-dpad:hover,
-        .term-dpad:focus-within,
-        .term-dpad:active { opacity: 1; }
+        /* #1291 item 6, OBSCURED TEXT — REVERTED, operator 2026-08-06: "now it is
+           natively transparent on light mode. How it looked colour wise on the last
+           pass was good."
+           I had idled the whole pad at 0.55 opacity so transcript text would show
+           through. That was the wrong trade: it dimmed the ARROWS as well as the
+           background, which undid the light-mode contrast fix from the pass before —
+           the exact complaint that started item 6. Readability of the control beats
+           readability of the pixels behind it, because the control is what you are
+           reaching for.
+           So no idle transparency. The per-button background is already translucent
+           (rgba), which is as far as see-through should go, and the layering fix above
+           handles the case that actually mattered: the pad covering a menu. */
 
         /* Spinner animation */
         @keyframes spin { to { transform: rotate(360deg); } }
@@ -2573,6 +2575,34 @@
                 padding: 0.3rem;
                 min-width: 0;
             }
+            /* Operator 2026-08-06: "put the dropdown and the queen next to each other,
+               give me more real estate on mobile. Make it 75/25."
+               The Queen card and the worker switcher were two stacked full-width rows,
+               costing ~2 rows of vertical space before any transcript showed. Sharing one
+               row buys that back. 75 to the switcher because it carries the long text
+               (state + name + provider); 25 to the Queen, which only needs to stay
+               tappable and identifiable. */
+            .worker-list > .panel-body {
+                flex-direction: row;
+                align-items: stretch;
+                gap: 0.3rem;
+            }
+            .worker-list > .panel-body > .queen-card {
+                flex: 0 0 25%;
+                min-width: 0;
+                margin: 0;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                padding: 0.3rem 0.35rem;
+                overflow: hidden;
+            }
+            .worker-list > .panel-body > .worker-switcher {
+                flex: 1 1 75%;
+                min-width: 0;
+                padding: 0;
+            }
             .worker-switcher > select {
                 flex: 1 1 auto;
                 min-width: 0;
@@ -2607,10 +2637,7 @@
                scroller there is nothing to fade, and leaving it would paint a
                gradient over the switcher. */
             .worker-list > .panel-body > .worker-item { display: none; }
-            .worker-list > .panel-body {
-                flex-direction: column;
-                overflow-x: hidden;
-            }
+            .worker-list > .panel-body { overflow-x: hidden; }
             .worker-list::after { content: none; }
 
             /* Detail area: terminal gets 2/3, bottom panel 1/3 */

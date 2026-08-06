@@ -295,13 +295,62 @@ def test_the_dpad_stands_down_while_the_overflow_menu_is_open():
     ), "the d-pad does not stand down while the overflow menu is open"
 
 
-def test_the_dpad_idles_translucent_so_text_underneath_is_readable():
-    """The other half: it sits over live transcript text. It is anchored top-right
-    deliberately (moved there to stop colliding with the mobile composer), so the fix is
-    legibility rather than relocation."""
-    assert re.search(r"\.term-dpad\s*\{[^}]*opacity:\s*0?\.\d+", _BASE), (
-        "the d-pad has no idle transparency"
+def test_the_dpad_is_not_idled_translucent():
+    """REVERSED by the operator 2026-08-06: "now it is natively transparent on light
+    mode. How it looked colour wise on the last pass was good."
+
+    I had idled the whole pad at 0.55 opacity so transcript text would show through.
+    Wrong trade: it dimmed the ARROWS as well as the background, undoing the light-mode
+    contrast fix from the pass before — which was the complaint that opened item 6 in
+    the first place. Readability of the control beats readability of what is behind it,
+    because the control is what you are reaching for. The per-button rgba background is
+    as see-through as this should get.
+    """
+    # EVERY .term-dpad rule, not just the first. An earlier version of this test used
+    # re.search and therefore inspected only the first match — so re-adding a SECOND
+    # `.term-dpad { opacity: .55 }` later in the sheet passed all 23 tests. The negative
+    # control is the only reason that was caught: a test that cannot detect the
+    # regression it guards is worse than no test, because it reads as coverage.
+    rules = re.findall(r"\.term-dpad\s*\{([^}]*)\}", _BASE)
+    assert rules, "the .term-dpad rule is missing"
+    offenders = [r.strip() for r in rules if "opacity" in r]
+    assert not offenders, (
+        f"the d-pad is idled translucent again, which dims the arrows in light mode: {offenders}"
     )
-    assert re.search(r"\.term-dpad:focus-within[^{]*\{[^}]*opacity:\s*1", _BASE), (
-        "the d-pad never returns to full opacity, so it would be hard to use"
+
+
+def test_the_dpad_keeps_its_light_mode_contrast_treatment():
+    """The fix the operator explicitly said was good. Regressing it is what the
+    transparency change effectively did."""
+    assert re.search(r'\[data-theme="light"\][^}]*\.term-dpad-btn', _BASE), (
+        "the light-theme contrast override was lost"
     )
+
+
+# --- operator layout tweaks, 2026-08-06 -----------------------------------
+
+
+def test_the_queen_card_and_switcher_share_one_row_at_25_75():
+    """Operator: "put the dropdown and the queen next to each other, give me more real
+    estate on mobile. Make it 75/25." They were two stacked full-width rows, costing two
+    rows of vertical space before any transcript appeared. 75 goes to the switcher
+    because it carries the long text; 25 to the Queen, which only has to stay tappable.
+    """
+    assert re.search(
+        r"\.worker-list\s*>\s*\.panel-body\s*\{[^}]*flex-direction:\s*row", _BASE, re.S
+    ), "the queen card and switcher are not on one row"
+    assert re.search(
+        r"\.panel-body\s*>\s*\.queen-card\s*\{[^}]*flex:\s*0\s+0\s+25%", _BASE, re.S
+    ), "the queen card is not 25%"
+    assert re.search(
+        r"\.panel-body\s*>\s*\.worker-switcher\s*\{[^}]*flex:\s*1\s+1\s+75%", _BASE, re.S
+    ), "the switcher is not 75%"
+
+
+def test_the_queen_card_is_labelled_queen_not_queen_dashboard():
+    """Operator: change the term to "Queen". At 25% width "Queen Dashboard" would not
+    fit anyway, so the rename and the layout change are the same fix."""
+    card = (_WEB / "partials" / "queen_card.html").read_text()
+    assert "Queen Dashboard" not in card, "the card still says Queen Dashboard"
+    assert "Queen" in card
+    assert "Queen Dashboard" not in _DASH, "dashboard.html still says Queen Dashboard"
