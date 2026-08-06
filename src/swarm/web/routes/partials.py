@@ -8,7 +8,7 @@ from typing import Any
 import aiohttp_jinja2
 from aiohttp import web
 
-from swarm.server.helpers import MAX_QUERY_LIMIT, get_daemon
+from swarm.server.helpers import MAX_QUERY_LIMIT, _display_sort, get_daemon
 from swarm.web.app import _queen_dict, _system_log_dicts, _task_dicts, _worker_dicts
 from swarm.web.log_filter import LOG_LEVEL_INCLUSIVE, line_matches_level
 from swarm.worker.worker import WorkerState
@@ -112,6 +112,12 @@ async def handle_partial_tasks(request: web.Request) -> dict[str, Any]:
         tasks = [
             t for t in tasks if q in t["title"].lower() or q in (t.get("description") or "").lower()
         ]
+
+    # Order for display BEFORE paginating, so the ceiling below can only ever
+    # discard finished work. #1277: all_tasks is oldest-first and this board is
+    # 1226/1234 DONE, so the unsorted view truncated away exactly the newest
+    # open tasks — the operator's #1275 and blocked #1255 were never rendered.
+    tasks = _display_sort(tasks)
 
     # Pagination — limit DOM size for large task lists
     total, tasks, has_more = _paginate(request, tasks)

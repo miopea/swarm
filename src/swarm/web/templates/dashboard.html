@@ -297,6 +297,9 @@
                     <button class="filter-chip" data-filter="unassigned" data-action="switchTaskFilter">Unassigned</button>
                     <button class="filter-chip" data-filter="assigned" data-action="switchTaskFilter">Assigned</button>
                     <button class="filter-chip" data-filter="active" data-action="switchTaskFilter">In Progress</button>
+                    {# #1278: without this chip, BLOCKED was reachable only under
+                       "All" — where pagination then truncated it away entirely. #}
+                    <button class="filter-chip" data-filter="blocked" data-action="switchTaskFilter">Blocked</button>
                     <button class="filter-chip" data-filter="done" data-action="switchTaskFilter">Done</button>
                     <button class="filter-chip" data-filter="failed" data-action="switchTaskFilter">Failed</button>
                     <span class="filter-separator"></span>

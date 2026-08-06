@@ -21,6 +21,52 @@ _log = get_logger("server.helpers")
 WORKER_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 MAX_QUERY_LIMIT = 1000
 
+# Statuses whose work is finished. Ordering them last is what keeps a ceiling
+# from eating open work (see _display_sort).
+_FINISHED_STATUSES = frozenset({"done", "failed"})
+
+# Mirrors tasks.board._PRIORITY_ORDER. Duplicated deliberately rather than
+# imported: this operates on the plain dicts the web layer emits, and importing
+# from tasks.board here would drag the board into the HTTP helpers.
+_DISPLAY_PRIORITY_ORDER = {"urgent": 0, "high": 1, "normal": 2, "low": 3}
+
+
+def _display_sort(tasks: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Order tasks for DISPLAY so a pagination ceiling can only drop finished work.
+
+    #1277. ``board.all_tasks`` sorts ``(priority, created_at)`` ASCENDING, and
+    ``_paginate`` then keeps the first ``MAX_QUERY_LIMIT``. On a board that is
+    1226/1234 DONE, those two combine to discard exactly the newest open tasks —
+    the operator could not see or edit #1269/#1270/#1274/#1275 or blocked #1255
+    from the default view, because none of them were rendered at all.
+
+    Three keys, in order:
+
+    1. **Unfinished before finished.** This is the load-bearing one: open work
+       can only be truncated once every finished task already has been, so the
+       ceiling stops being able to hide actionable tasks.
+    2. **Priority**, matching the board so urgent still reads at the top.
+    3. **Newest first**, by task number. ``created_at`` is not in the display
+       payload and number is monotonic with creation, so it is the available
+       proxy — and it reverses the specific ordering that made recency the thing
+       most likely to be lost.
+
+    DISPLAY ONLY. This must never be used for dispatch ordering: ``all_tasks``
+    has ~40 call sites and reordering it would change which task a worker picks
+    up. Making a task visible must not make it startable (#1270).
+    """
+
+    def key(t: dict[str, object]) -> tuple[int, int, int]:
+        finished = 1 if str(t.get("status", "")) in _FINISHED_STATUSES else 0
+        priority = _DISPLAY_PRIORITY_ORDER.get(str(t.get("priority", "normal")), 2)
+        try:
+            number = int(t.get("number") or 0)
+        except (TypeError, ValueError):
+            number = 0
+        return (finished, priority, -number)
+
+    return sorted(tasks, key=key)
+
 
 def json_error(
     msg: str, status: int = 400, *, error_id: str | None = None, request_id: str | None = None

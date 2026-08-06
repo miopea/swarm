@@ -138,6 +138,16 @@
 {% if not tasks %}
 <div class="empty-state"><img src="/static/bees/honeycomb.svg" class="bee-icon bee-hero" alt=""><div class="mt-sm">No tasks yet</div><div class="text-muted text-sm mt-sm">Create one with <strong>+ New Task</strong> above, or drag an email here</div></div>
 {% endif %}
+{# #1277: handle_partial_tasks always computed task_total/task_has_more and this
+   template used neither, so dropping 234 tasks looked exactly like having 1000.
+   A limit nobody can observe is the defect; the limit's value is not. Finished
+   work sorts last, so anything omitted here is done or failed. #}
+{% if task_has_more %}
+<div class="task-truncation-notice text-muted text-sm">
+    Showing {{ tasks|length }} of {{ task_total }} tasks — completed work beyond
+    this point is omitted. Filter by status to narrow the list.
+</div>
+{% endif %}
 {% if task_summary %}
 <div data-summary="{{ task_summary }}" class="hidden"></div>
 {% endif %}
