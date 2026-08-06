@@ -9,7 +9,13 @@ import aiohttp_jinja2
 from aiohttp import web
 
 from swarm.server.helpers import MAX_QUERY_LIMIT, _display_sort, get_daemon
-from swarm.web.app import _queen_dict, _system_log_dicts, _task_dicts, _worker_dicts
+from swarm.web.app import (
+    _queen_dict,
+    _system_log_dicts,
+    _task_dicts,
+    _worker_dicts,
+    _worker_task_titles,
+)
 from swarm.web.log_filter import LOG_LEVEL_INCLUSIVE, line_matches_level
 from swarm.worker.worker import WorkerState
 
@@ -40,15 +46,11 @@ def _paginate(request: web.Request, items: list[Any]) -> tuple[int, list[Any], b
 @aiohttp_jinja2.template("partials/worker_list.html")
 async def handle_partial_workers(request: web.Request) -> dict[str, Any]:
     d = get_daemon(request)
-    worker_tasks: dict[str, str] = {}
-    for t in d.task_board.active_tasks:
-        if t.assigned_worker:
-            worker_tasks[t.assigned_worker] = t.title
     return {
         "workers": _worker_dicts(d),
         "queen": _queen_dict(d),
         "selected_worker": request.query.get("worker"),
-        "worker_tasks": worker_tasks,
+        "worker_tasks": _worker_task_titles(d),
     }
 
 

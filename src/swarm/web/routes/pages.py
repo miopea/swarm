@@ -8,7 +8,14 @@ import aiohttp_jinja2
 from aiohttp import web
 
 from swarm.server.helpers import get_daemon
-from swarm.web.app import _format_age, _get_ws_token, _queen_dict, _task_dicts, _worker_dicts
+from swarm.web.app import (
+    _format_age,
+    _get_ws_token,
+    _queen_dict,
+    _task_dicts,
+    _worker_dicts,
+    _worker_task_titles,
+)
 
 
 @aiohttp_jinja2.template("config.html")
@@ -74,12 +81,6 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         for p in d.proposal_store.pending
     ]
 
-    # Build worker->task_title map
-    worker_tasks: dict[str, str] = {}
-    for t in d.task_board.active_tasks:
-        if t.assigned_worker:
-            worker_tasks[t.assigned_worker] = t.title
-
     return {
         "workers": _worker_dicts(d),
         "queen": _queen_dict(d),
@@ -93,7 +94,7 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         "ws_token": _get_ws_token(d),
         "proposals": proposals,
         "proposal_count": len(proposals),
-        "worker_tasks": worker_tasks,
+        "worker_tasks": _worker_task_titles(d),
         "tool_buttons": [{"label": b.label, "command": b.command} for b in d.config.tool_buttons],
         "action_buttons": [
             {

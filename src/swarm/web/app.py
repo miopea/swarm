@@ -97,6 +97,34 @@ def _format_age(ts: float) -> str:
     return f"{int(delta // 86400)}d ago"
 
 
+def _worker_task_titles(daemon: SwarmDaemon) -> dict[str, str]:
+    """worker name → the title of the task it is ACTIVELY working, if any.
+
+    ONLY ACTIVE. Operator-reported 2026-08-06: "Tasks shouldn't appear in the
+    worker's title bar. If it's not set to in progress, assigned just means it's a
+    pending task for that worker." Both call sites used
+    ``task_board.active_tasks``, whose docstring says "assigned OR in progress" —
+    so a merely QUEUED task rendered in the worker's title bar as though the
+    worker were working it, which is a claim about what a worker is doing right
+    now made from a fact about what it has been given.
+
+    ``active_tasks`` itself is deliberately left alone: the IdleWatcher and the
+    directive drone both genuinely need ASSIGNED as well as ACTIVE (a worker with
+    queued work is not idle-with-nothing-to-do), so narrowing it would break the
+    nudge logic. The conflation was in the display, not the predicate.
+
+    Shared by ``handle_partial_workers`` and ``handle_dashboard``, which had four
+    identical lines each — a duplication where fixing one and missing the other
+    would leave the initial page render and every subsequent htmx swap disagreeing
+    about what a worker is doing.
+    """
+    titles: dict[str, str] = {}
+    for t in daemon.task_board.all_tasks:
+        if t.status == TaskStatus.ACTIVE and t.assigned_worker:
+            titles[t.assigned_worker] = t.title
+    return titles
+
+
 def _task_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
     all_tasks = daemon.task_board.all_tasks
     completed_ids = {t.id for t in all_tasks if t.status == TaskStatus.DONE}
