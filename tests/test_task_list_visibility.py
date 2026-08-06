@@ -356,3 +356,97 @@ def test_summary_has_no_stray_punctuation():
     assert " ," not in summary, f"stray space before a comma: {summary!r}"
     assert ",," not in summary
     assert not summary.rstrip().endswith(","), f"trailing comma: {summary!r}"
+
+
+# --- what the DEFAULT view returns, and why a finished task stays on screen (#1294)
+
+
+def _run_partial(rows: list[dict[str, Any]], query: str = "") -> dict[str, Any]:
+    """Drive the real handler over *rows*, optionally with a query string."""
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from aiohttp.test_utils import make_mocked_request
+
+    import swarm.web.app  # noqa: F401  # breaks the partials<->app circular import
+    from swarm.web.routes import partials
+
+    daemon = MagicMock()
+    daemon.task_board.summary.return_value = "x"
+    daemon.config.task_buttons = []
+    request = make_mocked_request("GET", "/partials/tasks" + (f"?{query}" if query else ""))
+    request.app["daemon"] = daemon
+
+    original = partials._task_dicts
+    try:
+        partials._task_dicts = lambda _d: list(rows)  # type: ignore[assignment]
+        return asyncio.run(partials.handle_partial_tasks.__wrapped__(request))
+    finally:
+        partials._task_dicts = original  # type: ignore[assignment]
+
+
+def _rows() -> list[dict[str, Any]]:
+    """Three open tasks, one just-finished normal task, and older finished work at
+    higher priority — the live board's shape on 2026-08-06."""
+    return [
+        {"number": 1294, "status": "active", "priority": "normal"},
+        {"number": 1290, "status": "blocked", "priority": "normal"},
+        {"number": 1255, "status": "assigned", "priority": "normal"},
+        {"number": 1292, "status": "done", "priority": "normal"},  # just completed
+        {"number": 334, "status": "done", "priority": "high"},
+        {"number": 326, "status": "done", "priority": "urgent"},
+    ]
+
+
+def test_the_unfiltered_view_returns_finished_tasks():
+    """With NO status filter the handler returns finished tasks too. Pinned so that
+    hiding finished work by default would be a deliberate decision with this test
+    updated, rather than a silent change to what the operator is looking at — he
+    confirmed 2026-08-06 that the panel should keep obeying the chips as it does.
+
+    THIS IS NOT AN EXPLANATION OF #1294, and an earlier version of this docstring
+    wrongly offered it as one. I argued the unfiltered view would re-render a
+    completed row instead of removing it, so "it didn't disappear" might be correct
+    behaviour rather than a stale panel. The operator's screenshot killed that: his
+    chips are Backlog+Unassigned+Assigned+In Progress+Blocked with Done and Failed
+    OFF, so #1292 was never in his filtered set once it closed and a real refresh
+    would have dropped it. #1294 is a genuine live-update failure. Kept as a
+    reminder that a plausible mechanism found by reading code is not evidence about
+    what the operator was looking at — one screenshot outranked the whole argument."""
+    numbers = {t["number"] for t in _run_partial(_rows())["tasks"]}
+    assert 1292 in numbers, (
+        "the unfiltered view no longer returns finished tasks. If that is the new "
+        "intended default, update this test and #1294 — it changes the meaning of "
+        "every past report about rows not disappearing"
+    )
+    assert {1294, 1290, 1255} <= numbers, "positive control: open work is still returned"
+
+
+def test_an_open_status_filter_excludes_finished_tasks():
+    """The other half of the fork. Under a filter that names only open statuses, a
+    completed task IS dropped — so if the operator had such a filter active, the row
+    failing to disappear WOULD be a stale panel. The two cases are distinguishable
+    only by which chip was active, which is why that is the question to ask him."""
+    ctx = _run_partial(_rows(), "status=assigned,active,blocked")
+    numbers = {t["number"] for t in ctx["tasks"]}
+    assert 1292 not in numbers, "a finished task survived an open-status-only filter"
+    assert {1294, 1290, 1255} <= numbers, "the filter dropped open work it should keep"
+
+
+def test_a_just_finished_task_does_not_render_next_to_the_open_work():
+    """The non-obvious mechanism, and worth pinning because it is what makes the
+    unfiltered view confusing rather than merely verbose.
+
+    ``_display_sort`` orders finished tasks by PRIORITY before recency, so a
+    just-completed normal-priority task sorts BELOW every older high/urgent one.
+    On the live board that put #1292 at row 26 — under ~22 months-old done tasks —
+    so it neither disappears nor appears where the operator would look for it."""
+    ordered = _run_partial(_rows())["tasks"]
+    positions = {t["number"]: i for i, t in enumerate(ordered)}
+    assert positions[1292] > positions[326], (
+        "a just-finished normal task now sorts above older urgent finished work; if "
+        "that was deliberate, this test and #1294's analysis both need revisiting"
+    )
+    assert max(positions[n] for n in (1294, 1290, 1255)) < positions[326], (
+        "positive control: all open work must still sort above all finished work"
+    )
