@@ -59,8 +59,8 @@ def _board(active_by_worker: dict[str, list[MagicMock]]) -> MagicMock:
     def active(name: str) -> list[MagicMock]:
         return active_by_worker.get(name, [])
 
-    b.active_tasks_for_worker = MagicMock(side_effect=active)
-    # IdleWatcher.sweep now snapshots ``active_tasks`` once and buckets by
+    b.assigned_or_active_tasks_for_worker = MagicMock(side_effect=active)
+    # IdleWatcher.sweep now snapshots ``assigned_or_active_tasks`` once and buckets by
     # ``assigned_worker`` — give the mock board a flat list + assignee on
     # each mock task so the bucketing finds them.
     flat: list[MagicMock] = []
@@ -68,7 +68,7 @@ def _board(active_by_worker: dict[str, list[MagicMock]]) -> MagicMock:
         for t in tasks:
             t.assigned_worker = name
             flat.append(t)
-    b.active_tasks = flat
+    b.assigned_or_active_tasks = flat
     return b
 
 
@@ -447,3 +447,43 @@ async def test_send_failure_for_one_worker_does_not_stop_sweep() -> None:
     # worker whose send failed.
     assert drone_log.add.call_count == 1
     assert drone_log.add.call_args.args[1] == "bravo"
+
+
+# ---------------------------------------------------------------------------
+# #1284: the rename must not narrow the predicate
+# ---------------------------------------------------------------------------
+
+
+def test_nudge_still_fires_for_a_worker_holding_only_queued_work():
+    """AC-5 of #1284, and the exact case a careless rename would silently break.
+
+    ``assigned_or_active_tasks`` (formerly ``active_tasks``) returns ASSIGNED **or**
+    ACTIVE. The rename existed because the OLD name read as ACTIVE-only and had
+    produced six display bugs — but the predicate itself is load-bearing here: a
+    worker holding queued-but-unstarted work is NOT idle-with-nothing-to-do, and it
+    is exactly who this nudge is for. Since #1282, ASSIGNED is also the normal
+    resting state of a dispatched-but-unasserted task, so narrowing the predicate to
+    match the old name would have silenced the nudge for the common case.
+
+    Uses a real TaskBoard rather than a mock: a MagicMock board would return a
+    truthy mock from any attribute and pass no matter what the predicate did.
+    """
+    from swarm.tasks.board import TaskBoard
+    from swarm.tasks.task import TaskStatus
+
+    board = TaskBoard()
+    t = board.create(title="queued, never started")
+    board.assign(t.id, "swarm")
+    assert board.get(t.id).status == TaskStatus.ASSIGNED, "fixture did not stay ASSIGNED"
+    assert not [x for x in board.all_tasks if x.status == TaskStatus.ACTIVE], (
+        "positive control: nothing may be ACTIVE, or this proves nothing about ASSIGNED"
+    )
+
+    watcher, _sender, _log = _watcher(board=board)
+    buckets = watcher._bucket_active_tasks_by_worker()
+
+    assert "swarm" in buckets, (
+        "a worker holding only ASSIGNED work is not bucketed — the predicate was "
+        "narrowed to ACTIVE-only and this worker will never be nudged again"
+    )
+    assert [x.number for x in buckets["swarm"]] == [t.number]

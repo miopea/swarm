@@ -3205,7 +3205,7 @@ async def test_complete_task_without_queued_work_does_not_dispatch(daemon):
 
 @pytest.mark.asyncio
 async def test_complete_task_skips_in_progress_next_task(daemon):
-    """``active_tasks_for_worker`` returns both ASSIGNED and IN_PROGRESS;
+    """``assigned_or_active_tasks_for_worker`` returns both ASSIGNED and IN_PROGRESS;
     the auto-chain should only dispatch an ASSIGNED follow-up. An
     IN_PROGRESS task is already being worked on in some PTY; starting it
     again would interleave output.

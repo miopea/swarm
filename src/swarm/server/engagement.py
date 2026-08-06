@@ -147,7 +147,7 @@ def engagement_snapshot(
                 started = getattr(active, "started_at", None)
                 if started:
                     info.active_started_ago = max(0.0, now - float(started))
-            assigned = board.active_tasks_for_worker(worker_name)
+            assigned = board.assigned_or_active_tasks_for_worker(worker_name)
             info.assigned_count = len(assigned or [])
         except Exception:
             pass

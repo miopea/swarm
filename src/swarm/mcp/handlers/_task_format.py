@@ -22,7 +22,7 @@ _TASK_STATUS_MAX_LIMIT = 500
 # #876: BLOCKED is an OPEN state — a task held on an internal/external blocker
 # is tracked work awaiting resume, NOT a closed task. It must stay in the
 # default "mine"/open views and sort with open work (top), not sink into the
-# done/failed bucket. (It is still excluded from ``active_tasks``, so the
+# done/failed bucket. (It is still excluded from ``assigned_or_active_tasks``, so the
 # idle-watcher does not nudge it — visibility and nudge-gating are separate.)
 _OPEN_STATUSES = {"backlog", "unassigned", "assigned", "active", "blocked"}
 

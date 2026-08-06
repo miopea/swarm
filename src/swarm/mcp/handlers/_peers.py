@@ -63,7 +63,7 @@ TOOLS: list[dict[str, Any]] = [
 
 def _peer_row(d: SwarmDaemon, worker: Any, now: float) -> dict[str, Any]:
     state = worker.display_state
-    active = d.task_board.active_tasks_for_worker(worker.name)
+    active = d.task_board.assigned_or_active_tasks_for_worker(worker.name)
     current = next((t for t in active if t.status == TaskStatus.ACTIVE), None)
     queued = sum(1 for t in active if t.status == TaskStatus.ASSIGNED)
     idle_seconds = int(now - worker.state_since) if state in _IDLE_STATES else 0

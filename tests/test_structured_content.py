@@ -152,7 +152,7 @@ def _make_queen_daemon(
     if tasks is not None:
         board = MagicMock()
         board.all_tasks = tasks
-        board.active_tasks_for_worker = MagicMock(side_effect=lambda name: [])
+        board.assigned_or_active_tasks_for_worker = MagicMock(side_effect=lambda name: [])
         daemon.task_board = board
     else:
         daemon.task_board = None

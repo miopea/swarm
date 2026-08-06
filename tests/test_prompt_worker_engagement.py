@@ -45,7 +45,9 @@ def _daemon(
     d.config = HiveConfig(drones=DroneConfig(prompt_collision_window_seconds=window))
     board = MagicMock()
     board.current_task_for_worker.return_value = active
-    board.active_tasks_for_worker.return_value = assigned if assigned is not None else []
+    board.assigned_or_active_tasks_for_worker.return_value = (
+        assigned if assigned is not None else []
+    )
     d.task_board = board
     store = MagicMock()
     store.get_unread.return_value = unread if unread is not None else []

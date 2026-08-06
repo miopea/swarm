@@ -234,7 +234,7 @@ class TestOversightMonitor:
         w = _make_worker(state_since=time.time() - 1200)
         task = _make_task()
         board = MagicMock()
-        board.active_tasks_for_worker.return_value = [task]
+        board.assigned_or_active_tasks_for_worker.return_value = [task]
 
         signals = monitor.collect_signals([w], board, worker_outputs={"w1": "output"})
         # Should have buzzing signal (drift may or may not fire)

@@ -273,12 +273,12 @@ class DirectiveExecutor:
         if not task or not task.is_available:
             _log.info("Ignoring assign_task for %s: task %s not available", worker.name, task_id)
             return False
-        active_tasks = self.task_board.active_tasks_for_worker(worker.name)
-        if active_tasks:
+        assigned_or_active_tasks = self.task_board.assigned_or_active_tasks_for_worker(worker.name)
+        if assigned_or_active_tasks:
             _log.info(
                 "Ignoring assign_task for %s: worker already has %d active task(s)",
                 worker.name,
-                len(active_tasks),
+                len(assigned_or_active_tasks),
             )
             return False
         if self._pending_proposals_check and self._pending_proposals_check():

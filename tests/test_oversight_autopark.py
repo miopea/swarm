@@ -34,7 +34,7 @@ class _Board:
     def __init__(self, task: SwarmTask | None) -> None:
         self._task = task
 
-    def active_tasks_for_worker(self, name: str) -> list[SwarmTask]:
+    def assigned_or_active_tasks_for_worker(self, name: str) -> list[SwarmTask]:
         return [self._task] if self._task is not None else []
 
 

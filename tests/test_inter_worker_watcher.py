@@ -98,7 +98,7 @@ def _watcher(
 
 
 def _task_board(workers_with_tasks: set[str] | None = None) -> MagicMock:
-    """Fake TaskBoard whose ``active_tasks_for_worker`` returns a non-empty
+    """Fake TaskBoard whose ``assigned_or_active_tasks_for_worker`` returns a non-empty
     list for any worker name in ``workers_with_tasks``, empty otherwise.
 
     Lets tests pin the task-aware filter widening: a worker in the set
@@ -109,10 +109,12 @@ def _task_board(workers_with_tasks: set[str] | None = None) -> MagicMock:
     workers_with_tasks = workers_with_tasks or set()
     board = MagicMock()
 
-    def active_tasks_for_worker(name: str) -> list[object]:
+    def assigned_or_active_tasks_for_worker(name: str) -> list[object]:
         return [MagicMock()] if name in workers_with_tasks else []
 
-    board.active_tasks_for_worker = MagicMock(side_effect=active_tasks_for_worker)
+    board.assigned_or_active_tasks_for_worker = MagicMock(
+        side_effect=assigned_or_active_tasks_for_worker
+    )
     return board
 
 
@@ -567,7 +569,9 @@ async def test_task_board_raising_falls_back_to_with_task_filter() -> None:
     default as ``task_board=None``."""
     store = _store({"hub": [_message("platform", "hub", msg_type="finding")]})
     board = MagicMock()
-    board.active_tasks_for_worker = MagicMock(side_effect=RuntimeError("board exploded"))
+    board.assigned_or_active_tasks_for_worker = MagicMock(
+        side_effect=RuntimeError("board exploded")
+    )
     watcher, sender, _ = _watcher(store=store, task_board=board)
 
     sent = await watcher.sweep([_worker("hub", WorkerState.RESTING)], now=1000.0)

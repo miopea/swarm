@@ -33,7 +33,7 @@ def _msg(sender="api", msg_type="dependency", created_at=0.0):
 def _board(*, active=None, assigned=None):
     b = MagicMock()
     b.current_task_for_worker.return_value = active
-    b.active_tasks_for_worker.return_value = assigned if assigned is not None else []
+    b.assigned_or_active_tasks_for_worker.return_value = assigned if assigned is not None else []
     return b
 
 

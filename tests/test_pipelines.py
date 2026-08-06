@@ -207,7 +207,7 @@ class TestPipelineEngine:
         assert len(ready) == 1
         assert ready[0].id == "write"
         # Task should have been created on the board
-        assert len(board.active_tasks) > 0 or len(board.available_tasks) > 0
+        assert len(board.assigned_or_active_tasks) > 0 or len(board.available_tasks) > 0
 
     def test_complete_step_advances(self, tmp_path: Path) -> None:
         engine, board = self._make_engine(tmp_path)

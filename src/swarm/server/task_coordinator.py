@@ -659,7 +659,7 @@ class TaskCoordinator:
             try:
                 dup = is_duplicate_work(
                     incoming,
-                    board.active_tasks_for_worker(recipient),
+                    board.assigned_or_active_tasks_for_worker(recipient),
                     similarity=similarity,
                     # #1182: compare the work, not the provenance segment.
                     normalize=_dedup_title,
@@ -1007,7 +1007,7 @@ class TaskCoordinator:
             (
                 t
                 for t in sorted(
-                    d.task_board.active_tasks_for_worker(worker_name),
+                    d.task_board.assigned_or_active_tasks_for_worker(worker_name),
                     key=lambda t: t.number,
                 )
                 # #1015: a task the worker deliberately parked is not queued

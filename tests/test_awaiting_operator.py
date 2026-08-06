@@ -74,16 +74,16 @@ def test_task_stays_owned_by_the_worker(monkeypatch) -> None:
 
 def test_idle_watcher_stops_nudging_an_awaiting_operator_task(monkeypatch) -> None:
     """The nudge loop hub actually hit. A BLOCKED task leaves
-    ``active_tasks``, which is what the watcher buckets over."""
+    ``assigned_or_active_tasks``, which is what the watcher buckets over."""
     d = make_daemon(monkeypatch)
     t = _hub_1065(d)
 
-    before = [x.id for x in d.task_board.active_tasks]
+    before = [x.id for x in d.task_board.assigned_or_active_tasks]
     assert t.id in before, "precondition: it was nudgeable"
 
     handle_tool_call(d, "api", "swarm_block_on_operator", {"reason": HUB_REASON})
 
-    after = [x.id for x in d.task_board.active_tasks]
+    after = [x.id for x in d.task_board.assigned_or_active_tasks]
     assert t.id not in after
 
     watcher = IdleWatcher(
@@ -113,7 +113,7 @@ def test_operator_action_unblocks_and_the_worker_resumes(monkeypatch) -> None:
     assert not got.is_awaiting_operator
     assert got.block_reason == "" and got.external_blocker_ref == ""
     # Resumable by the normal momentum machinery, so no Queen prompt.
-    assert got in d.task_board.active_tasks_for_worker("api")
+    assert got in d.task_board.assigned_or_active_tasks_for_worker("api")
 
 
 def test_unblock_refuses_a_task_that_is_not_blocked(monkeypatch) -> None:

@@ -150,7 +150,7 @@ def _resolve_target(
     sole active task iff there is exactly one; omitted with >1 candidate
     REFUSES rather than guessing.
     """
-    candidates = board.active_tasks_for_worker(worker_name)
+    candidates = board.assigned_or_active_tasks_for_worker(worker_name)
     if raw_num is not None and str(raw_num).strip() != "":
         try:
             want = int(raw_num)

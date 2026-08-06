@@ -69,15 +69,15 @@ def test_block_rejects_terminal_and_missing(board):
     assert board.block_on_external("missing-id", "swarm", "ref", "r") is False
 
 
-# --- Criterion #1: not in active_tasks → idle-watcher never nudges -------
+# --- Criterion #1: not in assigned_or_active_tasks → idle-watcher never nudges -------
 
 
 def test_blocked_task_excluded_from_active_tasks(board):
     t = _active(board, "x", "swarm")
     board.block_on_external(t.id, "swarm", "ref", "r")
-    # active_tasks is the IdleWatcher's nudge input — BLOCKED must be absent.
-    assert board.active_tasks == []
-    assert board.active_tasks_for_worker("swarm") == []
+    # assigned_or_active_tasks is the IdleWatcher's nudge input — BLOCKED must be absent.
+    assert board.assigned_or_active_tasks == []
+    assert board.assigned_or_active_tasks_for_worker("swarm") == []
 
 
 # --- Criterion #3: still tracked / visible on the open board ------------

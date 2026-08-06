@@ -215,7 +215,7 @@ class OversightMonitor:
         for worker in workers:
             task = None
             if task_board:
-                active = task_board.active_tasks_for_worker(worker.name)
+                active = task_board.assigned_or_active_tasks_for_worker(worker.name)
                 task = active[0] if active else None
 
             output = worker_outputs.get(worker.name, "")
@@ -450,7 +450,7 @@ if there is clear evidence of being stuck or drifting."""
     ) -> tuple[str, str, str] | None:
         from swarm.tasks.task import TaskStatus
 
-        active = task_board.active_tasks_for_worker(worker.name)
+        active = task_board.assigned_or_active_tasks_for_worker(worker.name)
         task = active[0] if active else None
         if task is None or task.status != TaskStatus.ACTIVE:
             # Not ACTIVE → cannot be an operator-blocked stall; forget any

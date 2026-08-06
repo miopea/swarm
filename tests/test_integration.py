@@ -104,12 +104,12 @@ async def test_task_lifecycle():
     board.assign(task.id, "api")
     assert task.status == TaskStatus.ASSIGNED
     assert len(board.available_tasks) == 0
-    assert len(board.active_tasks) == 1
+    assert len(board.assigned_or_active_tasks) == 1
 
     # Complete
     board.complete(task.id)
     assert task.status == TaskStatus.DONE
-    assert len(board.active_tasks) == 0
+    assert len(board.assigned_or_active_tasks) == 0
 
 
 @pytest.mark.asyncio

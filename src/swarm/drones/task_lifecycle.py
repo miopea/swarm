@@ -347,14 +347,14 @@ class TaskLifecycle:
         # the full task dict under the board lock. With ~10 workers and ~100
         # tasks running every poll cycle this dominated the lifecycle drone.
         tasks_by_worker: dict[str, list[SwarmTask]] = {}
-        for t in self.task_board.active_tasks:
+        for t in self.task_board.assigned_or_active_tasks:
             if t.assigned_worker:
                 tasks_by_worker.setdefault(t.assigned_worker, []).append(t)
         for worker in self.workers:
             if not self._completion_candidate(worker):
                 continue
-            active_tasks = tasks_by_worker.get(worker.name, [])
-            for task in active_tasks:
+            assigned_or_active_tasks = tasks_by_worker.get(worker.name, [])
+            for task in assigned_or_active_tasks:
                 # High-confidence "not done" verdict extends the cooldown.
                 # Queen was >=80% sure the worker hadn't finished; don't burn
                 # an LLM call re-asking on the same state.  Resets when the
@@ -462,7 +462,7 @@ class TaskLifecycle:
         if not self.task_board:
             return []
         workers_with_active: set[str] = {
-            t.assigned_worker for t in self.task_board.active_tasks if t.assigned_worker
+            t.assigned_worker for t in self.task_board.assigned_or_active_tasks if t.assigned_worker
         }
         return [
             w

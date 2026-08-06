@@ -64,7 +64,7 @@ def _nudge_message(task_numbers: list[int]) -> str:
         task_ref = f"#{task_numbers[0]}"
     else:
         task_ref = ", ".join(f"#{n}" for n in task_numbers)
-    # "open", not "active": these are bucketed from ``task_board.active_tasks``,
+    # "open", not "active": these are bucketed from ``task_board.assigned_or_active_tasks``,
     # which is ASSIGNED **or** ACTIVE, so calling them all active told the worker
     # the board said something it did not — the same conflation that put queued
     # tasks in the worker title bar (#1282).
@@ -375,13 +375,13 @@ class IdleWatcher:
     def _bucket_active_tasks_by_worker(self) -> dict[str, list]:
         """Snapshot the board's active tasks once and group by assignee.
 
-        Calling ``active_tasks_for_worker`` inside the sweep loop was O(W·T) —
+        Calling ``assigned_or_active_tasks_for_worker`` inside the sweep loop was O(W·T) —
         each call re-snapshotted the full task dict under the board lock.
-        One pass over ``active_tasks`` plus dict lookups in the loop drops
+        One pass over ``assigned_or_active_tasks`` plus dict lookups in the loop drops
         that to O(T) regardless of worker count.
         """
         bucketed: dict[str, list] = {}
-        for t in self._task_board.active_tasks:
+        for t in self._task_board.assigned_or_active_tasks:
             # #1015: a deliberately-parked task is not work the worker is
             # neglecting — it's work they set down on purpose. Nudging about
             # it is exactly the "repeated idle-watcher nudges" symptom.
@@ -574,7 +574,7 @@ class IdleWatcher:
             return
         if self._task_board is None:
             return
-        active = self._task_board.active_tasks_for_worker(worker_name)
+        active = self._task_board.assigned_or_active_tasks_for_worker(worker_name)
         if not active:
             return
         numbers = sorted({t.number for t in active})

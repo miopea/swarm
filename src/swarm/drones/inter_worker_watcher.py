@@ -420,10 +420,10 @@ class InterWorkerMessageWatcher:
         if self._task_board is None:
             return True
         try:
-            return bool(self._task_board.active_tasks_for_worker(name))
+            return bool(self._task_board.assigned_or_active_tasks_for_worker(name))
         except Exception:
             _log.debug(
-                "inter_worker_watcher: active_tasks_for_worker raised for %s",
+                "inter_worker_watcher: assigned_or_active_tasks_for_worker raised for %s",
                 name,
                 exc_info=True,
             )

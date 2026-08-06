@@ -48,7 +48,7 @@ def _lifecycle(
     worker_busy_check=None,
 ) -> tuple[TaskLifecycle, list[tuple]]:
     board = MagicMock()
-    board.active_tasks = tasks
+    board.assigned_or_active_tasks = tasks
     emitted: list[tuple] = []
 
     lc = TaskLifecycle(

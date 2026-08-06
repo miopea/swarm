@@ -488,15 +488,15 @@ def _bootstrap_task_block(d: SwarmDaemon, worker_name: str) -> str:
     if task_board is None:
         return ""
     try:
-        active_tasks = task_board.active_tasks_for_worker(worker_name)
+        assigned_or_active_tasks = task_board.assigned_or_active_tasks_for_worker(worker_name)
     except Exception:
         _log.warning("failed to fetch active tasks for %s", worker_name, exc_info=True)
         return ""
-    if not active_tasks:
+    if not assigned_or_active_tasks:
         return ""
 
     # Workers are typically assigned a single task at a time; show the first.
-    task = active_tasks[0]
+    task = assigned_or_active_tasks[0]
     description = (task.description or "").strip()
     if len(description) > _BOOTSTRAP_DESC_CHARS:
         description = description[:_BOOTSTRAP_DESC_CHARS].rstrip() + "…"

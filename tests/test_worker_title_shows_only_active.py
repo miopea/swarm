@@ -5,12 +5,12 @@ in progress, assigned just means it's a pending task for that worker."
 
 Both display sites — ``handle_partial_workers`` (every htmx swap) and
 ``handle_dashboard`` (the initial render) — built the worker→task map from
-``task_board.active_tasks``, whose docstring is "Tasks currently assigned or in
+``task_board.assigned_or_active_tasks``, whose docstring is "Tasks currently assigned or in
 progress". So a task merely QUEUED to a worker was rendered in that worker's
 title bar as though the worker were working it: a claim about what a worker is
 doing right now, derived from a fact about what it has been given.
 
-``active_tasks`` is deliberately NOT narrowed. The IdleWatcher
+``assigned_or_active_tasks`` is deliberately NOT narrowed. The IdleWatcher
 (``_bucket_active_tasks_by_worker``) and the directive drone both need ASSIGNED as
 well as ACTIVE — a worker with queued work is not idle-with-nothing-to-do — so
 changing the predicate would break nudge logic to fix a label. The conflation was
@@ -60,8 +60,8 @@ def test_active_tasks_still_includes_assigned_for_the_idle_watcher(d):
     changed to fix a label and a worker with queued work now looks idle."""
     t = d.task_board.create(title="queued")
     d.task_board.assign(t.id, "swarm")
-    assert t.id in {x.id for x in d.task_board.active_tasks}, (
-        "active_tasks stopped including ASSIGNED — IdleWatcher and the directive "
+    assert t.id in {x.id for x in d.task_board.assigned_or_active_tasks}, (
+        "assigned_or_active_tasks stopped including ASSIGNED — IdleWatcher and the directive "
         "drone both depend on that; narrow the display instead"
     )
 
@@ -87,6 +87,7 @@ def test_both_render_paths_use_the_same_computation():
     for mod in (pages, partials):
         src = inspect.getsource(mod)
         assert "_worker_task_titles(d)" in src, f"{mod.__name__} does not use the shared helper"
-        assert "task_board.active_tasks" not in src, (
-            f"{mod.__name__} still derives worker titles from active_tasks, which includes ASSIGNED"
+        assert "task_board.assigned_or_active_tasks" not in src, (
+            f"{mod.__name__} still derives worker titles from "
+            f"assigned_or_active_tasks, which includes ASSIGNED"
         )

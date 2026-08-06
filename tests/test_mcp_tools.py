@@ -1399,7 +1399,7 @@ def queen_daemon(tmp_path):
     d.workers = [queen_w, hub_w]
     d.task_board = MagicMock()
     d.task_board.all_tasks = []
-    d.task_board.active_tasks_for_worker = MagicMock(return_value=[])
+    d.task_board.assigned_or_active_tasks_for_worker = MagicMock(return_value=[])
     return d
 
 

@@ -642,7 +642,7 @@ class TaskBoard(EventEmitter):
         release, a vendor PR merging). Transitions an owned ASSIGNED/ACTIVE
         task → BLOCKED, recording ``watch_ref`` (what it's waiting on) and
         ``reason``. BLOCKED is off-active: it's excluded from
-        ``active_tasks`` so the IdleWatcher never nudges it, yet it stays in
+        ``assigned_or_active_tasks`` so the IdleWatcher never nudges it, yet it stays in
         ``all_tasks`` so it remains visible/tracked (not completed/archived).
         Getting a task back OUT of BLOCKED (#1059): use :meth:`release`,
         which accepts any holdable status and returns the task to UNASSIGNED
@@ -992,7 +992,7 @@ class TaskBoard(EventEmitter):
             return list(result)
 
     @property
-    def active_tasks(self) -> list[SwarmTask]:
+    def assigned_or_active_tasks(self) -> list[SwarmTask]:
         """Tasks currently assigned **or** in progress — NOT just ACTIVE.
 
         THE NAME IS A DEFECT GENERATOR AND THE PREDICATE IS CORRECT. Six
@@ -1009,15 +1009,23 @@ class TaskBoard(EventEmitter):
         idle-with-nothing-to-do — so narrowing the predicate would break nudge and
         dispatch logic to fix a label.
 
-        DECISION (#1283): the right fix is to RENAME this and
-        ``active_tasks_for_worker`` to something that cannot be misread (e.g.
-        ``claimed_tasks`` / ``claimed_tasks_for_worker``), because six instances is
-        a naming problem rather than six independent mistakes. Filed as a separate
-        task rather than done here: it touches drone nudge and dispatch paths whose
-        end-to-end behaviour is not covered by unit tests, and bundling a
-        cross-cutting rename into a display fix would make both harder to revert.
-        Until then, any new caller must read this docstring — if you want only
-        in-progress work, filter ``t.status == TaskStatus.ACTIVE`` yourself.
+        RENAMED IN #1284, which is why the name now states both statuses instead of
+        relying on anyone reading this docstring. It was ``active_tasks``, and the
+        list above is what that cost. ``claimed_tasks`` was the original proposal and
+        was rejected: a BLOCKED task is also "claimed" by its owner while this
+        predicate excludes it, so that name would have invited a new misreading
+        rather than removing one. ``open_tasks`` was rejected too — ``_OPEN_STATUSES``
+        already defines "open" as including BACKLOG and BLOCKED.
+
+        DECISION (#1284): **no ACTIVE-only accessor is provided**, deliberately. Only
+        two callers want in-progress-only work — ``web/app.py::_worker_task_titles``
+        and ``drones/state_tracker.py`` — and each is a one-line filter. Adding
+        ``in_progress_tasks`` + ``in_progress_tasks_for_worker`` alongside this pair
+        would double the surface a reader must keep straight, in a family whose
+        too-similar names just caused six bugs. So if you want only in-progress work,
+        write ``t.status == TaskStatus.ACTIVE`` at the call site: explicit beats
+        another near-miss name, and that explicitness is the property that was
+        missing all along. Revisit if the count of such callers reaches four.
         """
         with self._lock:
             snapshot = list(self._tasks.values())
@@ -1029,7 +1037,7 @@ class TaskBoard(EventEmitter):
             snapshot = list(self._tasks.values())
         return [t for t in snapshot if t.assigned_worker == worker_name]
 
-    def active_tasks_for_worker(self, worker_name: str) -> list[SwarmTask]:
+    def assigned_or_active_tasks_for_worker(self, worker_name: str) -> list[SwarmTask]:
         """Get only ASSIGNED/IN_PROGRESS tasks for a worker (excludes completed)."""
         with self._lock:
             snapshot = list(self._tasks.values())

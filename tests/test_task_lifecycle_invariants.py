@@ -220,8 +220,8 @@ def test_persist_leaves_single_active_untouched(board):
 
 
 def test_blocked_task_ids_uses_active_tasks_property(board):
-    """``TaskBoard.active_tasks`` became a @property in #876, but
-    ``InvariantReconciler.blocked_task_ids`` kept calling it as ``active_tasks()``
+    """``TaskBoard.assigned_or_active_tasks`` became a @property in #876, but
+    ``InvariantReconciler.blocked_task_ids`` kept calling it as ``assigned_or_active_tasks()``
     — a 'list object is not callable' TypeError that fired every sweep and
     silently disabled the whole #405 reconciler (the except in ``run`` swallowed
     it). Regression: the method resolves the binding and returns the matching

@@ -115,7 +115,9 @@ def _handle_view_worker_state(
         summaries: list[str] = []
         workers_payload: list[dict[str, Any]] = []
         for w in d.workers:
-            active = d.task_board.active_tasks_for_worker(w.name) if d.task_board else []
+            active = (
+                d.task_board.assigned_or_active_tasks_for_worker(w.name) if d.task_board else []
+            )
             task = active[0] if active else None
             task_info = f"task #{task.number}: {task.title}" if task else "idle"
             kind_tag = " (queen)" if w.is_queen else ""
@@ -159,7 +161,7 @@ def _handle_view_worker_state(
         except Exception:
             pty_tail = "(pty read failed)"
 
-    active = d.task_board.active_tasks_for_worker(worker.name) if d.task_board else []
+    active = d.task_board.assigned_or_active_tasks_for_worker(worker.name) if d.task_board else []
     task = active[0] if active else None
     task_line = f"#{task.number} [{task.status.value}] {task.title}" if task else "no active task"
     usage = worker.usage.to_dict()

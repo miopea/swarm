@@ -186,7 +186,7 @@ def _task_board_section(board: TaskBoard) -> str:
             if t.tags:
                 lines.append(f"  Tags: {', '.join(t.tags)}")
 
-    active = board.active_tasks
+    active = board.assigned_or_active_tasks
     if active:
         lines.append("\n### Active (assigned/in-progress)")
         for t in active:

@@ -1108,7 +1108,7 @@ class SwarmDaemon(EventEmitter):
     def _worker_task_map(self) -> dict[str, str]:
         """Return {worker_name: task_title} for all assigned/in-progress tasks."""
         result: dict[str, str] = {}
-        for t in self.task_board.active_tasks:
+        for t in self.task_board.assigned_or_active_tasks:
             if t.assigned_worker:
                 result[t.assigned_worker] = t.title
         return result

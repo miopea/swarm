@@ -127,7 +127,7 @@ def test_the_operator_template_is_deliberately_excluded():
 
 
 def test_the_idle_nudge_carries_the_hint_and_does_not_misreport_status():
-    """The nudge buckets from ``task_board.active_tasks``, which is ASSIGNED **or**
+    """The nudge buckets from ``task_board.assigned_or_active_tasks``, which is ASSIGNED **or**
     ACTIVE, so calling them all "active" told the worker the board said something it
     did not — the same conflation that put queued tasks in the worker title bar.
 
@@ -142,5 +142,5 @@ def test_the_idle_nudge_carries_the_hint_and_does_not_misreport_status():
     assert _VERB in msg, "the nudge does not name the verb that would resolve the ambiguity"
     assert "active but appear idle" not in msg, (
         "the nudge still calls ASSIGNED tasks 'active' — it is bucketed from "
-        "active_tasks, which includes merely queued work"
+        "assigned_or_active_tasks, which includes merely queued work"
     )

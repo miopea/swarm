@@ -103,12 +103,12 @@ def _worker_task_titles(daemon: SwarmDaemon) -> dict[str, str]:
     ONLY ACTIVE. Operator-reported 2026-08-06: "Tasks shouldn't appear in the
     worker's title bar. If it's not set to in progress, assigned just means it's a
     pending task for that worker." Both call sites used
-    ``task_board.active_tasks``, whose docstring says "assigned OR in progress" —
+    ``task_board.assigned_or_active_tasks``, whose docstring says "assigned OR in progress" —
     so a merely QUEUED task rendered in the worker's title bar as though the
     worker were working it, which is a claim about what a worker is doing right
     now made from a fact about what it has been given.
 
-    ``active_tasks`` itself is deliberately left alone: the IdleWatcher and the
+    ``assigned_or_active_tasks`` itself is deliberately left alone: the IdleWatcher and the
     directive drone both genuinely need ASSIGNED as well as ACTIVE (a worker with
     queued work is not idle-with-nothing-to-do), so narrowing it would break the
     nudge logic. The conflation was in the display, not the predicate.

@@ -231,9 +231,9 @@ class TestTaskBoard:
         t1 = board.create("A")
         board.create("B")
         board.assign(t1.id, "api")
-        assert len(board.active_tasks) == 1
+        assert len(board.assigned_or_active_tasks) == 1
         board.complete(t1.id)
-        assert len(board.active_tasks) == 0
+        assert len(board.assigned_or_active_tasks) == 0
 
     def test_update_title(self):
         board = TaskBoard()

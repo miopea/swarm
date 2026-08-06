@@ -395,7 +395,7 @@ class PollDispatcher:
                             and p.task_board
                             and p._task_lifecycle._saw_completion
                             and not p.task_board.available_tasks
-                            and not p.task_board.active_tasks
+                            and not p.task_board.assigned_or_active_tasks
                             and all(
                                 w.display_state in (WorkerState.RESTING, WorkerState.SLEEPING)
                                 for w in p.workers

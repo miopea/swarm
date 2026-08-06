@@ -369,7 +369,7 @@ class TestQueries:
         t1 = board.create("a")
         t2 = board.create("b")
         board.assign(t1.id, "alice")
-        active = board.active_tasks
+        active = board.assigned_or_active_tasks
         assert len(active) == 1
         assert active[0].id == t1.id
         assert t2.id not in [t.id for t in active]
@@ -389,7 +389,7 @@ class TestQueries:
         board.assign(t1.id, "alice")
         board.assign(t2.id, "alice")
         board.complete(t1.id)
-        active = board.active_tasks_for_worker("alice")
+        active = board.assigned_or_active_tasks_for_worker("alice")
         assert len(active) == 1
         assert active[0].id == t2.id
 
@@ -593,7 +593,7 @@ class TestBlockForOperator:
         assert t.status == TaskStatus.BLOCKED
         assert "awaiting hand-back" in t.block_reason
         # No longer in the worker's active set → churn loops skip it.
-        assert t not in board.active_tasks_for_worker("project-root")
+        assert t not in board.assigned_or_active_tasks_for_worker("project-root")
 
     def test_block_for_operator_rejects_non_active(self) -> None:
         board = _make_board()

@@ -87,7 +87,7 @@ def daemon() -> MagicMock:
     d.workers = []
     d.task_board = MagicMock()
     d.task_board.all_tasks = []
-    d.task_board.active_tasks_for_worker.return_value = []
+    d.task_board.assigned_or_active_tasks_for_worker.return_value = []
     d.task_board.get.return_value = None
     d.task_board.assign.return_value = True
     d.task_board.unassign.return_value = True
