@@ -251,9 +251,23 @@ class TaskManager:
         return result
 
     def remove_task(self, task_id: str, actor: str = "user") -> bool:
-        """Remove a task. Raises if not found."""
+        """Remove a task from the board. ARCHIVES it (#1298). Raises if not found.
+
+        Was a hard delete, which had two consequences nobody could see. First,
+        ``task_history.task_id`` is ``REFERENCES tasks(id) ON DELETE CASCADE``, so
+        deleting a task destroyed every history row for it — the audit trail that
+        ``swarm_get_learnings`` and playbook synthesis later read. Second, the
+        ``REMOVED`` entry appended immediately below could not be written at all: with
+        ``PRAGMA foreign_keys=ON`` (applied per connection in db/core.py) an insert
+        referencing an already-deleted parent violates the constraint. The record of
+        the removal was the one row guaranteed to be missing.
+
+        Archiving keeps the row, so the cascade never fires and the audit entry has a
+        parent to point at. The task is still gone from the board: archived rows are
+        excluded when the store loads, so every existing query omits them untouched.
+        """
         task = self.require_task(task_id)
-        self.task_board.remove(task_id)
+        self.task_board.archive(task_id)
         self.task_history.append(task_id, TaskAction.REMOVED, actor=actor)
         self.drone_log.add(
             SystemAction.TASK_REMOVED,

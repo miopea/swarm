@@ -22,6 +22,7 @@ from swarm.logging import get_logger
 from swarm.mcp._arg_types import QueenForceCompleteTaskArgs, QueenReassignTaskArgs
 from swarm.mcp.queen_handlers._common import _assert_queen
 from swarm.mcp.types import TextContent
+from swarm.tasks.history import TaskAction
 from swarm.tasks.task import TaskStatus
 
 _log = get_logger("mcp.queen.tasks")
@@ -581,11 +582,107 @@ def _handle_queen_unblock_task(
     return [{"type": "text", "text": unblock_result_text(d.task_board, task, removed)}]
 
 
+QUEEN_ARCHIVE_TOOL: dict[str, Any] = {
+    "name": "queen_archive_task",
+    "description": (
+        "Remove a task from the board — ANY task, not only an unstarted one, which is "
+        "what separates this from the worker's swarm_archive_task (#1298). Call this "
+        "when a task should leave the board without being completed: a duplicate, a "
+        "probe, or one filed in error. The task is "
+        "ARCHIVED, not destroyed: its row and its full task_history are kept and it "
+        "simply stops appearing. Use it for duplicates, probes and tasks filed in "
+        "error. DO NOT use it to make finished work disappear — a closed task's "
+        "resolution has already been served to other workers as a learning, and the "
+        "correction path for that is queen_edit_task / swarm_annotate_resolution. "
+        "Archiving an ACTIVE task takes live work off the board, so say why."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "number": {"type": "integer", "description": "Display number of the task."},
+            "reason": {
+                "type": "string",
+                "description": "Why it is leaving the board — recorded in task_history.",
+            },
+        },
+        "required": ["number", "reason"],
+        "examples": [{"number": 1301, "reason": "duplicate of #1299"}],
+    },
+}
+
+
+def _handle_queen_archive_task(
+    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+) -> list[TextContent]:
+    err = _assert_queen(worker_name)
+    if err:
+        return err
+    board = getattr(d, "task_board", None)
+    if board is None:
+        return [{"type": "text", "text": "Task board unavailable on this daemon."}]
+
+    raw = args.get("number")
+    try:
+        number = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return [{"type": "text", "text": f"'number' must be a task number, got {raw!r}."}]
+
+    reason = str(args.get("reason") or "").strip()
+    if not reason:
+        return [
+            {
+                "type": "text",
+                "text": (
+                    "'reason' is required — it is the only record of why the task left the board."
+                ),
+            }
+        ]
+
+    task = next((t for t in board.all_tasks if t.number == number), None)
+    if task is None:
+        return [{"type": "text", "text": f"No task found with number #{number}."}]
+
+    was = task.status.value
+    if not board.archive(task.id):
+        return [
+            {
+                "type": "text",
+                "text": (
+                    f"Task #{number} could not be archived — the board reported no "
+                    f"change and nothing was modified."
+                ),
+            }
+        ]
+
+    history = getattr(d, "task_history", None)
+    if history is not None:
+        try:
+            history.append(task.id, TaskAction.REMOVED, actor="queen", detail=reason)
+        except Exception:
+            _log.warning(
+                "archived task #%s but failed to record its history entry",
+                number,
+                exc_info=True,
+            )
+
+    return [
+        {
+            "type": "text",
+            "text": (
+                f"Task #{number} archived (was {was}) — off the board, row and "
+                f"task_history kept. Reason recorded: {reason}"
+            ),
+        }
+    ]
+
+
 TOOLS.append(QUEEN_UNBLOCK_TOOL)
+TOOLS.append(QUEEN_ARCHIVE_TOOL)
 
 HANDLERS = {
     "queen_reassign_task": _handle_reassign_task,
     "queen_unblock_task": _handle_queen_unblock_task,
     "queen_force_complete_task": _handle_force_complete_task,
     "queen_edit_task": _handle_edit_task,
+    "queen_archive_task": _handle_queen_archive_task,
 }

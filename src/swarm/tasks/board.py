@@ -196,6 +196,35 @@ class TaskBoard(EventEmitter):
                 return False
         return True
 
+    def archive(self, task_id: str) -> bool:
+        """Soft-delete a task: hide it from the board, keep the row and its history.
+
+        The operator-facing "delete" (#1298). Distinct from :meth:`remove`, which is a
+        HARD delete and stays that way for the test harness — test tasks are artefacts
+        with no history worth keeping, and ``testing/operator.py`` and
+        ``server/test_runner.py`` are its only other callers.
+
+        ORDER IS LOAD-BEARING. The store is stamped BEFORE the task leaves
+        ``self._tasks``, because ``_persist()`` deletes any live row that is missing
+        from memory. Dropping it first and stamping second would hard-delete the row
+        and cascade its ``task_history`` away — precisely the outcome archiving exists
+        to prevent. Returns False without mutating anything if the stamp fails.
+        """
+        with self._lock:
+            if task_id not in self._tasks:
+                return False
+            archiver = getattr(self._store, "archive", None) if self._store else None
+            if archiver is not None:
+                if not archiver(task_id):
+                    return False
+            # No archive-capable store (in-memory board): there is no row to preserve
+            # and therefore no history to lose, so dropping it is equivalent.
+            del self._tasks[task_id]
+            self._scrub_dependency(task_id)
+            self._persist()
+            self._notify()
+        return True
+
     def remove_tasks(self, task_ids: set[str]) -> int:
         """Remove multiple tasks by ID. Returns count removed."""
         removed = 0

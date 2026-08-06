@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any, TypedDict
 
 from swarm.mcp.handlers._annotate import HANDLERS as _ANNOTATE_H
 from swarm.mcp.handlers._annotate import TOOLS as _ANNOTATE_T
+from swarm.mcp.handlers._archive import HANDLERS as _ARCHIVE_H
+from swarm.mcp.handlers._archive import TOOLS as _ARCHIVE_T
 
 # Per-domain modules contribute both their schemas and their handlers.
 from swarm.mcp.handlers._batch import HANDLERS as _BATCH_H
@@ -143,6 +145,7 @@ TOOLS: list[dict[str, Any]] = [
     *_PARK_T,
     *_START_T,
     *_ANNOTATE_T,
+    *_ARCHIVE_T,
     *_RELABEL_T,
     *_UNBLOCK_T,
     *_EMAIL_T,
@@ -164,6 +167,7 @@ _HANDLERS = {
     **_PARK_H,
     **_START_H,
     **_ANNOTATE_H,
+    **_ARCHIVE_H,
     **_RELABEL_H,
     **_UNBLOCK_H,
     **_EMAIL_H,

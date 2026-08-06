@@ -77,7 +77,14 @@ class SqliteTaskStore(BaseStore):
 
     def save(self, tasks: dict[str, SwarmTask]) -> None:
         """Write all tasks to the DB (full replace — deletes removed tasks)."""
-        existing_ids = {r["id"] for r in self._db.fetchall("SELECT id FROM tasks")}
+        # ARCHIVED ROWS ARE NOT CANDIDATES FOR DELETION (#1298). An archived task is
+        # deliberately absent from the in-memory board, so an unfiltered "SELECT id
+        # FROM tasks" would classify it as removed and DELETE it on the very next
+        # persist — cascading its task_history away and defeating the entire point of
+        # a soft delete. Scoping this read to live rows is what makes archiving safe.
+        existing_ids = {
+            r["id"] for r in self._db.fetchall("SELECT id FROM tasks WHERE archived_at IS NULL")
+        }
         removed_ids = existing_ids - set(tasks.keys())
         # Batch delete removed tasks in a single statement
         if removed_ids:
@@ -100,7 +107,12 @@ class SqliteTaskStore(BaseStore):
 
     def load(self) -> dict[str, SwarmTask]:
         """Load all tasks from the DB."""
-        rows = self._db.fetchall(f"SELECT {', '.join(_TASK_COLUMNS)} FROM tasks")
+        # Archived tasks stay out of the board entirely (#1298), so every existing
+        # query excludes them without a single call site changing. They remain in the
+        # DB with their history intact and are reachable by direct query.
+        rows = self._db.fetchall(
+            f"SELECT {', '.join(_TASK_COLUMNS)} FROM tasks WHERE archived_at IS NULL"
+        )
         tasks: dict[str, SwarmTask] = {}
         for row in rows:
             try:
@@ -117,6 +129,21 @@ class SqliteTaskStore(BaseStore):
     # ------------------------------------------------------------------
     # Single-row operations
     # ------------------------------------------------------------------
+
+    def archive(self, task_id: str) -> bool:
+        """Soft-delete *task_id*: stamp it archived, keeping the row and its history.
+
+        Returns False if the id does not exist or was already archived, so a caller
+        cannot report success for a no-op.
+        """
+        import time
+
+        cur = self._db.execute(
+            "UPDATE tasks SET archived_at = ? WHERE id = ? AND archived_at IS NULL",
+            (time.time(), task_id),
+        )
+        self._db.commit()
+        return bool(getattr(cur, "rowcount", 0))
 
     def save_one(self, task: SwarmTask) -> None:
         """Insert or update a single task."""

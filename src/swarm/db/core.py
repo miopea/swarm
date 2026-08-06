@@ -118,6 +118,7 @@ class SwarmDB:
             (15, self._migrate_v15_external_blocker_ref),
             (16, self._migrate_v16_effort_tier),
             (17, self._migrate_v17_resolution_note),
+            (18, self._migrate_v18_archived_at),
         ]
         for version, migrate in migrations:
             if from_version < version:
@@ -428,6 +429,27 @@ class SwarmDB:
                 _log.info("v17: added tasks.%s", col)
             except sqlite3.OperationalError:
                 _log.debug("v17 migration: %s column likely already exists", col)
+
+    def _migrate_v18_archived_at(self) -> None:
+        """v18 (#1298): add ``tasks.archived_at`` — soft delete.
+
+        Deleting a task used to be a HARD delete, and ``task_history.task_id``
+        is ``REFERENCES tasks(id) ON DELETE CASCADE``, so removing a task
+        silently destroyed every history row for it — the audit trail that
+        ``swarm_get_learnings`` and playbook synthesis read. Keeping the row and
+        stamping it means the cascade never fires.
+
+        NULL = live, a timestamp = archived. Nullable REAL rather than a NOT NULL
+        flag so "when" is recorded, not merely "whether", and so legacy rows need
+        no backfill. ALTER wrapped in try/except — fresh DBs already have it via
+        SCHEMA_V1.
+        """
+        assert self._conn is not None
+        try:
+            self._conn.execute("ALTER TABLE tasks ADD COLUMN archived_at REAL")
+            _log.info("v18: added tasks.archived_at")
+        except sqlite3.OperationalError:
+            _log.debug("v18 migration: archived_at column likely already exists")
 
     def _migrate_v14_started_at(self) -> None:
         """v14 (#611 P2): add ``tasks.started_at`` (when the task last went

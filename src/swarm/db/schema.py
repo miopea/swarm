@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 17
+CURRENT_VERSION = 18
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -121,7 +121,13 @@ CREATE TABLE IF NOT EXISTS tasks (
   -- `resolution` kwarg at all) because rewriting it would destroy the record
   -- of what was believed at the time. kind is '' | 'stale' | 'wrong'.
   resolution_note            TEXT    NOT NULL DEFAULT '',
-  resolution_note_kind       TEXT    NOT NULL DEFAULT ''
+  resolution_note_kind       TEXT    NOT NULL DEFAULT '',
+  -- #1298: soft delete. NULL = live; a timestamp = archived and hidden from the
+  -- board. A HARD delete would cascade this task's task_history rows away
+  -- (task_history.task_id REFERENCES tasks(id) ON DELETE CASCADE), silently
+  -- destroying the audit trail that learnings and playbook synthesis read. The
+  -- row survives so the cascade never fires.
+  archived_at                REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);

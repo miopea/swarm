@@ -1,0 +1,283 @@
+"""Archiving a task must not destroy its history, and must exist on every surface (#1298).
+
+THE GAP. Deleting a task was reachable from the dashboard and nowhere else — 0 of 22
+worker verbs, 0 of 17 Queen verbs, 0 CLI actions, against a ``DELETE /api/tasks/{id}``
+route that had existed all along. That is the class this repo keeps re-finding: an
+operation present on one surface and silently absent from the others (#1288 In Progress,
+#1286 parked-start, #1280 blocked exits, #1270/#1281 the HOLD class). Every earlier
+instance was found by the operator rather than by looking.
+
+THE SILENT DATA LOSS UNDERNEATH IT, which is worse than the gap. ``task_history.task_id``
+is ``REFERENCES tasks(id) ON DELETE CASCADE`` and ``PRAGMA foreign_keys=ON`` is applied
+per connection, so the dashboard's × did not merely remove a row — it destroyed every
+history entry for that task, the audit trail that ``swarm_get_learnings`` and playbook
+synthesis read. Worse, ``TaskManager.remove_task`` appended a ``REMOVED`` event AFTER
+the delete, so the one record guaranteed to be missing was the record of the removal
+itself: the insert referenced an already-deleted parent and violated the constraint.
+
+THE DESIGN, and why it touches so little. An archived task is stamped with
+``tasks.archived_at`` and dropped from the board's in-memory dict, while the row stays
+in SQLite. Every existing query reads that dict, so ~40 ``all_tasks`` call sites exclude
+archived work without one of them changing. Two store reads make that safe and are the
+whole trick: ``load()`` skips archived rows so a restart does not resurrect them, and
+``save()`` scopes its "which rows disappeared?" query to live rows — unscoped, it would
+classify every archived task as removed and hard-delete it on the next persist,
+cascading the history away and defeating the entire mechanism.
+
+Operator decisions, 2026-08-06: expose it to the worker (own, unstarted only) and the
+Queen (unrestricted), and switch the existing dashboard delete to soft-delete.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from swarm.db.core import SwarmDB
+from swarm.db.task_history import SqliteTaskHistory
+from swarm.db.task_store import SqliteTaskStore
+from swarm.tasks.board import TaskBoard
+from swarm.tasks.history import TaskAction
+from swarm.tasks.task import SwarmTask, TaskStatus
+
+
+@pytest.fixture
+def db(tmp_path: Path) -> SwarmDB:
+    return SwarmDB(tmp_path / "swarm.db")
+
+
+@pytest.fixture
+def board(db: SwarmDB) -> TaskBoard:
+    return TaskBoard(store=SqliteTaskStore(db))
+
+
+def _seed(board: TaskBoard, worker: str = "api", status: TaskStatus = TaskStatus.ASSIGNED):
+    task = board.add(SwarmTask(title="throwaway", description="probe"))
+    if status is not TaskStatus.BACKLOG:
+        board.assign(task.id, worker)
+    if status is TaskStatus.ACTIVE:
+        board.activate(task.id)
+    return task
+
+
+# --- the data-loss property, which is the reason this is a soft delete --------
+
+
+def test_foreign_keys_are_actually_enforced(db: SwarmDB):
+    """Positive control for the whole premise. If FK enforcement were OFF the cascade
+    would never fire, the 'archiving protects history' rationale would be wrong, and
+    the test below would pass for the wrong reason."""
+    row = db.fetchall("PRAGMA foreign_keys")
+    assert row and next(iter(row[0])) == 1, (
+        "PRAGMA foreign_keys is not ON for this connection, so ON DELETE CASCADE would "
+        "not fire and this file's premise needs re-checking"
+    )
+
+
+def test_archiving_keeps_the_task_history_a_hard_delete_would_cascade_away(db: SwarmDB):
+    """The core property. Both halves are asserted on the SAME row so the comparison is
+    real: hard delete destroys the history, archive preserves it."""
+    board = TaskBoard(store=SqliteTaskStore(db))
+    history = SqliteTaskHistory(db)
+    task = _seed(board)
+    history.append(task.id, TaskAction.CREATED, actor="api", detail="filed")
+    assert len(history.get_events(task.id)) == 1, "positive control: the event must exist first"
+
+    assert board.archive(task.id) is True
+    kept = history.get_events(task.id)
+    assert len(kept) == 1, (
+        f"archiving destroyed the task's history ({len(kept)} rows left); the row must "
+        f"survive so ON DELETE CASCADE never fires"
+    )
+    rows = db.fetchall("SELECT archived_at FROM tasks WHERE id = ?", (task.id,))
+    assert rows and rows[0]["archived_at"] is not None, "the row is gone or unstamped"
+
+
+def test_a_hard_delete_really_would_have_lost_it(db: SwarmDB):
+    """The negative half, proving the previous test is not vacuous. If a hard delete did
+    NOT cascade, archiving would be protecting against nothing."""
+    board = TaskBoard(store=SqliteTaskStore(db))
+    history = SqliteTaskHistory(db)
+    task = _seed(board)
+    history.append(task.id, TaskAction.CREATED, actor="api", detail="filed")
+
+    db.execute("DELETE FROM tasks WHERE id = ?", (task.id,))
+    db.commit()
+    assert history.get_events(task.id) == [], (
+        "a hard delete did NOT cascade the history away, so this file's rationale is "
+        "wrong and the design should be revisited"
+    )
+
+
+# --- archived work leaves the board, and stays gone ---------------------------
+
+
+def test_an_archived_task_leaves_the_board(board: TaskBoard):
+    task = _seed(board)
+    assert task.number in {t.number for t in board.all_tasks}, "positive control"
+    board.archive(task.id)
+    assert task.number not in {t.number for t in board.all_tasks}, (
+        "the archived task is still on the board, so every query that reads all_tasks still sees it"
+    )
+
+
+def test_a_restart_does_not_resurrect_an_archived_task(db: SwarmDB):
+    """``load()`` must skip archived rows. Without that the task returns on the next
+    daemon start and the operator deletes it again, forever."""
+    board = TaskBoard(store=SqliteTaskStore(db))
+    task = _seed(board)
+    board.archive(task.id)
+    reloaded = TaskBoard(store=SqliteTaskStore(db))
+    assert task.number not in {t.number for t in reloaded.all_tasks}, (
+        "an archived task came back after reload — load() is not filtering archived rows"
+    )
+
+
+def test_persisting_after_archiving_does_not_hard_delete_the_row(db: SwarmDB):
+    """THE TRAP THIS DESIGN HAD TO AVOID, and it is not obvious. ``save()`` treats any
+    DB row missing from memory as removed and DELETEs it. An archived task is
+    deliberately missing from memory, so an unscoped query would hard-delete it on the
+    very next persist — cascading the history away and undoing the whole point."""
+    board = TaskBoard(store=SqliteTaskStore(db))
+    history = SqliteTaskHistory(db)
+    task = _seed(board)
+    history.append(task.id, TaskAction.CREATED, actor="api")
+    board.archive(task.id)
+
+    # Any subsequent board mutation triggers a full save.
+    _seed(board, worker="web")
+    _seed(board, worker="web")
+
+    rows = db.fetchall("SELECT id FROM tasks WHERE id = ?", (task.id,))
+    assert rows, (
+        "the archived row was hard-deleted by a later persist; save() must scope its "
+        "existing-ids query to `WHERE archived_at IS NULL`"
+    )
+    assert len(history.get_events(task.id)) == 1, "history was cascaded away by that delete"
+
+
+# --- the worker verb's two preconditions --------------------------------------
+
+
+def _archive(d, worker: str, **args):
+    from swarm.mcp.handlers._archive import _handle_archive_task
+
+    return " ".join(p.get("text", "") for p in _handle_archive_task(d, worker, args))
+
+
+class _D:
+    """Minimal daemon stand-in: the handler only needs these two attributes."""
+
+    def __init__(self, board: TaskBoard, history: SqliteTaskHistory | None = None):
+        self.task_board = board
+        self.task_history = history
+
+
+def test_a_worker_can_archive_its_own_unstarted_task(board: TaskBoard):
+    task = _seed(board, worker="api")
+    out = _archive(_D(board), "api", number=task.number, reason="duplicate of #1")
+    assert "archived" in out.lower(), out
+    assert task.number not in {t.number for t in board.all_tasks}
+
+
+def test_a_worker_cannot_archive_another_workers_task(board: TaskBoard):
+    task = _seed(board, worker="web")
+    out = _archive(_D(board), "api", number=task.number, reason="tidying")
+    assert "not yours" in out.lower(), out
+    assert task.number in {t.number for t in board.all_tasks}, "it was archived anyway"
+    assert "queen_archive_task" in out, "the refusal must name what would resolve it (#1057)"
+
+
+def test_a_worker_cannot_archive_work_in_progress(board: TaskBoard):
+    task = _seed(board, worker="api", status=TaskStatus.ACTIVE)
+    out = _archive(_D(board), "api", number=task.number, reason="changed my mind")
+    assert "cannot be archived" in out.lower(), out
+    assert task.number in {t.number for t in board.all_tasks}
+    assert "swarm_park_task" in out or "swarm_complete_task" in out, (
+        "the refusal must name the verb that applies instead"
+    )
+
+
+def test_a_worker_cannot_archive_a_closed_task(board: TaskBoard):
+    """A closed resolution may already have been served to other workers as a learning.
+    The correction path is annotation (#1274), never removal."""
+    task = _seed(board, worker="api")
+    board.complete(task.id, "done")
+    out = _archive(_D(board), "api", number=task.number, reason="tidying")
+    assert "cannot be archived" in out.lower(), out
+    assert "swarm_annotate_resolution" in out, "must point at the annotation path"
+
+
+def test_the_reason_is_required(board: TaskBoard):
+    task = _seed(board, worker="api")
+    out = _archive(_D(board), "api", number=task.number, reason="  ")
+    assert "required" in out.lower(), out
+    assert task.number in {t.number for t in board.all_tasks}, "archived without a reason"
+
+
+# --- AC-5: the cross-surface property -----------------------------------------
+
+
+def test_archiving_exists_on_every_surface_that_can_reach_the_board():
+    """AC-5, and the reason this ticket existed at all. Asserted as a PROPERTY over the
+    surfaces rather than as "the two verbs I added exist", so a future surface added
+    without archiving fails here instead of being discovered by the operator — which is
+    how #1270, #1281 and #1286 became three tickets for one class."""
+    from swarm.mcp.queen_tools import QUEEN_HANDLERS
+    from swarm.mcp.tools import _HANDLERS as HANDLERS
+
+    assert "swarm_archive_task" in HANDLERS, "the worker surface cannot archive a task"
+    assert "queen_archive_task" in QUEEN_HANDLERS, "the Queen surface cannot archive a task"
+
+    # Positive control: the lookup really does see a populated registry, so a rename
+    # that emptied it could not pass the assertions above.
+    assert len(HANDLERS) > 15, f"worker registry looks wrong ({len(HANDLERS)} verbs)"
+    assert len(QUEEN_HANDLERS) > 10, f"queen registry looks wrong ({len(QUEEN_HANDLERS)})"
+
+
+def test_the_dashboard_delete_route_archives_rather_than_hard_deletes():
+    """The operator-facing × must go through the soft path too, otherwise the surface
+    that people actually use is the one that still destroys history."""
+    src = Path("src/swarm/server/task_manager.py").read_text()
+    body = src[src.index("def remove_task(") : src.index("def edit_task(")]
+    code = "\n".join(ln for ln in body.split("\n") if not ln.strip().startswith(("#", '"""', "*")))
+    assert "task_board.archive(" in code, (
+        "TaskManager.remove_task no longer archives; the dashboard delete would "
+        "hard-delete and cascade the task's history away"
+    )
+    assert "task_board.remove(" not in code, "it still hard-deletes"
+
+
+def test_hard_remove_survives_for_the_test_harness(board: TaskBoard):
+    """``remove()`` is deliberately kept as a HARD delete. Test tasks are artefacts with
+    no history worth preserving, and testing/operator.py + server/test_runner.py rely on
+    them actually leaving the database."""
+    task = _seed(board)
+    assert board.remove(task.id) is True
+    assert task.number not in {t.number for t in board.all_tasks}
+
+
+def test_archive_is_a_no_op_on_an_unknown_id(board: TaskBoard):
+    assert board.archive("no-such-id") is False
+
+
+def test_archiving_twice_reports_failure_the_second_time(db: SwarmDB):
+    """A second archive must not report success — a caller that cannot distinguish
+    'archived it' from 'it was already gone' is how a no-op gets logged as an action."""
+    board = TaskBoard(store=SqliteTaskStore(db))
+    task = _seed(board)
+    assert board.archive(task.id) is True
+    assert board.archive(task.id) is False
+
+
+def test_the_migration_is_idempotent(tmp_path: Path):
+    """Opening an existing DB twice must not fail on the ALTER — the v18 pattern every
+    sibling migration follows."""
+    path = tmp_path / "twice.db"
+    SwarmDB(path)
+    SwarmDB(path)  # must not raise
+    con = sqlite3.connect(path)
+    cols = [r[1] for r in con.execute("PRAGMA table_info(tasks)")]
+    assert "archived_at" in cols, f"archived_at missing after migration: {cols}"
