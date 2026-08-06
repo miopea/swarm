@@ -63,9 +63,19 @@ TOOLS: list[dict[str, Any]] = [
                         "startable task; required to disambiguate otherwise."
                     ),
                 },
+                "unpark": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true to start a PARKED (HOLD) task, clearing the "
+                        "hold as you take it. Parked means nobody should start "
+                        "it by accident, so it must be said explicitly — "
+                        "required only for parked tasks, and refused-with-"
+                        "instructions otherwise."
+                    ),
+                },
             },
             "required": [],
-            "examples": [{"task_number": 1104}, {}],
+            "examples": [{"task_number": 1104}, {}, {"task_number": 1269, "unpark": True}],
         },
     },
 ]
@@ -86,13 +96,15 @@ def _startable(board: Any, worker_name: str) -> list[Any]:
 
 
 def _resolve_explicit(
-    board: Any, mine: list[Any], startable: list[Any], raw: Any
+    board: Any, mine: list[Any], startable: list[Any], raw: Any, unpark: bool = False
 ) -> tuple[Any | None, str | None]:
     """Resolve an explicit ``task_number`` to a task, or to a refusal string.
 
     Split out of the handler because it is the entire refusal ladder, and each
     rung names what would resolve it (#1057). Returns ``(task, None)`` on
     success or ``(None, message)`` on refusal — never mutates.
+
+    ``unpark`` is the caller's explicit consent to start a parked (HOLD) task.
     """
     try:
         want = int(raw)
@@ -113,10 +125,16 @@ def _resolve_explicit(
             f"Your startable queue: {queue or '(nothing)'}. Ask the Queen to "
             f"reassign it if it should be yours."
         )
-    if target.is_on_hold:
+    if target.is_on_hold and not unpark:
+        # #1286: this used to say "re-call this to resume it deliberately" — and
+        # re-calling produced the identical refusal, because nothing made a second
+        # call behave differently. A refusal that names a resolving action which is
+        # a provable no-op is worse than #1057's withheld fact: a caller who trusts
+        # it retries forever. Now the named action exists.
         return None, (
-            f"#{want} is parked. Nothing changed. Starting it will un-park it — "
-            f"re-call this to resume it deliberately."
+            f"#{want} is parked (HOLD). Nothing changed. Parked means nobody should "
+            f"start it by accident, so say so explicitly: re-call with "
+            f"unpark=true. That clears the hold and starts it."
         )
     if target.status != TaskStatus.ASSIGNED:
         hint = {
@@ -158,8 +176,9 @@ def _handle_start_task(d: SwarmDaemon, worker_name: str, args: StartTaskArgs) ->
         ]
 
     raw = args.get("task_number")
+    unpark = bool(args.get("unpark") or False)
     if raw is not None and str(raw).strip() != "":
-        task, refusal = _resolve_explicit(board, mine, startable, raw)
+        task, refusal = _resolve_explicit(board, mine, startable, raw, unpark)
         if refusal is not None:
             return [{"type": "text", "text": refusal}]
     else:
@@ -186,6 +205,18 @@ def _handle_start_task(d: SwarmDaemon, worker_name: str, args: StartTaskArgs) ->
                 }
             ]
         task = startable[0]
+
+    # Clear the hold BEFORE activating, so the promise the refusal makes is the
+    # thing that actually happens. #1286: the old text claimed "starting it will
+    # un-park it" while no code path ever removed the tag, so even a caller who
+    # somehow got past the refusal would have left a parked task in progress.
+    unparked_tags: list[str] | None = None
+    if task.is_on_hold and unpark:
+        from swarm.tasks.task import HOLD_TAGS
+
+        unparked_tags = [t for t in task.tags if str(t).strip().lower() in HOLD_TAGS]
+        board.update(task.id, tags=[t for t in task.tags if t not in unparked_tags])
+        task = board.get(task.id) or task
 
     if board.activate(task.id) is None:
         return [

@@ -80,6 +80,7 @@ class StartTaskArgs(TypedDict, total=False):
     """``swarm_start_task`` — assert that you are now working a task."""
 
     task_number: int
+    unpark: bool
 
 
 class UnblockTaskArgs(TypedDict, total=False):
