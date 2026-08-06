@@ -401,7 +401,12 @@ class TestQueries:
         summary = board.summary()
         assert "2 tasks" in summary
         assert "1 unassigned" in summary
-        assert "1 in progress" in summary
+        # #1283: this task is ASSIGNED, never activated, so it is QUEUED. The
+        # assertion used to read "1 in progress" — it was encoding the conflation,
+        # not testing for ACTIVE. Only a worker asserting swarm_start_task makes a
+        # task in progress.
+        assert "1 queued" in summary
+        assert "1 in progress" not in summary, "an assigned-but-unstarted task counted as active"
 
 
 # ---------------------------------------------------------------------------

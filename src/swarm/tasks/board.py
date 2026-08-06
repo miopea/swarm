@@ -993,7 +993,32 @@ class TaskBoard(EventEmitter):
 
     @property
     def active_tasks(self) -> list[SwarmTask]:
-        """Tasks currently assigned or in progress."""
+        """Tasks currently assigned **or** in progress — NOT just ACTIVE.
+
+        THE NAME IS A DEFECT GENERATOR AND THE PREDICATE IS CORRECT. Six
+        operator-visible bugs have come from reading this name instead of this
+        docstring, all of them presenting queued work as work in progress:
+
+        * the worker title bar showed a merely-ASSIGNED task (fixed 2026.8.6.6)
+        * the idle nudge said "#N active but appear idle" for queued tasks (2026.8.6.7)
+        * ``summary()`` reported "4 in progress" with one ACTIVE task (#1283)
+
+        Do NOT narrow it. ``IdleWatcher._bucket_active_tasks_by_worker``,
+        ``drones/directives.py`` and ``poll_dispatcher`` all genuinely need ASSIGNED
+        as well as ACTIVE — a worker holding queued work is not
+        idle-with-nothing-to-do — so narrowing the predicate would break nudge and
+        dispatch logic to fix a label.
+
+        DECISION (#1283): the right fix is to RENAME this and
+        ``active_tasks_for_worker`` to something that cannot be misread (e.g.
+        ``claimed_tasks`` / ``claimed_tasks_for_worker``), because six instances is
+        a naming problem rather than six independent mistakes. Filed as a separate
+        task rather than done here: it touches drone nudge and dispatch paths whose
+        end-to-end behaviour is not covered by unit tests, and bundling a
+        cross-cutting rename into a display fix would make both harder to revert.
+        Until then, any new caller must read this docstring — if you want only
+        in-progress work, filter ``t.status == TaskStatus.ACTIVE`` yourself.
+        """
         with self._lock:
             snapshot = list(self._tasks.values())
         return [t for t in snapshot if t.status in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE)]
@@ -1106,20 +1131,33 @@ class TaskBoard(EventEmitter):
         with self._lock:
             snapshot = list(self._tasks.values())
         total = len(snapshot)
-        backlog = sum(1 for t in snapshot if t.status == TaskStatus.BACKLOG)
-        unassigned = sum(1 for t in snapshot if t.status == TaskStatus.UNASSIGNED)
-        active = sum(1 for t in snapshot if t.status in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE))
-        blocked = sum(1 for t in snapshot if t.status == TaskStatus.BLOCKED)
-        done = sum(1 for t in snapshot if t.status == TaskStatus.DONE)
-        failed = sum(1 for t in snapshot if t.status == TaskStatus.FAILED)
-        parts = [f"{total} tasks:"]
-        if backlog:
-            parts.append(f"{backlog} backlog,")
-        parts.append(f"{unassigned} unassigned, {active} in progress, {done} done")
-        # Conditional, matching backlog/failed: a board with nothing blocked
-        # reads exactly as it did before.
-        if blocked:
-            parts.append(f", {blocked} blocked")
-        if failed:
-            parts.append(f", {failed} failed")
-        return " ".join(parts)
+        counts = {status: 0 for status in TaskStatus}
+        for t in snapshot:
+            counts[t.status] += 1
+
+        # ONE LANE PER TaskStatus, derived from the enum so a status cannot be
+        # left out of the count. #1279 was BLOCKED having no category at all; the
+        # sum-equals-total test caught that, but only because a blocked task
+        # happened to exist. Building the lanes from TaskStatus makes the omission
+        # impossible rather than detectable.
+        #
+        # ASSIGNED and ACTIVE ARE SEPARATE LANES (#1283). They were summed into one
+        # "in progress" figure, so the line read "4 in progress" on a board with
+        # exactly ONE active task — the same conflation that put queued work in the
+        # worker title bar and called queued tasks "active" in the idle nudge. A
+        # task assigned to a worker is QUEUED for it; only the worker asserting
+        # swarm_start_task makes it in progress.
+        lanes: list[tuple[TaskStatus, str, bool]] = [
+            # (status, label, always show even when zero)
+            (TaskStatus.BACKLOG, "backlog", False),
+            (TaskStatus.UNASSIGNED, "unassigned", True),
+            (TaskStatus.ASSIGNED, "queued", True),
+            (TaskStatus.ACTIVE, "in progress", True),
+            (TaskStatus.BLOCKED, "blocked", False),
+            (TaskStatus.DONE, "done", True),
+            (TaskStatus.FAILED, "failed", False),
+        ]
+        shown = [f"{counts[s]} {label}" for s, label, always in lanes if always or counts[s]]
+        # Joined in one pass rather than appending pre-punctuated fragments, which
+        # is what produced the stray space in "1233 done , 2 blocked".
+        return f"{total} tasks: " + ", ".join(shown)

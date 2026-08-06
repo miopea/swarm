@@ -298,3 +298,61 @@ def test_display_sort_does_not_reorder_the_dispatch_view():
         "the display sort leaked into tasks/board.py — dispatch ordering reads "
         "all_tasks, and reordering it changes which task a worker picks up"
     )
+
+
+# --- #1283: ASSIGNED and ACTIVE are separate lanes in the count -------------
+
+
+def test_summary_distinguishes_queued_from_in_progress():
+    """#1283, the sixth surface of one conflation.
+
+    ``summary()`` summed ASSIGNED and ACTIVE into a single "in progress" figure, so
+    the live board read "4 in progress" while exactly ONE task was ACTIVE. Same
+    defect as queued work appearing in the worker title bar (2026.8.6.6) and the
+    idle nudge calling queued tasks "active" (2026.8.6.7).
+    """
+    from swarm.tasks.board import TaskBoard
+
+    board = TaskBoard()
+    queued = board.create(title="queued")
+    board.assign(queued.id, "alice")
+    running = board.create(title="running")
+    board.assign(running.id, "bob")
+    board.activate(running.id)
+
+    summary = board.summary()
+    assert "1 queued" in summary, f"ASSIGNED not reported as queued: {summary!r}"
+    assert "1 in progress" in summary, f"ACTIVE not reported as in progress: {summary!r}"
+
+
+def test_every_status_has_a_summary_lane_even_when_zero():
+    """Stronger than the sum invariant, which only catches an omitted status if a
+    task in that status happens to exist. #1279's BLOCKED omission was detectable
+    only because a blocked task was on the board. Deriving the lanes from
+    ``TaskStatus`` makes the omission impossible; this asserts that it stays so."""
+    import inspect
+
+    from swarm.tasks.board import TaskBoard
+
+    src = inspect.getsource(TaskBoard.summary)
+    missing = [s.name for s in TaskStatus if f"TaskStatus.{s.name}" not in src]
+    assert not missing, (
+        f"statuses with no lane in summary(): {missing} — a task in one of those "
+        f"would be counted nowhere and the line would not add up"
+    )
+
+
+def test_summary_has_no_stray_punctuation():
+    """The parts used to be appended pre-punctuated and joined with a space, which
+    produced "1233 done , 2 blocked" on the operator's dashboard."""
+    from swarm.tasks.board import TaskBoard
+
+    board = TaskBoard()
+    t = board.create(title="blocked one")
+    board.assign(t.id, "alice")
+    board.activate(t.id)
+    board.block_on_external(t.id, "alice", "upstream", "x#1")
+    summary = board.summary()
+    assert " ," not in summary, f"stray space before a comma: {summary!r}"
+    assert ",," not in summary
+    assert not summary.rstrip().endswith(","), f"trailing comma: {summary!r}"

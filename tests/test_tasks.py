@@ -211,7 +211,11 @@ class TestTaskBoard:
         s = board.summary()
         assert "2 tasks" in s
         assert "1 unassigned" in s
-        assert "1 in progress" in s
+        # #1283: assigned, never activated — that is QUEUED, not in progress. This
+        # assertion previously read "1 in progress" and was encoding the
+        # ASSIGNED/ACTIVE conflation rather than asserting ACTIVE.
+        assert "1 queued" in s
+        assert "1 in progress" not in s
 
     def test_on_change_callback(self):
         board = TaskBoard()
