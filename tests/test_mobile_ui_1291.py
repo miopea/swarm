@@ -168,27 +168,27 @@ def test_the_mobile_switcher_is_rendered_by_the_partial():
     assert "worker-switcher-active" in _PARTIAL, "the pinned active-worker chip is missing"
 
 
-def test_waiting_workers_are_not_sorted_last():
-    """The switcher orders states EXPLICITLY. sort(attribute='state') is alphabetical,
-    which would put WAITING last — and WAITING is the state that needs the operator
-    most, so burying it would defeat the point of the change."""
-    # Strip Jinja comments first: the template's own comment EXPLAINS why the
-    # alphabetical sort is not used, and an earlier version of this test matched that
-    # explanation and failed. A scan that matches the prose describing a bug reports
-    # the bug as present.
+def test_the_switcher_order_matches_the_pill_order():
+    """OPERATOR DECISION 2026-08-06, reversing my first implementation: "the order should
+    follow the same order that the workers are listed in the UI. That'll help with visual
+    muscle memory."
+
+    I had sorted WAITING/BUZZING to the top so the attention-needing worker came first.
+    That was wrong for a reason I missed: the pill list is DRAG-TO-REORDER, so its order
+    is the operator's OWN arrangement. Re-sorting the dropdown silently overrode a choice
+    he had made by hand, and position stability is the entire point of muscle memory.
+
+    Iterating the list untouched also removes a hazard the sorted version needed a
+    fallback loop to cover: with no filtering, no worker can be dropped from what is the
+    only way to reach one on mobile.
+    """
     code = re.sub(r"\{#.*?#\}", "", _PARTIAL, flags=re.S)
-    assert "sort(attribute='state')" not in code, "alphabetical state sort would bury WAITING"
-    order = re.search(r"_states\s*=\s*\[([^\]]*)\]", _PARTIAL)
-    assert order, "no explicit state order found"
-    states = [x.strip().strip("'\"") for x in order.group(1).split(",")]
-    assert states.index("WAITING") < states.index("SLEEPING"), f"bad order: {states}"
-
-
-def test_a_worker_in_an_unlisted_state_still_appears():
-    """If a new WorkerState is added, an explicit order list would silently drop it —
-    and the dropdown is the ONLY way to reach a worker on mobile, so a dropped worker
-    is an unreachable worker."""
-    assert "w.state not in _states" in _PARTIAL, "workers in unlisted states would vanish"
+    assert "sort(attribute=" not in code, (
+        "the switcher re-sorts the workers; it must preserve the pill order"
+    )
+    assert "selectattr(" not in code, (
+        "the switcher filters the workers; every worker must appear, in the given order"
+    )
 
 
 def test_the_switcher_change_handler_is_delegated():
@@ -268,8 +268,40 @@ def test_the_switcher_renders_every_worker_in_the_intended_order():
     assert sorted(opts) == sorted(["swarm", "sculpt-studio", "api", "zz"]), (
         f"a worker is missing from the switcher and is unreachable on mobile: {opts}"
     )
-    assert opts[0] == "sculpt-studio", f"WAITING must come first, got {opts}"
-    assert opts.index("api") > opts.index("swarm"), "SLEEPING sorted above BUZZING"
+    assert opts == ["swarm", "sculpt-studio", "api", "zz"], (
+        f"the switcher must preserve the pill order for muscle memory, got {opts}"
+    )
     assert 'value="swarm" selected' in html, "the current worker is not preselected"
     assert "worker-switcher-active" in html, "no pinned active chip"
     assert html.count('class="worker-item') >= 4, "desktop pills were lost"
+
+
+# --- item 6, layering half ------------------------------------------------
+
+
+def test_the_dpad_stands_down_while_the_overflow_menu_is_open():
+    """Item 6's hazard: 084202 shows the d-pad painted over the OPEN overflow menu,
+    obscuring items including a red destructive one — a tap target you cannot see.
+
+    Asserted as the stand-down rule rather than a z-index value ON PURPOSE. The menu is
+    already z-index 100 and the d-pad 11, so a bump changes nothing: the d-pad's
+    container establishes a stacking context that outranks the header's, meaning the two
+    z-indexes are never compared. A test asserting numbers would pass while the bug
+    remained.
+    """
+    assert re.search(
+        r"body:has\(\.mobile-overflow-menu\.open\)\s+\.term-dpad\s*\{[^}]*display:\s*none",
+        _BASE,
+    ), "the d-pad does not stand down while the overflow menu is open"
+
+
+def test_the_dpad_idles_translucent_so_text_underneath_is_readable():
+    """The other half: it sits over live transcript text. It is anchored top-right
+    deliberately (moved there to stop colliding with the mobile composer), so the fix is
+    legibility rather than relocation."""
+    assert re.search(r"\.term-dpad\s*\{[^}]*opacity:\s*0?\.\d+", _BASE), (
+        "the d-pad has no idle transparency"
+    )
+    assert re.search(r"\.term-dpad:focus-within[^{]*\{[^}]*opacity:\s*1", _BASE), (
+        "the d-pad never returns to full opacity, so it would be hard to use"
+    )

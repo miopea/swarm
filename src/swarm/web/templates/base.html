@@ -2277,6 +2277,29 @@
         @media (max-width: 768px) {
             .term-dpad { display: grid; }
         }
+        /* #1291 item 6, LAYERING. Evidence 084202: the d-pad painted ON TOP of the open
+           overflow menu, obscuring items including a red destructive one — you could
+           tap something you could not see.
+           WHY NOT A Z-INDEX BUMP: the menu is already z-index 100 and the d-pad only
+           11, so raising the menu changes nothing. The d-pad's containing element
+           establishes a stacking context that outranks the header's, so the comparison
+           never happens in the same context. Untangling that would mean re-parenting
+           the terminal chrome — a large, risky change for a small symptom.
+           Instead the d-pad stands down while the menu is open. It cannot lose a
+           stacking-context argument it is not having, and arrow keys are useless while
+           a menu is up. :has() is already the idiom here (see .detail-area:has(...)). */
+        body:has(.mobile-overflow-menu.open) .term-dpad { display: none !important; }
+
+        /* #1291 item 6, OBSCURED TEXT. Evidence 084049 + 095352: the pad sits over live
+           transcript text and hid words mid-sentence. It is anchored top-right ON
+           PURPOSE — it was moved there so it would stop colliding with the mobile
+           composer — so moving it back down would recreate that. Instead it idles
+           translucent and comes to full strength on touch/hover/focus, so the text
+           underneath stays readable without the control moving or shrinking. */
+        .term-dpad { opacity: 0.55; transition: opacity 140ms ease; }
+        .term-dpad:hover,
+        .term-dpad:focus-within,
+        .term-dpad:active { opacity: 1; }
 
         /* Spinner animation */
         @keyframes spin { to { transform: rotate(360deg); } }

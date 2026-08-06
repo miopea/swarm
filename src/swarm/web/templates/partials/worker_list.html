@@ -51,19 +51,20 @@
    with worker state for free rather than needing its own JS sync path.
    Sorted active-first (BUZZING/WAITING before RESTING/SLEEPING/STUNG) because the
    operator's complaint was scrolling to FIND the active worker. #}
-{# Explicit state order, NOT sort(attribute='state'): alphabetical would put
-   WAITING last, and WAITING is the state that needs the operator most. #}
-{% set _states = ['WAITING', 'BUZZING', 'STUNG', 'RESTING', 'SLEEPING'] %}
+{# ORDER MATCHES THE PILL LIST EXACTLY — operator, 2026-08-06: "the order should
+   follow the same order that the workers are listed in the UI. That'll help with
+   visual muscle memory."
+   This REVERSES my first attempt, which sorted WAITING/BUZZING to the top on the
+   theory that the operator wants the attention-needing worker first. He wants
+   position stability instead, and he is right for a reason I missed: the pill list is
+   DRAG-TO-REORDER, so its order is his own arrangement, not an accident. Re-sorting
+   here would have silently overridden a choice he made by hand.
+   Iterating `workers` untouched also removes a hazard the sorted version needed a
+   fallback loop to cover: with no filtering, no worker can be dropped from the only
+   mobile way to reach one. #}
 <div class="worker-switcher">
     <select id="worker-switcher-select" aria-label="Switch worker">
-        {% for st in _states %}
-        {% for w in workers | selectattr('state', 'equalto', st) | sort(attribute='name') %}
-        <option value="{{ w.name }}" {% if w.name == selected_worker %}selected{% endif %}>{{ w.state }} · {{ w.name }} ({{ w.provider }})</option>
-        {% endfor %}
-        {% endfor %}
-        {# Any state not in the list above still has to appear, or a worker becomes
-           unreachable from the only mobile switcher. #}
-        {% for w in workers if w.state not in _states %}
+        {% for w in workers %}
         <option value="{{ w.name }}" {% if w.name == selected_worker %}selected{% endif %}>{{ w.state }} · {{ w.name }} ({{ w.provider }})</option>
         {% endfor %}
     </select>
