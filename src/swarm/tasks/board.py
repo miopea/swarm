@@ -340,8 +340,20 @@ class TaskBoard(EventEmitter):
             task.acceptance_criteria = acceptance_criteria
         if context_refs is not None:
             task.context_refs = context_refs
-        if source_worker or target_worker:
-            task.is_cross_project = True
+        # RECOMPUTE, never latch. This was `if source_worker or target_worker:
+        # task.is_cross_project = True` — one-way. It could set the flag but nothing
+        # could ever clear it, so a task whose source and target were both removed kept
+        # rendering the CROSS badge forever (task_list.html gates purely on this flag).
+        # Operator-reported 2026-08-07: "when I removed the source worker it still
+        # remained a CROSS task."
+        #
+        # Only recompute when this edit actually touched one of the two fields —
+        # `is not None` rather than truthiness, so an edit that never mentions them
+        # leaves the flag alone, and one that clears them to "" is honoured. Derived
+        # from the task's POST-assignment state above, not from the arguments, so a
+        # partial edit (clear source, leave target) still lands on the truth.
+        if source_worker is not None or target_worker is not None:
+            task.is_cross_project = bool(task.source_worker or task.target_worker)
 
     def assign(self, task_id: str, worker_name: str, override_hold: bool = False) -> bool:
         """Assign a task to a worker.

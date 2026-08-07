@@ -7057,6 +7057,37 @@
             if (titleHint) titleHint.style.display = 'none';
         }
 
+        // Assign a value to a <select> WITHOUT silently discarding it.
+        //
+        // THE DATA LOSS THIS PREVENTS, operator-reported 2026-08-07: "it was a cross
+        // task and when I added the tag and saved it lost the target worker." The
+        // worker <option>s below are built from the workers currently rendered on the
+        // page. A cross-project task can legitimately point at a worker that is NOT in
+        // that list — another project's worker, a renamed one, a decommissioned one
+        // (#1301-1303 targeted `claude-team-config`). Assigning `select.value = x`
+        // when no option matches is a SILENT no-op: the browser leaves the select on
+        // "—" and reports value === "". submitTaskModal then unconditionally posts
+        // target_worker="", the edit route sees the key present and passes it through,
+        // and the stored target is overwritten with empty. An edit that only touched
+        // TAGS destroyed a field the operator never opened.
+        //
+        // So an off-list value gets its own option rather than being dropped. Labelled
+        // so it does not read as a normal choice, and the round trip is lossless: open
+        // the modal, save without touching it, and the value survives.
+        function setSelectValuePreservingUnknown(id, val) {
+            var sel = document.getElementById(id);
+            if (!sel) return;
+            if (!val) { sel.value = ''; return; }
+            var has = Array.prototype.some.call(sel.options, function(o) { return o.value === val; });
+            if (!has) {
+                var opt = document.createElement('option');
+                opt.value = val;
+                opt.textContent = val + ' (not a current worker)';
+                sel.appendChild(opt);
+            }
+            sel.value = val;
+        }
+
         // Cross-project fields — populate worker selects from DOM
         var workerNames = [];
         document.querySelectorAll('.worker-item[data-worker]').forEach(function(el) {
@@ -7099,8 +7130,8 @@
         var acceptanceVal = (data && data.acceptance) || '';
         var contextRefsVal = (data && data.context_refs) || '';
         var depsVal = (data && data.deps) || '';
-        document.getElementById('tm-source-worker').value = sourceWorkerVal;
-        document.getElementById('tm-target-worker').value = targetWorkerVal;
+        setSelectValuePreservingUnknown('tm-source-worker', sourceWorkerVal);
+        setSelectValuePreservingUnknown('tm-target-worker', targetWorkerVal);
         document.getElementById('tm-dep-type').value = depTypeVal;
         document.getElementById('tm-acceptance').value = acceptanceVal;
         document.getElementById('tm-context-refs').value = contextRefsVal;
