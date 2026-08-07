@@ -1004,6 +1004,15 @@
         .type-bug { background: var(--poppy); }
         .type-feature { background: var(--lavender); }
         .type-verify { background: var(--leaf); }
+        /* .type-badge sets `color: var(--canvas)` — text the colour of the PAGE
+           BACKGROUND, which is only readable on a coloured badge. Every sibling
+           therefore has to supply one. .type-cross had none, so the CROSS label
+           rendered as canvas-coloured text on a transparent background: near-white
+           on white in light mode, near-black on dark in dark mode. It looked
+           "inverted" because the text tracks the theme, so it is always the one
+           colour that cannot be read against the row. Amber is unclaimed by the
+           other type-* badges (bug=poppy, feature=lavender, verify=leaf). */
+        .type-cross { background: var(--amber); }
         /* Status pill — answers "is this task active?" at a glance.
            ACTIVE pulses to read as the running thing; DONE is intentionally
            muted so the dominant tail of completed tasks doesn't shout. */

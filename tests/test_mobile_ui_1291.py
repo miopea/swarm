@@ -354,3 +354,69 @@ def test_the_queen_card_is_labelled_queen_not_queen_dashboard():
     assert "Queen Dashboard" not in card, "the card still says Queen Dashboard"
     assert "Queen" in card
     assert "Queen Dashboard" not in _DASH, "dashboard.html still says Queen Dashboard"
+
+
+# --- the generalisation that actually generalises -------------------------
+
+
+def _template_files() -> list[Path]:
+    return sorted(_WEB.rglob("*.html"))
+
+
+def _used_badge_classes() -> dict[str, str]:
+    """Every ``type-*`` class named in any template, mapped to the file using it."""
+    used: dict[str, str] = {}
+    for path in _template_files():
+        # (?<![\w-]) not \b: a hyphen counts as a word boundary, so \btype-
+        # matched the TAIL of `.pb-event-type-applied` and reported seven
+        # perfectly-defined playbook classes as missing.
+        for cls in re.findall(r"(?<![\w-])type-[a-z0-9-]+", path.read_text()):
+            used.setdefault(cls, path.name)
+    return used
+
+
+def test_the_badge_scan_finds_real_classes():
+    """Positive control. Without it an empty scan would make the sweep below pass
+    vacuously — the same failure shape it is auditing."""
+    used = _used_badge_classes()
+    assert "type-badge" in used, f"badge scan is broken; found {sorted(used)}"
+    assert len(used) >= 4, f"only {len(used)} type-* classes found; scan is broken"
+
+
+def test_every_badge_class_used_in_a_template_is_defined():
+    """OPERATOR-REPORTED 2026-08-07: the CROSS label was invisible in light mode and
+    "even worse in dark mode, seems like they are inverted".
+
+    ROOT CAUSE, and it is #1291 item 5 recurring. ``.type-badge`` sets
+    ``color: var(--canvas)`` — text the colour of the PAGE BACKGROUND — which is only
+    readable on top of a coloured badge, so every sibling must supply a background.
+    ``.type-cross`` supplied none, so the label rendered as canvas-coloured text on a
+    transparent row: near-white on white in light mode, near-black on dark in dark
+    mode. "Inverted" is the precise description — the text tracks the theme, so it is
+    always the one colour that cannot be read.
+
+    WHY THE EXISTING GUARD MISSED IT. ``test_utility_classes_used_by_config_are_defined``
+    checks a HARDCODED list of four utilities in ONE file. A guard that enumerates the
+    instances it already knows about cannot catch the next one; that is the whole
+    failure mode of this defect class. This sweeps every ``type-*`` class in every
+    template instead, so a badge added to markup without a rule fails here rather than
+    presenting to the operator as an invisible label.
+    """
+    defined = _defined_classes()
+    missing = {c: f for c, f in _used_badge_classes().items() if c not in defined}
+    assert not missing, (
+        f"badge classes used in markup but defined nowhere in base.html: {missing}. "
+        f"Because .type-badge sets color: var(--canvas), an undefined badge is not "
+        f"merely unstyled — it is INVISIBLE in both themes."
+    )
+
+
+def test_type_cross_has_a_background_not_merely_a_rule():
+    """The specific instance. A ``.type-cross`` rule that set anything other than a
+    background would satisfy the sweep above while staying unreadable."""
+    m = re.search(r"\.type-cross\s*\{([^}]*)\}", _BASE)
+    assert m, ".type-cross is gone again — the CROSS label would be invisible"
+    assert "background" in m.group(1), (
+        f".type-cross defines no background, so canvas-coloured text still sits on a "
+        f"transparent row: {m.group(1).strip()!r}"
+    )
