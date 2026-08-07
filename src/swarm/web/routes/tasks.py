@@ -273,9 +273,13 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
     if existing:
         if existing.status in (TaskStatus.ASSIGNED, TaskStatus.ACTIVE):
             d.task_board.unassign(task_id)  # → UNASSIGNED
-        elif existing.status == TaskStatus.BACKLOG:
-            existing.approve()  # BACKLOG → UNASSIGNED (same as promote)
-            d.task_board.persist(existing)
+        # BACKLOG is deliberately NOT normalised. It used to call existing.approve()
+        # (BACKLOG → UNASSIGNED) purely so the old is_available gate would accept the
+        # assign — and that promotion un-parked the task as a side effect. Operator-
+        # reported 2026-08-07: "when I assign a worker and click save it moves to
+        # assigned, even if it was already on backlog." board.assign now accepts a
+        # BACKLOG task directly and preserves its status, so the workaround is not just
+        # unnecessary, it is the bug.
         elif existing.status == TaskStatus.BLOCKED:
             # BLOCKED was the one lane with no normalisation, so reassigning a
             # blocked task 409'd the same way a HOLD task did. release accepts
@@ -290,8 +294,15 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
     # auto-assigner, which selects through board.available_tasks, not this call.
     await d.assign_task(task_id, worker_name, override_hold=True)
 
+    # Never auto-start parked work. Read the status BACK from the board rather than
+    # trusting the pre-assign snapshot: assigning a BACKLOG task now leaves it BACKLOG,
+    # and starting it here would hand an idle worker the very task the operator took
+    # out of play — a worse version of the bug this branch was added for.
+    after = d.task_board.get(task_id)
+    parked = after is not None and after.status == TaskStatus.BACKLOG
+
     started = False
-    if auto_start:
+    if auto_start and not parked:
         from swarm.worker.worker import WorkerState
 
         worker = d.get_worker(worker_name)

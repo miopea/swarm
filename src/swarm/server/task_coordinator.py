@@ -229,8 +229,13 @@ class TaskCoordinator:
             raise TaskOperationError(f"Task '{task_id}' not found")
         # A HOLD task is UNASSIGNED by design — that is the hold mechanism — so
         # the only thing separating it from an assignable task is the tag.
-        assignable = task.is_available or (
-            override_hold and task.status == TaskStatus.UNASSIGNED and task.is_on_hold
+        # BACKLOG is assignable and STAYS parked (2026-08-07). Widened here in the same
+        # pass as board.assign, because a gate relaxed at only one layer refuses at the
+        # other — the note below records that lesson and this is the same shape.
+        assignable = (
+            task.is_available
+            or task.status == TaskStatus.BACKLOG
+            or (override_hold and task.status == TaskStatus.UNASSIGNED and task.is_on_hold)
         )
         if not assignable:
             detail = (

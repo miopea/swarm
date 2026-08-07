@@ -30,6 +30,13 @@ from swarm.tasks.board import TaskBoard
 from swarm.tasks.task import SwarmTask, TaskStatus
 
 
+def _daemon(monkeypatch):
+    """Real daemon with a real board — the route reads both."""
+    from tests.conftest import make_daemon
+
+    return make_daemon(monkeypatch)
+
+
 def _assigned(board: TaskBoard, worker: str = "sculpt-studio") -> SwarmTask:
     task = board.add(SwarmTask(title="later work", description="x"))
     assert board.assign(task.id, worker) is True, "positive control: the seed must assign"
@@ -177,3 +184,106 @@ def test_the_queen_can_route_parked_work_without_un_parking_it(monkeypatch):
         f"the reply does not report the real resulting status, so it claims a "
         f"transition that did not happen: {text}"
     )
+
+
+# --- the dashboard save path, which is where the operator actually hit it -----
+
+
+def test_the_assign_action_route_leaves_a_backlog_task_parked(monkeypatch):
+    """OPERATOR-REPORTED 2026-08-07, the second round: "when I assign a worker and click
+    save it moves to assigned, even if it was already on backlog."
+
+    The board layer was already correct — he confirmed setting it back to Backlog
+    "holds fine" — so this is a different path. ``/action/task/assign`` NORMALISED the
+    task to UNASSIGNED first, calling ``existing.approve()`` on a BACKLOG one, purely
+    so the old ``is_available`` gate would accept the assign. That promotion un-parked
+    the task before ``board.assign`` ever ran, which is why fixing ``SwarmTask.assign``
+    alone did nothing for him.
+
+    Driven through the REAL route rather than the board, because the board-level tests
+    above all passed while this was broken. A fix verified one layer below the reported
+    symptom is not verified.
+    """
+    import asyncio
+
+    from aiohttp.test_utils import make_mocked_request
+
+    from swarm.web.routes.tasks import handle_action_assign_task
+
+    d = _daemon(monkeypatch)
+    task = d.task_board.create(title="parked work")
+    d.task_board.demote_to_backlog(task.id)
+    assert d.task_board.get(task.id).status is TaskStatus.BACKLOG, "positive control"
+
+    async def _go() -> None:
+        request = make_mocked_request(
+            "POST",
+            "/action/task/assign",
+            payload=None,  # body supplied via post() stub
+        )
+        request.app["daemon"] = d
+
+        async def _post():
+            return {"task_id": task.id, "worker": "api", "auto_start": "false"}
+
+        request.post = _post  # type: ignore[method-assign]
+        await handle_action_assign_task(request)
+
+    asyncio.run(_go())
+
+    after = d.task_board.get(task.id)
+    assert after.assigned_worker == "api", "the route failed to assign the parked task"
+    assert after.status is TaskStatus.BACKLOG, (
+        f"assigning through the dashboard un-parked the task (status={after.status.value}) "
+        f"— the operator has to set it back to Backlog and save a second time"
+    )
+
+
+def test_the_assign_action_route_never_auto_starts_parked_work(monkeypatch):
+    """The hazard directly below the one he reported, and worse. ``auto_start`` defaults
+    to true, so once a BACKLOG task stays parked through assignment, the start branch
+    would hand an idle worker the very task the operator took out of play."""
+    import asyncio
+
+    from aiohttp.test_utils import make_mocked_request
+
+    from swarm.web.routes.tasks import handle_action_assign_task
+
+    d = _daemon(monkeypatch)
+    task = d.task_board.create(title="parked work")
+    d.task_board.demote_to_backlog(task.id)
+
+    # The worker MUST be idle, or the start branch never runs and this test passes
+    # no matter what the guard does — which is exactly how an earlier version of it
+    # survived a control that deleted the guard entirely.
+    from swarm.worker.worker import WorkerState
+
+    worker = d.get_worker("api")
+    assert worker is not None, "fixture worker missing"
+    worker.state = WorkerState.RESTING
+
+    started: list[str] = []
+
+    async def _start(task_id, actor="user"):
+        started.append(task_id)
+        return True
+
+    d.start_task = _start  # type: ignore[method-assign]
+
+    async def _go() -> None:
+        request = make_mocked_request("POST", "/action/task/assign")
+        request.app["daemon"] = d
+
+        async def _post():
+            return {"task_id": task.id, "worker": "api", "auto_start": "true"}
+
+        request.post = _post  # type: ignore[method-assign]
+        await handle_action_assign_task(request)
+
+    asyncio.run(_go())
+
+    assert not started, (
+        "parked work was auto-started on assignment — the operator explicitly took it "
+        "out of play and it went straight to a worker"
+    )
+    assert d.task_board.get(task.id).status is TaskStatus.BACKLOG
