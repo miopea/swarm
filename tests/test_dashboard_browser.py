@@ -245,3 +245,61 @@ def test_the_view_reconciles_after_a_change_it_was_never_pushed(playwright_page)
         "the version was updated but the task the operator could not see is still "
         "missing from the rendered panel"
     )
+
+
+def test_the_tile_controls_sit_together_at_the_right_of_the_detail_header(playwright_page):
+    """OPERATOR-REPORTED 2026-08-07: "Tile thing is cool, but alignment of the top is
+    funny."
+
+    ``.panel-header`` is ``justify-content: space-between``, so three loose children
+    spread evenly and the Tile button was parked in the MIDDLE of the header with gaps
+    either side. It had never been seen before: the button's reveal was dead code until
+    2026.8.6.24 (#1292), so this layout had genuinely never rendered.
+
+    A GEOMETRY assertion, which is the whole reason a browser test earns its keep here.
+    A source scan can confirm a wrapper div exists; only a rendered page can say where
+    the button actually IS. Both facts are checked — the controls are adjacent to each
+    other, and they sit in the right-hand portion of the header — because either alone
+    is satisfiable by a layout that still looks wrong.
+    """
+    page, daemon, base = playwright_page
+    page.goto(f"{base}/", wait_until="domcontentloaded")
+    page.wait_for_selector("#tile-mode-btn", state="attached", timeout=15000)
+
+    # The button ships hidden and is revealed when a worker is selected (#1292).
+    page.evaluate("() => window.selectWorker('api')")
+    page.wait_for_timeout(200)
+
+    # TILE MODE ON, which is the operator's actual state and the only one that
+    # reproduces the bug. With tile mode off the size select is hidden, leaving just
+    # the title and the button — and space-between right-aligns TWO children anyway, so
+    # the test passed against the broken layout. Both controls visible is what pushes
+    # the button into the middle. (An earlier version of this test missed that, and two
+    # controls that broke the layout left it green.)
+    page.click("#tile-mode-btn")  # the real control, via the real click delegation
+    page.wait_for_timeout(400)
+    assert page.locator("#tile-size-select").is_visible(), (
+        "tile mode did not turn on, so the three-child layout that causes the bug is "
+        "not being exercised"
+    )
+
+    btn = page.locator("#tile-mode-btn").bounding_box()
+    header = page.locator("#detail-title").bounding_box()
+    assert btn and header, "positive control: the button and header must be laid out"
+    assert btn["width"] > 0, "the Tile button is not visible, so its position means nothing"
+
+    gap_to_right_edge = (header["x"] + header["width"]) - (btn["x"] + btn["width"])
+    assert gap_to_right_edge < header["width"] * 0.35, (
+        f"the Tile button sits {gap_to_right_edge:.0f}px from the header's right edge "
+        f"(header is {header['width']:.0f}px wide) — it is floating in the middle "
+        f"rather than grouped with the size select"
+    )
+
+    select = page.locator("#tile-size-select")
+    if select.is_visible():
+        sbox = select.bounding_box()
+        between = sbox["x"] - (btn["x"] + btn["width"])
+        assert 0 <= between < 40, (
+            f"the Tile button and the size select are {between:.0f}px apart; they are "
+            f"meant to read as one control group"
+        )

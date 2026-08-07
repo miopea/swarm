@@ -1128,6 +1128,21 @@
             flex-direction: column;
             box-shadow: var(--shadow-sm);
         }
+        /* Keeps the detail panel's controls together at the right edge. Without it
+           .panel-header's space-between spreads each child evenly, which parked the
+           Tile button in the middle of the header with gaps on both sides.
+           The GROUPING is what fixes it: one flex child instead of two loose ones.
+           margin-left:auto is defensive rather than load-bearing — with only the title
+           and this wrapper, space-between already right-aligns it, so no test can
+           distinguish its presence. It earns its place only if a third visible child
+           is ever added to this header (the cc-queen-strip in Command Center mode is
+           the candidate). Recorded so nobody later assumes a test covers it. */
+        .detail-header-actions {
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            margin-left: auto;
+        }
         .panel-header {
             background: var(--panel);
             color: var(--honey);

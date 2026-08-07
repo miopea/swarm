@@ -123,12 +123,20 @@
                     <span class="cc-qs-item text-muted" title="Decisions today (since midnight)">today <span id="cc-qs-today" class="cc-qs-value">—</span></span>
                     <span class="cc-qs-item text-muted" title="5-hour token budget consumed">5h <span id="cc-qs-usage" class="cc-qs-value">—</span></span>
                 </div>
+                <!-- Grouped so the two controls travel together. .panel-header is
+                     justify-content:space-between, so three loose children spread the
+                     middle one into the empty space — the Tile button floated between
+                     the title and the size select. It only became visible at all in
+                     2026.8.6.24 (its reveal had been dead since it was written), so
+                     this layout had never actually been rendered before. -->
+                <div class="detail-header-actions">
                 <button class="btn btn-sm btn-secondary hide-mobile" id="tile-mode-btn" data-action="toggleTileMode" style="display:none" title="View multiple terminals in a grid">Tile</button>
                 <select class="modal-select hide-mobile" id="tile-size-select" style="display:none;width:auto;font-size:0.75rem;padding:0.15rem 0.3rem" title="Grid size">
                     <option value="2x2">2x2</option>
                     <option value="3x2">3x2</option>
                     <option value="3x3">3x3</option>
                 </select>
+                </div>
             </div>
             <div class="panel-body" id="detail-body">
                 <div class="empty-state detail-empty-state modal-padding">
