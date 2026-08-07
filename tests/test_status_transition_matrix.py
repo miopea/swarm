@@ -94,6 +94,14 @@ def _daemon():
     d.fail_task = lambda tid, *a, **k: b.fail(tid)
     d.reopen_task = lambda tid, *a, **k: b.reopen(tid)
     d.mark_task_in_progress = lambda tid, actor="user": b.activate(tid) is not None
+    # REAL TaskCoordinator on the mock daemon. The transition grid moved out of the
+    # web route into TaskCoordinator.change_status (2026-08-07); leaving tasks_coord a
+    # MagicMock would make every call return a truthy mock and the sweep would assert
+    # nothing. Mocking the seam under test is exactly what invalidated an entire
+    # reproduction earlier in this batch.
+    from swarm.server.task_coordinator import TaskCoordinator
+
+    d.tasks_coord = TaskCoordinator(d)
     return d
 
 

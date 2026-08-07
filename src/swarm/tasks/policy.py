@@ -80,3 +80,93 @@ def assignment_refusal(task: SwarmTask, *, override_hold: bool = False) -> str |
 def is_assignable(task: SwarmTask, *, override_hold: bool = False) -> bool:
     """Boolean form for call sites that have no use for the reason."""
     return assignment_refusal(task, override_hold=override_hold) is None
+
+
+# --- status transitions -------------------------------------------------------
+#
+# The legal (current -> target) pairs, stated here rather than inside the dashboard's
+# route module. They lived in ``swarm/web/routes/tasks.py`` with exactly one caller,
+# which made arbitrary status changes a DASHBOARD-ONLY capability: any other surface —
+# a Jira sync, an MCP verb, the CLI — would have to duplicate the grid or import from a
+# web route. That is the same duplication that produced #1280, #1288 and the 2026-08-07
+# un-parking bug, one level up.
+
+_LEGAL_TRANSITIONS: frozenset[tuple[str, str]] = frozenset(
+    {
+        # park open work
+        ("unassigned", "backlog"),
+        ("assigned", "backlog"),
+        ("active", "backlog"),
+        # promote / hand to the Queen
+        ("backlog", "unassigned"),
+        # start work — ASSIGNED is the ONLY source (#1288): a task must be owned and
+        # queued before it can be in progress.
+        ("assigned", "active"),
+        # back to the pool
+        ("assigned", "unassigned"),
+        ("active", "unassigned"),
+        # close
+        ("assigned", "done"),
+        ("active", "done"),
+        ("active", "failed"),
+        # reopen
+        ("done", "backlog"),
+        ("done", "unassigned"),
+        ("done", "assigned"),
+        ("failed", "backlog"),
+        ("failed", "unassigned"),
+        ("failed", "assigned"),
+        # leave BLOCKED — every exit also owes the #529 blocker-row cleanup, which is
+        # why they are executed through one function rather than per-target.
+        ("blocked", "assigned"),
+        ("blocked", "unassigned"),
+        ("blocked", "backlog"),
+    }
+)
+
+
+def status_transition_refusal(current: str, target: str) -> str | None:
+    """Why this status change is refused, in words the operator can act on, or None.
+
+    #1057/#1288: "not a supported transition" tells nobody what to do instead, and the
+    cells chosen by accident are exactly the ones that deserve a sentence.
+    """
+    if (current, target) in _LEGAL_TRANSITIONS:
+        return None
+
+    if target == "blocked":
+        # DISPLAY-ONLY on purpose. The option must exist so a BLOCKED task's own status
+        # can be shown in the select at all (#1280) — without it the select landed on
+        # selectedIndex=-1 and submitted nothing. But blocking REQUIRES a reason and
+        # this form has nowhere to collect one; a blocker with an empty reason is
+        # #1057's withheld-fact shape, and #1287 showed an unrecorded cause leaves the
+        # task in no operator batch at all.
+        return (
+            "Blocked is shown so a blocked task's status is visible, but it cannot be "
+            "SET here — a blocker needs a reason, and this form has nowhere to put one. "
+            "Use swarm_block_on_external / swarm_block_on_operator from the worker, or "
+            "have the Queen park it."
+        )
+    if target == "active" and current != "assigned":
+        return (
+            f"In Progress means a worker is working it, so the task must be ASSIGNED "
+            f"to someone first — it is {current}. Assign it, then set In Progress."
+        )
+    if target == "assigned":
+        return (
+            f"Use the 'Assign to' picker rather than the status dropdown: moving to "
+            f"assigned needs a worker, and {current} → assigned has none to infer."
+        )
+    if current == "blocked" and target in ("done", "failed"):
+        # BLOCKED -> DONE is force_complete, which records a completion for work that
+        # is still open — the falsification #1268 exists to avoid.
+        return (
+            f"blocked → {target} would record a completion for work that is still "
+            f"open. Clear the blocker first (it lands in assigned), then close it."
+        )
+    return f"{current} → {target} is not a supported transition."
+
+
+def is_legal_transition(current: str, target: str) -> bool:
+    """Boolean form for callers with no use for the reason."""
+    return status_transition_refusal(current, target) is None

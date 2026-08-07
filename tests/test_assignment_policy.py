@@ -149,3 +149,76 @@ def test_the_route_no_longer_normalises_backlog_to_get_past_the_gate():
         "the assign route promotes a BACKLOG task again to satisfy a downstream gate, "
         "which un-parks work the operator deliberately parked"
     )
+
+
+# --- status transitions are also stated once (blocker 1 for the Jira work) ----
+
+
+def test_the_transition_grid_lives_outside_the_web_route():
+    """The blocker that had to clear before a Jira integration could be built.
+
+    The whole transition ruleset lived in ``swarm/web/routes/tasks.py`` with exactly
+    one caller, which made arbitrary status changes a DASHBOARD-ONLY capability. A Jira
+    sync is fundamentally a status-transition consumer ("Done in Jira → close the
+    task"), so it would have had to duplicate the grid or import from a web route —
+    becoming the fourth copy of a rule whose every previous divergence was a bug
+    (#1280, #1288, the 2026-08-07 un-parking).
+    """
+    route = (_SRC / "web" / "routes" / "tasks.py").read_text()
+    code = "\n".join(ln for ln in route.split("\n") if not ln.strip().startswith(("#", '"', "*")))
+    body = code[code.index("def _apply_status_change") : code.index("def _unsupported_reason")]
+    assert "change_status(" in body, "the route no longer delegates to the shared path"
+    for verb in ("demote_to_backlog", "mark_task_in_progress", "approve_task", "reopen_task"):
+        assert verb not in body, (
+            f"the web route dispatches {verb} itself again — the grid is back in a "
+            f"route module and only the dashboard can perform transitions"
+        )
+
+
+def test_a_non_web_surface_can_perform_a_transition():
+    """The capability the move exists to provide, asserted structurally: the executor
+    is on TaskCoordinator, reachable by any surface, not behind an HTTP handler."""
+    coord = (_SRC / "server" / "task_coordinator.py").read_text()
+    assert "def change_status(" in coord, (
+        "TaskCoordinator has no change_status; a Jira sync or MCP verb would have "
+        "nothing to call but the dashboard's route"
+    )
+    assert "is_legal_transition(" in coord, (
+        "change_status does not consult the shared policy, so it can diverge from the "
+        "refusal the operator is shown"
+    )
+
+
+def test_the_refusal_wording_comes_from_the_policy_not_the_route():
+    """One rule, one explanation — the same property proven for assignment."""
+    route = (_SRC / "web" / "routes" / "tasks.py").read_text()
+    body = route[
+        route.index("def _unsupported_reason") : route.index("def _leave_blocked")
+        if "def _leave_blocked" in route
+        else route.index("def _unsupported_reason") + 900
+    ]
+    assert "status_transition_refusal(" in body, (
+        "the route composes its own refusal text again, which can drift from the rule "
+        "that produced it (#939's failure mode)"
+    )
+
+
+@pytest.mark.parametrize(
+    ("current", "target", "legal"),
+    [
+        ("assigned", "active", True),
+        ("unassigned", "active", False),
+        ("blocked", "assigned", True),
+        ("blocked", "done", False),
+        ("active", "backlog", True),
+        ("done", "assigned", True),
+        ("assigned", "blocked", False),
+    ],
+)
+def test_the_policy_answers_transition_legality_directly(current, target, legal):
+    """Callable without a daemon, a board or a mock. That is what makes it usable from
+    a Jira sync — and what keeps the grid testable without the MagicMock that
+    invalidated the first version of the transition sweep."""
+    from swarm.tasks.policy import is_legal_transition
+
+    assert is_legal_transition(current, target) is legal, f"{current} → {target}"

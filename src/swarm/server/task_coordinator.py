@@ -52,7 +52,7 @@ from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
 from swarm.server.task_utils import log_task_exception as _log_task_exception
 from swarm.tasks.history import TaskAction
-from swarm.tasks.policy import assignment_refusal
+from swarm.tasks.policy import assignment_refusal, is_legal_transition
 from swarm.tasks.task import TaskStatus
 
 if TYPE_CHECKING:
@@ -187,6 +187,108 @@ class TaskCoordinator:
             f"ownership warning: {overlap_str}",
             category=LogCategory.WORKER,
         )
+
+    def change_status(self, task_id: str, current: str, target: str, actor: str = "user") -> bool:
+        """Apply a status transition. THE single execution path for every surface.
+
+        Returns True when a transition was applied, False when the pair is not legal.
+        **The return value is load-bearing**: this logic used to return None for every
+        unmatched pair while the caller answered ``{"status": "updated"}`` regardless,
+        so an unsupported change looked exactly like a successful one — #1159's shape,
+        where a verb succeeds, does nothing, and the caller stops looking. The operator
+        hit it trying to move a task out of BLOCKED.
+
+        MOVED HERE FROM ``swarm/web/routes/tasks.py`` (2026-08-07). It sat in a web
+        route with exactly one caller, which made arbitrary status changes a
+        DASHBOARD-ONLY capability. Anything else that needs to move a task — a Jira
+        sync closing a ticket, an MCP verb, the CLI — would have had to duplicate the
+        grid or import from a route module. Duplicating a rule across layers is what
+        produced #1280, #1288 and the un-parking bug; this is that lesson applied one
+        level up, before the Jira integration becomes the fourth copy.
+
+        The legality question lives in ``swarm.tasks.policy`` so the rule and its
+        operator-facing reason stay together; this method only EXECUTES.
+        """
+        if not is_legal_transition(current, target):
+            return False
+
+        d = self._d
+        # Every exit from BLOCKED is delegated so the #529 blocker-row obligation lives
+        # in one place rather than being repeated per target and forgotten on one.
+        if current == "blocked":
+            return self._leave_blocked(task_id, target)
+
+        if target == "backlog" and current in ("unassigned", "assigned", "active"):
+            return bool(d.task_board.demote_to_backlog(task_id))
+        if target == "active" and current == "assigned":
+            return bool(d.mark_task_in_progress(task_id))
+        if target == "unassigned" and current in ("assigned", "active"):
+            d.unassign_task(task_id)
+        elif target == "unassigned" and current == "backlog":
+            # Backlog → Unassigned is "promote / Hand to Queen". Routed through the
+            # guarded board method (#611 P5) so the BACKLOG precondition is enforced
+            # and the change persists + notifies.
+            d.task_board.approve_task(task_id)
+        elif target == "done" and current in ("assigned", "active"):
+            d.complete_task(task_id)
+        elif target == "failed" and current == "active":
+            d.fail_task(task_id)
+        elif target in ("backlog", "unassigned", "assigned") and current in ("done", "failed"):
+            d.reopen_task(task_id)
+        else:  # pragma: no cover - policy already rejected anything unhandled
+            return False
+        return True
+
+    def _leave_blocked(self, task_id: str, target: str) -> bool:
+        """Every supported exit from BLOCKED, plus the #529 row cleanup they all owe.
+
+        One function so the BlockerStore obligation cannot be honoured on some targets
+        and forgotten on others — a stale row is a nudge-forever condition, and the
+        per-target version had already grown three copies of the same two lines.
+        """
+        d = self._d
+        if target == "assigned":
+            # The exit usually wanted: the wait ended, put it back on its worker.
+            # Owner-PRESERVING (#1268) — ``release`` would drop the owner and force a
+            # manual reassign. Lands in ASSIGNED, never ACTIVE, so INV-1 holds by
+            # construction and the worker asserts its own start.
+            applied = d.task_board.unblock(task_id)
+        elif target == "unassigned":
+            # Back to the pool. ``release`` accepts BLOCKED (#1059) and drops the owner.
+            applied = d.task_board.release(task_id)
+        elif target == "backlog":
+            applied = d.task_board.demote_to_backlog(task_id)
+        else:  # pragma: no cover - policy rejects the rest
+            return False
+        if applied:
+            self.clear_blocker_rows(task_id)
+        return bool(applied)
+
+    def clear_blocker_rows(self, task_id: str) -> None:
+        """Clear BlockerStore rows when a task leaves BLOCKED (#529).
+
+        PUBLIC because it is a shared obligation, not an internal step: the assign
+        route releases a BLOCKED task too, and owes exactly the same cleanup. Every
+        surface that moves a task out of BLOCKED must be able to reach this.
+
+        The board has no handle on that store, so whoever changes the status owns the
+        rows. Clearing the status but not the rows leaves the IdleWatcher nudging about
+        a blocker that is gone.
+        """
+        d = self._d
+        task = d.task_board.get(task_id)
+        store = getattr(d, "blocker_store", None)
+        if task is None or store is None:
+            return
+        try:
+            store.clear_for_task(task.number)
+        except Exception:
+            _log.warning(
+                "left BLOCKED on #%s but failed to clear its blocker rows — the "
+                "IdleWatcher will keep nudging about a blocker that is gone",
+                task.number,
+                exc_info=True,
+            )
 
     async def assign_task(
         self,

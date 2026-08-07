@@ -11,6 +11,7 @@ from aiohttp import web
 from swarm.logging import get_logger
 from swarm.server.daemon import console_log
 from swarm.server.helpers import get_daemon, handle_errors, json_error
+from swarm.tasks.policy import status_transition_refusal
 from swarm.tasks.task import (
     PRIORITY_MAP,
     TYPE_MAP,
@@ -26,150 +27,24 @@ if TYPE_CHECKING:
 
 
 def _apply_status_change(d: SwarmDaemon, task_id: str, current: str, target: str) -> bool:
-    """Dispatch a status transition to the appropriate lifecycle method.
+    """Thin adapter over the shared transition path.
 
-    Returns True when a transition was applied, False when the pair is not
-    supported. **The return value is load-bearing.** This used to return None for
-    every unmatched pair while the caller answered ``{"status": "updated"}``
-    regardless, so an unsupported change looked exactly like a successful one —
-    #1159's shape, where a verb succeeds and does nothing and the caller stops
-    looking. The operator hit this trying to move a task out of BLOCKED.
+    The grid and its execution MOVED to swarm.tasks.policy + TaskCoordinator on
+    2026-08-07. They lived here, in a web route, with exactly one caller — which made
+    arbitrary status changes a dashboard-only capability, so a Jira sync or an MCP verb
+    would have had to duplicate the rule or import from this module. Kept as a named
+    function because the transition-matrix test and several others address it directly,
+    and because "the dashboard's entry point" is a real thing worth naming.
     """
-    # Every exit from BLOCKED is delegated, so the blocker-row obligation lives in
-    # exactly one place rather than being repeated per target and forgotten on one.
-    if current == "blocked":
-        return _leave_blocked(d, task_id, target)
-
-    if target == "backlog" and current in ("unassigned", "assigned", "active"):
-        # The missing inverse of the promote below. Operator-reported: changing a
-        # task to Backlog reported success and saved nothing, because BACKLOG was
-        # only ever entered by task creation and by reopen (Done/Failed). Parking
-        # something as not-ready is a normal operator action and had no way in.
-        return d.task_board.demote_to_backlog(task_id)
-    if target == "active" and current == "assigned":
-        # #1288: "In Progress" was offered in the dropdown and no branch implemented
-        # it, so the operator's selection silently refused — the same
-        # selectable-but-unreachable shape as BLOCKED in #1280, one cell over.
-        #
-        # ASSIGNED is the ONLY source. A task must be owned and queued before it can
-        # be in progress: unassigned/backlog have no owner to attribute the work to,
-        # blocked must be unblocked first (which lands in ASSIGNED), and done/failed
-        # must be reopened. Each of those is refused with a reason rather than
-        # silently coerced.
-        return d.mark_task_in_progress(task_id)
-    if target == "unassigned" and current in ("assigned", "active"):
-        d.unassign_task(task_id)
-    elif target == "unassigned" and current == "backlog":
-        # Backlog → Unassigned is the "promote / Hand to Queen" transition.
-        # Route through the guarded board method (#611 P5) — it enforces the
-        # BACKLOG precondition and persists + notifies — instead of a raw
-        # task.approve() + manual persist.
-        d.task_board.approve_task(task_id)
-    elif target == "done" and current in ("assigned", "active"):
-        d.complete_task(task_id)
-    elif target == "failed" and current == "active":
-        d.fail_task(task_id)
-    elif target in ("backlog", "unassigned", "assigned") and current in ("done", "failed"):
-        d.reopen_task(task_id)
-    else:
-        return False
-    return True
+    return d.tasks_coord.change_status(task_id, current, target)
 
 
 def _unsupported_reason(current: str, target: str) -> str:
-    """Why a pair is refused, in words the operator can act on (#1057, #1288).
-
-    "not a supported transition" tells him nothing about what to do instead. The
-    cells that get chosen by accident deserve a sentence.
-    """
-    if target == "blocked":
-        # DISPLAY-ONLY on purpose. The option must exist so a BLOCKED task's own
-        # status can be shown in the select at all — that was #1280's fix, and
-        # without it the select landed on selectedIndex=-1 and submitted nothing.
-        # But blocking REQUIRES a reason, and this dropdown has nowhere to collect
-        # one: a blocker with an empty reason is #1057's withheld-fact shape, and
-        # #1287 showed an unrecorded blocker cause leaves the task in no operator
-        # batch at all.
-        return (
-            "Blocked is shown so a blocked task's status is visible, but it cannot be "
-            "SET here — a blocker needs a reason, and this form has nowhere to put one. "
-            "Use swarm_block_on_external / swarm_block_on_operator from the worker, or "
-            "have the Queen park it."
-        )
-    if target == "active" and current != "assigned":
-        return (
-            f"In Progress means a worker is working it, so the task must be ASSIGNED "
-            f"to someone first — it is {current}. Assign it, then set In Progress."
-        )
-    if target == "assigned":
-        return (
-            f"Use the 'Assign to' picker rather than the status dropdown: moving to "
-            f"assigned needs a worker, and {current} → assigned has none to infer."
-        )
-    return f"{current} → {target} is not a supported transition."
-
-
-def _leave_blocked(d: SwarmDaemon, task_id: str, target: str) -> bool:
-    """Every supported exit from BLOCKED, plus the #529 row cleanup they all owe.
-
-    Kept as one function so the BlockerStore obligation cannot be honoured on
-    some targets and forgotten on others — a stale row is a nudge-forever
-    condition, and the per-target version of this had already grown three copies
-    of the same two lines.
-    """
-    if target == "assigned":
-        # The exit the operator usually wants: the wait ended, put it back on its
-        # worker. Owner-PRESERVING, matching #1268 — ``release`` would drop the
-        # owner and make him reassign by hand. Lands in ASSIGNED, never ACTIVE,
-        # so INV-1 holds by construction and the worker asserts its own start.
-        applied = d.task_board.unblock(task_id)
-    elif target == "unassigned":
-        # Back to the pool. ``release`` accepts BLOCKED (#1059) and drops the
-        # owner, which is the right semantic for this target.
-        applied = d.task_board.release(task_id)
-    elif target == "backlog":
-        applied = d.task_board.demote_to_backlog(task_id)
-    else:
-        # Deliberately no fallback that forces the status. BLOCKED → DONE in
-        # particular is force_complete, which records a completion for work that
-        # is still open — the falsification #1268 exists to avoid.
-        return False
-    if applied:
-        _clear_blocker_rows(d, task_id)
-    return applied
-
-
-def _clear_blocker_rows(d: SwarmDaemon, task_id: str) -> None:
-    """Clear BlockerStore rows when a task leaves BLOCKED.
-
-    #529: the board has no handle on that store, so whoever changes the status
-    owns the rows. Clearing the status but not the rows leaves the IdleWatcher
-    nudging about a blocker that is gone. The worker and Queen MCP surfaces do
-    this through ``mcp/handlers/_unblock.record_unblock``; this is the same
-    obligation on the third surface, and skipping it here would reproduce #529 on
-    the operator's surface only — the hardest kind of gap to notice.
-    """
-    task = d.task_board.get(task_id)
-    store = getattr(d, "blocker_store", None)
-    if task is None or store is None:
-        return
-    try:
-        # clear_for_task, NOT clear(worker, n): a BLOCKED task can carry rows
-        # filed by more than one worker and the per-worker variant leaves the
-        # others behind.
-        store.clear_for_task(task.number)
-    except Exception:
-        # The status change already succeeded; failing here must not make the
-        # call look like it did nothing. WARNING because an orphaned row is a
-        # nudge-forever condition an operator needs a forensic anchor for.
-        import logging
-
-        logging.getLogger("swarm.web.tasks").warning(
-            "left BLOCKED on #%s but could not clear its blocker rows — the "
-            "IdleWatcher may keep nudging (#529)",
-            task.number,
-            exc_info=True,
-        )
+    """Operator-facing reason for a refused pair — delegated to the shared policy so
+    the wording cannot drift from the rule that produces it."""
+    return status_transition_refusal(current, target) or (
+        f"{current} → {target} is not a supported transition."
+    )
 
 
 if TYPE_CHECKING:
@@ -285,7 +160,7 @@ async def handle_action_assign_task(request: web.Request) -> web.Response:
             # blocked task 409'd the same way a HOLD task did. release accepts
             # BLOCKED (#1059); the rows must go with the status (#529).
             d.task_board.release(task_id)
-            _clear_blocker_rows(d, task_id)
+            d.tasks_coord.clear_blocker_rows(task_id)
 
     # override_hold: this is an explicit operator action, and a HOLD task is
     # UNASSIGNED by design — so the tag was the only thing making it
