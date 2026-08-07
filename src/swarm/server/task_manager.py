@@ -96,6 +96,7 @@ class TaskManager:
         pilot: DronePilot | None = None,
         notification_bus: NotificationBus | None = None,
         config: HiveConfig | None = None,
+        blocker_store: object | None = None,
     ) -> None:
         self.task_board = task_board
         self.task_history = task_history
@@ -103,6 +104,11 @@ class TaskManager:
         self._pilot = pilot
         self._notification_bus = notification_bus
         self.config = config or HiveConfig()
+        # Injected so archive_task can honour the blocker-row obligation. Optional
+        # because several call sites build a TaskManager for non-archiving work; when
+        # absent the archive still succeeds and logs that the rows were not cleared,
+        # rather than silently pretending they were.
+        self.blocker_store = blocker_store
 
     def require_task(
         self, task_id: str, allowed_statuses: set[TaskStatus] | None = None
@@ -250,6 +256,65 @@ class TaskManager:
                 self._notification_bus.emit_task_failed(task.assigned_worker or actor, task.title)
         return result
 
+    def archive_task(self, task_id: str, actor: str = "user", reason: str = "") -> bool:
+        """THE single write path for taking a task off the board. Raises if not found.
+
+        Three surfaces archive — the dashboard's x, swarm_archive_task and
+        queen_archive_task — and each previously did its own board call plus its own
+        history entry. That is how the blocker-row obligation went missing from all
+        three at once: there was no one place for it to live. Every surface now calls
+        this, so a rule added here is enforced everywhere by construction rather than
+        by remembering to repeat it.
+
+        ARCHIVING IS A SOFT DELETE, so the row survives and keeps its number, its
+        history and its references. Two of those need clearing anyway, because the task
+        is gone as far as the board is concerned:
+
+        * blocker rows in BOTH directions. ``clear_for_task`` handles rows where this
+          task is blocked; ``clear_blocking`` handles rows where it is the BLOCKER, and
+          that is the one that strands people — a worker blocked on a task that has
+          left the board waits on something it can no longer see or clear, with the
+          IdleWatcher nudging about it forever (#529's shape, reachable again via
+          archive).
+        * ``depends_on`` references, scrubbed inside ``TaskBoard.archive``.
+
+        Deliberately NOT cleared: ``jira_key`` and the cross-project fields. Those
+        record where the task CAME FROM, which stays true after it leaves the board,
+        and an external system may still reference it.
+        """
+        task = self.require_task(task_id)
+        number = task.number
+        if not self.task_board.archive(task_id):
+            return False
+
+        store = self.blocker_store
+        if store is None:
+            _log.warning(
+                "archived #%s without a blocker store — rows pointing at it were NOT "
+                "cleared; a worker may be left blocked on a task that has left the board",
+                number,
+            )
+        else:
+            try:
+                store.clear_for_task(number)
+                store.clear_blocking(number)
+            except Exception:
+                _log.warning(
+                    "archived #%s but failed to clear its blocker rows — a worker may "
+                    "be left blocked on a task that is no longer on the board",
+                    number,
+                    exc_info=True,
+                )
+
+        self.task_history.append(task_id, TaskAction.REMOVED, actor=actor, detail=reason)
+        self.drone_log.add(
+            SystemAction.TASK_REMOVED,
+            actor,
+            f"{task.title}{f' — {reason}' if reason else ''}",
+            category=LogCategory.TASK,
+        )
+        return True
+
     def remove_task(self, task_id: str, actor: str = "user") -> bool:
         """Remove a task from the board. ARCHIVES it (#1298). Raises if not found.
 
@@ -266,16 +331,7 @@ class TaskManager:
         parent to point at. The task is still gone from the board: archived rows are
         excluded when the store loads, so every existing query omits them untouched.
         """
-        task = self.require_task(task_id)
-        self.task_board.archive(task_id)
-        self.task_history.append(task_id, TaskAction.REMOVED, actor=actor)
-        self.drone_log.add(
-            SystemAction.TASK_REMOVED,
-            actor,
-            task.title,
-            category=LogCategory.TASK,
-        )
-        return True
+        return self.archive_task(task_id, actor=actor)
 
     def edit_task(
         self,

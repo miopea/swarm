@@ -334,6 +334,7 @@ def make_daemon(
         task_history=d.task_history,
         drone_log=d.drone_log,
         pilot=d.pilot,
+        blocker_store=getattr(d, "blocker_store", None),
     )
     d.config_mgr = ConfigManager(
         config=cfg,

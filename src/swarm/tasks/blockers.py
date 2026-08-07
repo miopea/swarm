@@ -177,6 +177,30 @@ class BlockerStore:
             _log.info("blockers cleared for task #%d: %d row(s)", task_number, removed)
         return removed
 
+    def clear_blocking(self, task_number: int) -> int:
+        """Remove every row where *task_number* is the BLOCKER, across all workers.
+
+        The mirror of :meth:`clear_for_task`, which only clears rows where the task is
+        the blocked one. This direction is the dangerous one: a worker blocked ON a
+        task that has gone away stays blocked on something nobody can see or clear, and
+        the IdleWatcher keeps nudging about it (#529's shape). Archiving made that
+        reachable — the row survives but leaves the board — so the two directions must
+        be cleared together.
+        """
+        conn = self._db._conn
+        if conn is None:
+            return 0
+        with self._db._lock:
+            cur = conn.execute(
+                "DELETE FROM worker_blockers WHERE blocked_by_task = ?",
+                (int(task_number),),
+            )
+            conn.commit()
+            removed = cur.rowcount
+        if removed:
+            _log.info("blockers cleared that pointed AT task #%d: %d row(s)", task_number, removed)
+        return removed
+
     def would_create_cycle(self, task_number: int, blocked_by: int) -> bool:
         """True if filing "``task_number`` blocked_by ``blocked_by``" would
         close a cycle in the blocker graph — i.e. ``blocked_by`` already waits

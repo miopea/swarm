@@ -395,6 +395,9 @@ class SwarmDaemon(EventEmitter):
             drone_log=self.drone_log,
             notification_bus=self.notification_bus,
             config=self.config,
+            # archive_task clears blocker rows in both directions; without the store it
+            # can only log that it could not.
+            blocker_store=self.blocker_store,
         )
         self.config_mgr = ConfigManager(
             config=self.config,

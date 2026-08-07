@@ -162,7 +162,14 @@ def _handle_archive_task(
             }
         ]
 
-    if not board.archive(task.id):
+    # ONE write path. This used to call board.archive itself and append its own
+    # history entry, as did the Queen verb and the dashboard route — three surfaces,
+    # three copies, and the blocker-row obligation missing from all three because there
+    # was nowhere for it to live. TaskManager.archive_task owns it now.
+    manager = getattr(d, "tasks", None)
+    if manager is None or not hasattr(manager, "archive_task"):
+        return [{"type": "text", "text": "Task manager unavailable on this daemon."}]
+    if not manager.archive_task(task.id, actor=worker_name, reason=reason):
         return [
             {
                 "type": "text",
@@ -172,23 +179,6 @@ def _handle_archive_task(
                 ),
             }
         ]
-
-    history = getattr(d, "task_history", None)
-    if history is not None:
-        try:
-            from swarm.tasks.history import TaskAction
-
-            history.append(task.id, TaskAction.REMOVED, actor=worker_name, detail=reason)
-        except Exception:
-            # The archive already succeeded and is durable; a history failure must not
-            # be reported as an archive failure. Logged rather than swallowed silently.
-            from swarm.logging import get_logger
-
-            get_logger("mcp.archive").warning(
-                "archived task #%s but failed to record its history entry",
-                number,
-                exc_info=True,
-            )
 
     return [
         {

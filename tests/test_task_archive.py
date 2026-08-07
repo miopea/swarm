@@ -168,11 +168,35 @@ def _archive(d, worker: str, **args):
 
 
 class _D:
-    """Minimal daemon stand-in: the handler only needs these two attributes."""
+    """Daemon stand-in carrying a REAL TaskManager.
 
-    def __init__(self, board: TaskBoard, history: SqliteTaskHistory | None = None):
+    Deliberately not a stub for the manager: the archive verbs now route through
+    TaskManager.archive_task, which is where the blocker-row obligation lives, and a
+    stub would let a handler "archive" while skipping every shared rule — testing the
+    substitute instead of the thing.
+    """
+
+    def __init__(self, board: TaskBoard, history: SqliteTaskHistory | None = None, store=None):
+        from swarm.drones.log import DroneLog
+        from swarm.server.task_manager import TaskManager
+
         self.task_board = board
-        self.task_history = history
+        self.task_history = history or _NullHistory()
+        self.drone_log = DroneLog()
+        self.blocker_store = store
+        self.tasks = TaskManager(
+            task_board=board,
+            task_history=self.task_history,
+            drone_log=self.drone_log,
+            blocker_store=store,
+        )
+
+
+class _NullHistory:
+    """History sink for boards built without one — records nothing, refuses nothing."""
+
+    def append(self, *a, **kw):
+        return None
 
 
 def test_a_worker_can_archive_its_own_unstarted_task(board: TaskBoard):
@@ -243,11 +267,22 @@ def test_the_dashboard_delete_route_archives_rather_than_hard_deletes():
     src = Path("src/swarm/server/task_manager.py").read_text()
     body = src[src.index("def remove_task(") : src.index("def edit_task(")]
     code = "\n".join(ln for ln in body.split("\n") if not ln.strip().startswith(("#", '"""', "*")))
-    assert "task_board.archive(" in code, (
-        "TaskManager.remove_task no longer archives; the dashboard delete would "
-        "hard-delete and cascade the task's history away"
+    # Follows the DELEGATION rather than pinning an implementation: remove_task now
+    # calls archive_task, the single write path every surface shares, and that is where
+    # the board call plus the blocker-row obligation live. Asserting "task_board.archive
+    # appears in this function" would have failed on a refactor that made the behaviour
+    # MORE correct, which is a test measuring the wrong thing.
+    assert "archive_task(" in code, (
+        "TaskManager.remove_task no longer routes through archive_task; the dashboard "
+        "delete would skip the shared archive obligations"
     )
     assert "task_board.remove(" not in code, "it still hard-deletes"
+    manager_src = src[src.index("def archive_task(") : src.index("def remove_task(")]
+    assert "task_board.archive(" in manager_src, "archive_task does not archive"
+    assert "clear_blocking(" in manager_src, (
+        "archive_task does not clear rows where this task is the BLOCKER — a worker can "
+        "be left blocked on a task that has left the board"
+    )
 
 
 def test_hard_remove_survives_for_the_test_harness(board: TaskBoard):
@@ -333,3 +368,83 @@ def test_the_counter_accounts_for_archived_rows_after_reload(db: SwarmDB):
         f"next number {nxt} did not clear the archived high-water mark {top}; the "
         f"counter is derived only from visible tasks"
     )
+
+
+# --- what an archived row still owns (#2 of the four-item audit) --------------
+
+
+def test_archiving_clears_blocker_rows_in_BOTH_directions(db: SwarmDB):
+    """THE GAP the audit found, and the second direction is the dangerous one.
+
+    ``clear_for_task`` removes rows where the task is BLOCKED. Nothing removed rows
+    where it is the BLOCKER — so archiving a task that others wait on left them blocked
+    on something they can no longer see or clear, with the IdleWatcher nudging about it
+    forever. That is #529's shape, made reachable again by archive: the row survives,
+    but the task leaves the board.
+
+    It went missing from all three archive surfaces at once because each did its own
+    board call and there was no shared place for the obligation to live.
+    """
+    from swarm.tasks.blockers import BlockerStore
+
+    store = BlockerStore(db)
+    board = TaskBoard(store=SqliteTaskStore(db))
+    victim = _seed(board, worker="api")
+    other = _seed(board, worker="web")
+
+    store.report("web", other.number, victim.number, "waiting on the victim")
+    store.report("api", victim.number, other.number, "victim waits on other")
+    assert store.list_for_worker("web"), "positive control: the blocker row must exist"
+
+    _D(board, store=store).tasks.archive_task(victim.id, actor="api", reason="probe")
+
+    blocked_on_archived = [
+        b for b in store.list_for_worker("web") if b.blocked_by_task == victim.number
+    ]
+    assert not blocked_on_archived, (
+        "a worker is still blocked ON the archived task — it waits on something that "
+        "has left the board and cannot be seen or cleared"
+    )
+    assert not store.list_for_worker("api"), "rows where the archived task was blocked survived"
+
+
+def test_archiving_scrubs_dependencies_pointing_at_it(db: SwarmDB):
+    """The other reference an archived row owns. A live task depending on an invisible
+    one can never satisfy that dependency."""
+    board = TaskBoard(store=SqliteTaskStore(db))
+    dep = _seed(board)
+    downstream = board.add(SwarmTask(title="downstream", description="", depends_on=[dep.id]))
+    assert dep.id in downstream.depends_on, "positive control"
+
+    board.archive(dep.id)
+    assert dep.id not in downstream.depends_on, (
+        "a live task still depends on an archived one, which can never complete from "
+        "its point of view"
+    )
+
+
+def test_every_archive_surface_uses_the_single_write_path():
+    """#1's principle applied to archive: three surfaces, one obligation. Asserted as a
+    PROPERTY over the surfaces rather than per-handler, so a fourth surface that calls
+    board.archive directly — and therefore skips the blocker rows — fails here."""
+    worker = Path("src/swarm/mcp/handlers/_archive.py").read_text()
+    queen = Path("src/swarm/mcp/queen_handlers/_tasks.py").read_text()
+    manager = Path("src/swarm/server/task_manager.py").read_text()
+
+    for name, src in (("worker verb", worker), ("queen verb", queen)):
+        assert "archive_task(" in src, f"{name} does not route through TaskManager.archive_task"
+        assert "board.archive(" not in src, (
+            f"{name} still calls board.archive directly, bypassing the blocker-row "
+            f"obligation that lives in archive_task"
+        )
+    assert manager.count("def archive_task(") == 1, "there must be exactly one archive path"
+
+
+def test_archive_keeps_provenance_fields():
+    """Deliberately NOT cleared. jira_key and the cross-project fields record where the
+    task came from, which stays true after it leaves the board — and an external system
+    may still reference it. Pinned so a future 'tidy up on archive' is a decision."""
+    src = Path("src/swarm/server/task_manager.py").read_text()
+    body = src[src.index("def archive_task(") : src.index("def remove_task(")]
+    for field in ("jira_key", "source_worker", "target_worker"):
+        assert f"{field} =" not in body, f"archive_task now clears {field}; that is provenance"

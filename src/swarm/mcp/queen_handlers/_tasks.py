@@ -22,7 +22,6 @@ from swarm.logging import get_logger
 from swarm.mcp._arg_types import QueenForceCompleteTaskArgs, QueenReassignTaskArgs
 from swarm.mcp.queen_handlers._common import _assert_queen
 from swarm.mcp.types import TextContent
-from swarm.tasks.history import TaskAction
 from swarm.tasks.task import TaskStatus
 
 _log = get_logger("mcp.queen.tasks")
@@ -650,7 +649,11 @@ def _handle_queen_archive_task(
         return [{"type": "text", "text": f"No task found with number #{number}."}]
 
     was = task.status.value
-    if not board.archive(task.id):
+    # Same single write path as the worker verb — see TaskManager.archive_task.
+    manager = getattr(d, "tasks", None)
+    if manager is None or not hasattr(manager, "archive_task"):
+        return [{"type": "text", "text": "Task manager unavailable on this daemon."}]
+    if not manager.archive_task(task.id, actor="queen", reason=reason):
         return [
             {
                 "type": "text",
@@ -660,17 +663,6 @@ def _handle_queen_archive_task(
                 ),
             }
         ]
-
-    history = getattr(d, "task_history", None)
-    if history is not None:
-        try:
-            history.append(task.id, TaskAction.REMOVED, actor="queen", detail=reason)
-        except Exception:
-            _log.warning(
-                "archived task #%s but failed to record its history entry",
-                number,
-                exc_info=True,
-            )
 
     return [
         {
