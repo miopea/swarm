@@ -227,11 +227,44 @@ class JiraService:
         jira = self._get_jira()
         if not jira or not jira.enabled:
             return 0
+        # PAIRS ALREADY REFUSED ARE NOT RETRIED. Found the hard way within minutes of
+        # shipping this: 11 tickets were retried every sync interval forever, two
+        # WARNING lines each, because Jira cannot transition them at all —
+        #   "no transition to 'Done' found for IS-10278 (available: ['Waiting for
+        #    support'])"
+        # They are already closed in Jira; the empty default on jira_exported_status
+        # just made every historical task LOOK unacknowledged. That is a stable
+        # property of the ticket's workflow, not a transient error, so retrying it on a
+        # loop only hammers the API and buries real divergence in noise — the exact
+        # failure this file's own test asserts against for local tasks.
+        #
+        # Keyed on (task, target status) so a genuine status CHANGE retries: the pair
+        # differs, and the new target may well be reachable. Held in memory
+        # deliberately — one retry per daemon start is a cheap way to recover from a
+        # workflow or permission change without another column.
+        refused = getattr(self, "_export_refused", None)
+        if refused is None:
+            refused = self._export_refused = set()
         stale = [
             t
             for t in self._task_board.all_tasks
-            if t.jira_key and t.jira_exported_status != t.status.value
+            if t.jira_key
+            and t.jira_exported_status != t.status.value
+            and (t.id, t.status.value) not in refused
         ]
+        skipped = sum(
+            1
+            for t in self._task_board.all_tasks
+            if t.jira_key
+            and t.jira_exported_status != t.status.value
+            and (t.id, t.status.value) in refused
+        )
+        if skipped:
+            _log.info(
+                "jira reconcile: skipping %d task(s) Jira has already refused this "
+                "session; they retry after a restart",
+                skipped,
+            )
         if not stale:
             return 0
         _log.warning(
@@ -247,8 +280,13 @@ class JiraService:
             try:
                 if await self.export_status(task.id, task.status):
                     repaired += 1
+                else:
+                    # Refused, not errored. Record the pair so the next cycle does not
+                    # repeat it — see the note above.
+                    refused.add((task.id, task.status.value))
             except Exception:
                 _log.warning("jira reconcile: export of #%s raised", task.number, exc_info=True)
+                refused.add((task.id, task.status.value))
         return repaired
 
     async def sync_loop(self) -> None:

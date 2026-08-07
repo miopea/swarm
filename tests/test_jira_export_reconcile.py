@@ -237,3 +237,61 @@ def test_fire_and_forget_no_longer_discards_the_return_value():
     assert re.search(r"if\s+result\s+is\s+False", body), (
         "the bound result is never compared, so a False return still goes unreported"
     )
+
+
+# --- a refusal must not become an infinite retry loop -------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_refused_export_is_not_retried_every_cycle(board: TaskBoard):
+    """FOUND IN PRODUCTION, minutes after shipping the reconciler.
+
+    Eleven real tickets were re-exported every sync interval, forever, two WARNING
+    lines each, because Jira cannot transition them at all::
+
+        no transition to 'Done' found for IS-10278 (available: ['Waiting for support'])
+
+    They are already closed in Jira. The empty default on ``jira_exported_status`` made
+    every historical task look unacknowledged, and a refusal that is a STABLE property
+    of the ticket's workflow was treated as a transient failure worth repeating. The
+    result hammered the API and buried real divergence in noise — the same failure this
+    file already asserts against for tasks with no jira_key.
+    """
+    task = _linked(board)
+    board.assign(task.id, "api")
+    board.activate(task.id)
+
+    jira = _FakeJira(accept=False)
+    svc = _service(board, jira)
+
+    assert await svc.reconcile_exports() == 0, "positive control: the export must fail"
+    assert len(jira.exported) == 1, "the first attempt should happen"
+
+    assert await svc.reconcile_exports() == 0
+    assert len(jira.exported) == 1, (
+        f"the refused export was retried on the next cycle ({len(jira.exported)} "
+        f"attempts) — on the live board that is every 5 minutes, forever"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_status_change_retries_a_previously_refused_task(board: TaskBoard):
+    """The refusal must be remembered PER TARGET STATUS, not per task. A ticket that
+    cannot go to Done may well accept In Progress, and a task whose status changes is a
+    genuinely new request."""
+    task = _linked(board)
+    board.assign(task.id, "api")
+    board.activate(task.id)
+
+    jira = _FakeJira(accept=False)
+    svc = _service(board, jira)
+    await svc.reconcile_exports()
+    assert len(jira.exported) == 1
+
+    board.complete(task.id, "done")  # different target now
+    jira.accept = True
+    assert await svc.reconcile_exports() == 1, (
+        "a task whose status CHANGED was still suppressed; the refusal is being "
+        "remembered per task rather than per (task, target status)"
+    )
+    assert jira.exported[-1] == ("RCG-1", "done")
