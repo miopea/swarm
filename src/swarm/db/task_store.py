@@ -130,6 +130,21 @@ class SqliteTaskStore(BaseStore):
     # Single-row operations
     # ------------------------------------------------------------------
 
+    def max_number(self) -> int:
+        """Highest task number in the DB, INCLUDING archived rows.
+
+        ``load()`` deliberately hides archived tasks from the board, but their rows
+        survive and ``number`` carries a UNIQUE constraint — so the board's next-number
+        counter has to consider rows it cannot see. Deriving it from visible tasks alone
+        reused an archived number and every create then failed with
+        ``UNIQUE constraint failed: tasks.number``.
+        """
+        rows = self._db.fetchall("SELECT MAX(number) AS m FROM tasks")
+        if not rows:
+            return 0
+        value = rows[0]["m"]
+        return int(value) if value is not None else 0
+
     def archive(self, task_id: str) -> bool:
         """Soft-delete *task_id*: stamp it archived, keeping the row and its history.
 

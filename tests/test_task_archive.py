@@ -281,3 +281,55 @@ def test_the_migration_is_idempotent(tmp_path: Path):
     con = sqlite3.connect(path)
     cols = [r[1] for r in con.execute("PRAGMA table_info(tasks)")]
     assert "archived_at" in cols, f"archived_at missing after migration: {cols}"
+
+
+# --- the number counter must not reuse an archived row's number --------------
+
+
+def test_archiving_the_highest_task_does_not_break_the_next_creation(db: SwarmDB):
+    """REGRESSION, and it was a live outage. Archiving keeps the row — including its
+    ``number``, which carries a UNIQUE constraint — but ``load()`` excludes archived
+    rows, and ``TaskBoard.__init__`` derives ``_next_number`` from the LOADED tasks. So
+    archiving the highest-numbered task made the next daemon start hand that number out
+    again, and every subsequent create died with
+    ``UNIQUE constraint failed: tasks.number``.
+
+    Found by hitting it: after archiving #1305 the board's max live number was 1304
+    while the DB still held 1305, and swarm_create_task failed outright. Task creation
+    is the swarm's most basic operation, so this is asserted across a RESTART — the
+    in-memory counter hides the bug until the board is rebuilt from the store.
+    """
+    board = TaskBoard(store=SqliteTaskStore(db))
+    first = board.add(SwarmTask(title="a", description=""))
+    highest = board.add(SwarmTask(title="b", description=""))
+    assert highest.number > first.number, "positive control: numbers must increase"
+
+    board.archive(highest.id)
+
+    # Rebuild exactly as a daemon restart does: from the store.
+    reloaded = TaskBoard(store=SqliteTaskStore(db))
+    created = reloaded.add(SwarmTask(title="after archive", description=""))
+
+    assert created.number != highest.number, (
+        f"the new task reused #{highest.number}, which still exists as an archived row "
+        f"under a UNIQUE constraint — every create fails from here"
+    )
+    rows = db.fetchall("SELECT number FROM tasks WHERE number = ?", (highest.number,))
+    assert len(rows) == 1, f"number {highest.number} is now duplicated across {len(rows)} rows"
+
+
+def test_the_counter_accounts_for_archived_rows_after_reload(db: SwarmDB):
+    """The property behind the regression: the counter must consider EVERY row that
+    holds a number, not merely the ones the board can see."""
+    board = TaskBoard(store=SqliteTaskStore(db))
+    for i in range(3):
+        board.add(SwarmTask(title=f"t{i}", description=""))
+    top = max(t.number for t in board.all_tasks)
+    board.archive(next(t.id for t in board.all_tasks if t.number == top))
+
+    reloaded = TaskBoard(store=SqliteTaskStore(db))
+    nxt = reloaded.add(SwarmTask(title="next", description="")).number
+    assert nxt > top, (
+        f"next number {nxt} did not clear the archived high-water mark {top}; the "
+        f"counter is derived only from visible tasks"
+    )

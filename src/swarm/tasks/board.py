@@ -57,7 +57,20 @@ class TaskBoard(EventEmitter):
             self._tasks = store.load()
         # Derive next number from existing tasks; backfill any with number=0
         existing = [t.number for t in self._tasks.values() if t.number > 0]
-        self._next_number: int = max(existing, default=0) + 1
+        # Include rows the board CANNOT SEE. Archived tasks are excluded from load()
+        # but keep their number, which is UNIQUE — so seeding the counter from visible
+        # tasks alone hands out a number that already exists and every create dies with
+        # an IntegrityError. Archiving the highest-numbered task and restarting was a
+        # live outage of the swarm's most basic operation.
+        high_water = 0
+        if store is not None:
+            getter = getattr(store, "max_number", None)
+            if getter is not None:
+                try:
+                    high_water = int(getter())
+                except Exception:  # pragma: no cover - a store that cannot answer
+                    _log.warning("store.max_number() failed; falling back", exc_info=True)
+        self._next_number: int = max(max(existing, default=0), high_water) + 1
         backfilled = False
         for task in sorted(self._tasks.values(), key=lambda t: t.created_at):
             if task.number == 0:
