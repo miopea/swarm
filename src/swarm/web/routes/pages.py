@@ -88,6 +88,12 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         "worker_output": worker_output,
         "tasks": _task_dicts(d),
         "task_summary": d.task_board.summary(),
+        # The initial full-page render must stamp the version too, not just the
+        # htmx partial. Without it the page loads claiming version 0, the
+        # reconciler sees instant "drift" and burns a refresh on every load.
+        # Caught by the browser test — no source scan could see it, because both
+        # the template and the partial handler were individually correct.
+        "board_version": d.task_board.version,
         "worker_count": len(d.workers),
         "drones_enabled": d.pilot.enabled if d.pilot else False,
         "ws_auth_required": True,  # auth is always required (auto-token if no explicit password)

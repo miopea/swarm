@@ -165,3 +165,68 @@ def test_an_empty_value_still_clears_the_select():
         "the helper no longer short-circuits on an empty value, so clearing a worker "
         "would create a blank option instead of clearing the field"
     )
+
+
+# --- the save must send a DIFF, not every field (#4 of the four-item audit) ---
+
+
+def _edit_branch() -> str:
+    """The edit half of submitTaskModal, bounded by the create branch."""
+    start = _JS.index("var editBody = 'task_id='")
+    return _JS[start : _JS.index("var createBody = 'title='", start)]
+
+
+def test_the_save_sends_only_changed_fields():
+    """ROOT MECHANISM of the data loss, removed rather than mitigated.
+
+    The edit route treats a field's PRESENCE as an instruction to overwrite
+    (``if field in body``). Submitting every field on every save means a field the
+    modal got wrong — or could not represent — silently overwrites good data. That is
+    exactly how target_worker was wiped on #1301-#1303: the select could not hold an
+    off-list worker, reported "", and the save posted that "" over a real value.
+
+    Fetching the task fixed the DISPLAY. Sending a diff removes the MECHANISM: a field
+    the modal cannot represent is simply not mentioned, so it cannot be blanked.
+    """
+    body = _edit_branch()
+    assert "_taskFieldChanged(" in body, (
+        "the edit save no longer diffs against the loaded form, so every field is "
+        "submitted on every save and any one of them can overwrite good data"
+    )
+    for field in ("source_worker", "target_worker"):
+        assert f"editBody += '&{field}=" not in body, (
+            f"{field} is unconditionally appended again — this is the exact line that "
+            f"wiped the operator's target_worker"
+        )
+
+
+def test_the_snapshot_is_taken_after_the_form_is_populated():
+    """Ordering is load-bearing. Snapshotting BEFORE the fields are filled would make
+    every field look changed, sending everything and restoring the old behaviour while
+    appearing to diff."""
+    populate = _JS.index("setSelectValuePreservingUnknown('tm-target-worker'")
+    snapshot = _JS.index("_taskModalSnapshot = _readTaskModalFields();")
+    assert snapshot > populate, (
+        "the form snapshot is taken before the modal is populated, so every field reads "
+        "as changed and the diff is a no-op"
+    )
+
+
+def test_a_missing_snapshot_degrades_to_sending_the_field():
+    """Fail-safe direction matters. With no snapshot the correct fallback is to SEND
+    (an unnecessary write), never to skip (silently dropping the operator's edit)."""
+    start = _JS.index("function _taskFieldChanged")
+    body = _JS[start : _JS.index("\n    }", start)]
+    assert "return true" in body, (
+        "a missing snapshot no longer falls back to sending the field, so an opener "
+        "that does not populate would silently discard every edit"
+    )
+
+
+def test_the_reader_preserves_the_trimming_the_old_code_applied():
+    """The diff would be self-consistent with or without trimming, but the VALUE that
+    reaches the server must not change as a side effect of this refactor."""
+    start = _JS.index("var _TASK_MODAL_TRIMMED")
+    body = _JS[start : start + 600]
+    for field in ("title", "depends_on", "source_worker", "target_worker"):
+        assert field in body, f"{field} lost the .trim() the previous code applied"

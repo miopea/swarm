@@ -1,6 +1,6 @@
 [project]
 name = "swarm-ai"
-version = "2026.8.7.8"
+version = "2026.8.7.9"
 description = "A hive-mind for Claude Code agents — web orchestrator"
 readme = "README.md"
 license = "MIT"
@@ -86,6 +86,12 @@ python_classes = ["Test[A-Z]*"]
 # on someone reading the summary — the four that were tolerated for months
 # (two orphaned coroutines, aiohttp started-app mutation, a conftest notice)
 # each masked a real defect.  Keep the ignore list narrow and justified.
+markers = [
+    # Real-browser tests (Playwright + Chromium). Registered so the suite's
+    # warnings-as-errors rule does not reject the marker itself. Deselect with
+    # `-m "not browser"` where no browser is installed.
+    "browser: drives the dashboard in a real browser",
+]
 filterwarnings = [
     "error",
     "ignore::aiohttp.web.NotAppKeyWarning",

@@ -7186,11 +7186,26 @@
         var acceptanceVal = (data && data.acceptance) || '';
         var contextRefsVal = (data && data.context_refs) || '';
         var depsVal = (data && data.deps) || '';
+        // SNAPSHOT THE POPULATED FORM. Everything below compares against this so the
+        // save sends only what the operator actually CHANGED.
+        //
+        // Why it matters: the edit route treats a field's PRESENCE as an instruction to
+        // overwrite (`if field in body`). Submitting every field on every save means a
+        // field the modal got wrong — or could not represent — silently overwrites good
+        // data. That is precisely how target_worker was wiped on #1301-#1303: the
+        // select could not hold an off-list worker, reported "", and the save posted
+        // that "" over a real value. Fetching the task fixed the display; sending a
+        // DIFF removes the mechanism, so a field the modal cannot represent is simply
+        // not mentioned rather than blanked.
+        //
+        // Snapshotting the INPUTS (not the server JSON) keeps both sides in the same
+        // format, so nothing hinges on re-normalising tags/lists identically twice.
         setSelectValuePreservingUnknown('tm-source-worker', sourceWorkerVal);
         setSelectValuePreservingUnknown('tm-target-worker', targetWorkerVal);
         document.getElementById('tm-dep-type').value = depTypeVal;
         document.getElementById('tm-acceptance').value = acceptanceVal;
         document.getElementById('tm-context-refs').value = contextRefsVal;
+        _taskModalSnapshot = _readTaskModalFields();
         // tm-deps is set above (line 3866) but keep it here defensively.
 
         // Smart status default in create mode — picking the top-level
@@ -7456,6 +7471,47 @@
         taskModalSourceEmailId = '';
     };
 
+    // Fields the edit form owns, read straight from the DOM so the snapshot and the
+    // save comparison are always in identical format.
+    var _TASK_MODAL_FIELDS = {
+        title: 'tm-title',
+        description: 'tm-desc',
+        priority: 'tm-priority',
+        task_type: 'tm-task-type',
+        tags: 'tm-tags',
+        depends_on: 'tm-deps',
+        source_worker: 'tm-source-worker',
+        target_worker: 'tm-target-worker',
+        dependency_type: 'tm-dep-type',
+        acceptance_criteria: 'tm-acceptance',
+        context_refs: 'tm-context-refs',
+    };
+    var _taskModalSnapshot = null;
+
+    // Fields the previous always-send code trimmed. Preserved exactly: the diff would
+    // be self-consistent either way, but the VALUE that reaches the server must not
+    // change as a side effect of switching to a diff.
+    var _TASK_MODAL_TRIMMED = ['title', 'depends_on', 'source_worker', 'target_worker'];
+
+    function _readTaskModalFields() {
+        var out = {};
+        Object.keys(_TASK_MODAL_FIELDS).forEach(function(key) {
+            var el = document.getElementById(_TASK_MODAL_FIELDS[key]);
+            var v = el ? el.value : '';
+            out[key] = _TASK_MODAL_TRIMMED.indexOf(key) !== -1 ? v.trim() : v;
+        });
+        return out;
+    }
+
+    // A field is sent ONLY when it differs from what was loaded. With no snapshot
+    // (create mode, or an opener that did not populate) fall back to sending it, so a
+    // missing snapshot degrades to the old always-send behaviour rather than silently
+    // dropping the operator's edits.
+    function _taskFieldChanged(key, value) {
+        if (!_taskModalSnapshot) return true;
+        return _taskModalSnapshot[key] !== value;
+    }
+
     window.submitTaskModal = function() {
         var title = document.getElementById('tm-title').value.trim();
         var desc = document.getElementById('tm-desc').value;
@@ -7478,13 +7534,19 @@
             var statusEl = document.getElementById('tm-status');
             var statusVal = statusEl.value;
             var statusOriginal = statusEl.dataset.original || '';
-            var editBody = 'task_id=' + encodeURIComponent(taskModalId)
-                    + '&title=' + encodeURIComponent(title)
-                    + '&description=' + encodeURIComponent(desc)
-                    + '&priority=' + priority
-                    + '&task_type=' + taskType
-                    + '&tags=' + encodeURIComponent(tags)
-                    + '&depends_on=' + encodeURIComponent(deps);
+            // ONLY WHAT CHANGED. The edit route treats a field's presence as an
+            // instruction to overwrite, so submitting everything on every save lets a
+            // field the modal got wrong silently destroy good data — that is how
+            // target_worker was wiped on #1301-#1303. `status` already worked this way
+            // (see the note that follows); this extends the same discipline to the
+            // rest rather than leaving one field defended and ten exposed.
+            var editBody = 'task_id=' + encodeURIComponent(taskModalId);
+            var _current = _readTaskModalFields();
+            Object.keys(_TASK_MODAL_FIELDS).forEach(function(key) {
+                if (_taskFieldChanged(key, _current[key])) {
+                    editBody += '&' + key + '=' + encodeURIComponent(_current[key]);
+                }
+            });
             // Only include `status` when the operator actually changed the
             // dropdown. Otherwise the server would interpret a no-op submit
             // as a transition request and undo any /action/task/assign that
@@ -7494,15 +7556,6 @@
             if (statusVal !== statusOriginal) {
                 editBody += '&status=' + encodeURIComponent(statusVal);
             }
-            // Cross-project + advanced fields always submit; the server
-            // accepts empty strings as "no value". The old visibility check
-            // tracked an `<details>`-wrapped section that's now collapsed by
-            // default, so we'd otherwise lose user-entered data on save.
-            editBody += '&source_worker=' + encodeURIComponent(document.getElementById('tm-source-worker').value.trim());
-            editBody += '&target_worker=' + encodeURIComponent(document.getElementById('tm-target-worker').value.trim());
-            editBody += '&dependency_type=' + encodeURIComponent(document.getElementById('tm-dep-type').value);
-            editBody += '&acceptance_criteria=' + encodeURIComponent(document.getElementById('tm-acceptance').value);
-            editBody += '&context_refs=' + encodeURIComponent(document.getElementById('tm-context-refs').value);
             // If the operator changed the top-level "Assign to" worker,
             // fire /action/task/assign first so the daemon transitions the
             // task through the proper assign path (auto-dispatch, etc.).
