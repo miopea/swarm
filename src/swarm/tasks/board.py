@@ -585,6 +585,25 @@ class TaskBoard(EventEmitter):
             self._notify()
         return True
 
+    def record_jira_export(self, task_id: str, exported_status: str) -> bool:
+        """Record the status Jira has ACKNOWLEDGED for this task.
+
+        Separate from ``update`` deliberately: this is not an operator edit and must
+        not touch ``updated_at`` semantics or emit an edit history entry. It records a
+        fact about the other system, which is what makes ``status !=
+        jira_exported_status`` mean "the export is outstanding" and nothing else.
+        """
+        with self._lock:
+            task = self._tasks.get(task_id)
+            if not task:
+                return False
+            if task.jira_exported_status == exported_status:
+                return False
+            task.jira_exported_status = exported_status
+            self._persist()
+            self._notify()
+        return True
+
     def known_jira_keys(self) -> set[str]:
         """Every jira_key this swarm has seen — live tasks AND archived rows.
 

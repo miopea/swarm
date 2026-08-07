@@ -160,6 +160,10 @@ class SwarmTask:
     external_blocker_ref: str = ""
     source_email_id: str = ""  # Graph message ID if created from email
     jira_key: str = ""  # Jira ticket key (e.g. "PROJ-123") if synced from Jira
+    # The status Jira has ACKNOWLEDGED. `status` is the desired state; this is the last
+    # one an export confirmed. They differ exactly when an export is outstanding, which
+    # is what the reconciler acts on.
+    jira_exported_status: str = ""
     number: int = 0  # auto-incrementing display number (set by TaskBoard)
     # Cross-project task fields
     is_cross_project: bool = False

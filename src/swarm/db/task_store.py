@@ -42,6 +42,7 @@ _TASK_COLUMNS = (
     "depends_on",
     "source_email_id",
     "jira_key",
+    "jira_exported_status",
     "is_cross_project",
     "source_worker",
     "target_worker",
@@ -228,6 +229,7 @@ def _task_to_row(task: SwarmTask) -> dict[str, Any]:
         "depends_on": json.dumps(task.depends_on),
         "source_email_id": task.source_email_id,
         "jira_key": task.jira_key,
+        "jira_exported_status": task.jira_exported_status,
         "is_cross_project": 1 if task.is_cross_project else 0,
         "source_worker": task.source_worker,
         "target_worker": task.target_worker,
@@ -269,6 +271,10 @@ def _row_to_task(row: sqlite3.Row) -> SwarmTask:
         external_blocker_ref=_safe_get(row, "external_blocker_ref", ""),
         source_email_id=row["source_email_id"] or "",
         jira_key=row["jira_key"] or "",
+        jira_exported_status=(
+            row["jira_exported_status"] if "jira_exported_status" in row.keys() else ""
+        )
+        or "",
         number=row["number"] or 0,
         is_cross_project=bool(row["is_cross_project"]),
         source_worker=row["source_worker"] or "",

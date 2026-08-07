@@ -108,12 +108,28 @@ class JiraService:
         }
 
     async def export_status(self, task_id: str, new_status: TaskStatus) -> bool:
-        """Export a task status change to Jira."""
+        """Export a task status change to Jira, recording what Jira acknowledged.
+
+        The acknowledgement is the whole point. Before this, a failed export left no
+        trace of the divergence — Jira showed a ticket open while the swarm had it
+        done, and nothing could tell. Writing the confirmed status back means
+        ``status != jira_exported_status`` is a comparable fact the reconciler acts on.
+        """
         task = self._task_board.get(task_id)
         if not task or not task.jira_key:
             return False
         jira = self._get_jira()
-        return await jira.export_status(task, new_status)
+        ok = await jira.export_status(task, new_status)
+        if ok:
+            self._task_board.record_jira_export(task_id, new_status.value)
+        else:
+            _log.warning(
+                "jira export of #%s -> %s was not accepted; the ticket and the board "
+                "now disagree and the reconciler will retry",
+                task.number,
+                new_status.value,
+            )
+        return ok
 
     async def refresh_task(self, task_id: str) -> bool:
         """Pull comments + attachments from Jira into an existing task.
@@ -155,7 +171,18 @@ class JiraService:
 
         async def _do() -> None:
             try:
-                await coro_factory(jira, task)
+                # THE RETURN VALUE IS LOAD-BEARING. This used to ignore it, so an
+                # export that ran and simply did not take produced no exception, no
+                # log and no record — the silent-success shape (#1159) on the one path
+                # where the two systems can drift apart unnoticed.
+                result = await coro_factory(jira, task)
+                if result is False:
+                    _log.warning(
+                        "jira %s for #%s returned False — not an error, but it did not "
+                        "take; leaving the task out of sync for the reconciler",
+                        action,
+                        task.number,
+                    )
             except Exception:
                 _log.warning("jira %s failed for %s", action, task_id, exc_info=True)
 
@@ -180,12 +207,59 @@ class JiraService:
             lambda jira, task: jira.post_completion_comment(task),
         )
 
+    async def reconcile_exports(self) -> int:
+        """Re-export every task whose status Jira has not acknowledged. Returns count.
+
+        WHY THIS EXISTS AND THE RETRY ALONE DOES NOT. Exports are fire-and-forget: the
+        caller gets no signal, and before this nothing compared the two systems
+        afterwards. A single dropped export left Jira showing a ticket open while the
+        swarm had it done — permanently, because nothing ever looked again. That is the
+        same architecture as the task panel that only reacted to a pushed frame, and it
+        failed the same way.
+
+        Comparing ``status`` against ``jira_exported_status`` makes the divergence a
+        FACT rather than an event that can be missed, so a lost export costs one sync
+        interval instead of lasting until someone notices Jira is wrong.
+
+        Only touches tasks that have a jira_key; a task the swarm owns alone is not
+        out of sync with anything.
+        """
+        jira = self._get_jira()
+        if not jira or not jira.enabled:
+            return 0
+        stale = [
+            t
+            for t in self._task_board.all_tasks
+            if t.jira_key and t.jira_exported_status != t.status.value
+        ]
+        if not stale:
+            return 0
+        _log.warning(
+            "jira reconcile: %d task(s) whose status Jira has not acknowledged — %s",
+            len(stale),
+            ", ".join(
+                f"#{t.number} ({t.jira_exported_status or 'never'} -> {t.status.value})"
+                for t in stale[:10]
+            ),
+        )
+        repaired = 0
+        for task in stale:
+            try:
+                if await self.export_status(task.id, task.status):
+                    repaired += 1
+            except Exception:
+                _log.warning("jira reconcile: export of #%s raised", task.number, exc_info=True)
+        return repaired
+
     async def sync_loop(self) -> None:
-        """Periodically import Jira issues into the task board."""
+        """Periodically import Jira issues, and reconcile outstanding exports."""
         try:
             while True:
                 interval = self._get_sync_interval()
                 await asyncio.sleep(interval)
                 await self.run_import()
+                # Import alone leaves the OUTBOUND direction unchecked, which is where
+                # the two systems actually drifted.
+                await self.reconcile_exports()
         except asyncio.CancelledError:
             return

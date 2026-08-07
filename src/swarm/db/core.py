@@ -119,6 +119,7 @@ class SwarmDB:
             (16, self._migrate_v16_effort_tier),
             (17, self._migrate_v17_resolution_note),
             (18, self._migrate_v18_archived_at),
+            (19, self._migrate_v19_jira_exported_status),
         ]
         for version, migrate in migrations:
             if from_version < version:
@@ -429,6 +430,32 @@ class SwarmDB:
                 _log.info("v17: added tasks.%s", col)
             except sqlite3.OperationalError:
                 _log.debug("v17 migration: %s column likely already exists", col)
+
+    def _migrate_v19_jira_exported_status(self) -> None:
+        """v19: add ``tasks.jira_exported_status`` — what Jira was last told.
+
+        The export path was fire-and-forget: it caught exceptions but IGNORED the
+        boolean return, so an export that ran and simply did not take was silent. The
+        sync loop only imported, so nothing ever noticed the divergence, and Jira could
+        show a ticket open while the swarm had it done.
+
+        Storing the last ACKNOWLEDGED status turns that into a comparable fact:
+        ``status != jira_exported_status`` means the export is outstanding, whatever
+        the reason, and the reconciler retries it. Same shape as the board version that
+        fixed the stale task panel — push for latency, comparison for correctness.
+
+        Empty default is deliberate: existing Jira-linked tasks read as "never
+        exported", so the first reconcile pass brings them up to date rather than
+        assuming a state nobody recorded.
+        """
+        assert self._conn is not None
+        try:
+            self._conn.execute(
+                "ALTER TABLE tasks ADD COLUMN jira_exported_status TEXT NOT NULL DEFAULT ''"
+            )
+            _log.info("v19: added tasks.jira_exported_status")
+        except sqlite3.OperationalError:
+            _log.debug("v19 migration: jira_exported_status likely already exists")
 
     def _migrate_v18_archived_at(self) -> None:
         """v18 (#1298): add ``tasks.archived_at`` — soft delete.

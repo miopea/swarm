@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 18
+CURRENT_VERSION = 19
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -127,7 +127,13 @@ CREATE TABLE IF NOT EXISTS tasks (
   -- (task_history.task_id REFERENCES tasks(id) ON DELETE CASCADE), silently
   -- destroying the audit trail that learnings and playbook synthesis read. The
   -- row survives so the cascade never fires.
-  archived_at                REAL
+  archived_at                REAL,
+  -- #jira-blocker-2: the status we last SUCCESSFULLY told Jira about. The desired
+  -- state is `status`; this is the last acknowledged state. When they differ, the
+  -- export never landed and the reconciler retries. Without it a failed export is
+  -- invisible: Jira shows a ticket open while the swarm has it done, which is exactly
+  -- what the operator hit.
+  jira_exported_status       TEXT    NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
