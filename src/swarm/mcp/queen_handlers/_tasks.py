@@ -381,7 +381,14 @@ def _handle_reassign_task(
     return [
         {
             "type": "text",
-            "text": f"Reassigned #{task.number} from {prev} → {to_worker} (ASSIGNED, not started).",
+            # Read the status BACK from the board rather than asserting ASSIGNED
+            # (#1268's AC). Since 2026-08-07 a BACKLOG task keeps its status when
+            # assigned — routing parked work must not un-park it — so a hardcoded
+            # "ASSIGNED" now reports a transition that did not happen.
+            "text": (
+                f"Reassigned #{task.number} from {prev} → {to_worker} "
+                f"({task.status.value.upper()}, not started)."
+            ),
         }
     ]
 

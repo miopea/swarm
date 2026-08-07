@@ -168,11 +168,20 @@ def test_reassign_refusal_names_blocked_status(monkeypatch):
     then refuses via ``is_available``. Cost the Queen an hour on the theory
     that the target worker's load was the cause (it never is — the target is
     never inspected). Name the real reason.
+
+    FIXTURE UPDATED 2026-08-07, deliberately. This used a BACKLOG task as the thing
+    that cannot be reassigned. Since the operator's decision that parked work may
+    carry an owner, BACKLOG IS routable — reassigning it succeeds and keeps it parked
+    (see tests/test_backlog_keeps_owner.py), so it is no longer a refusal case at all.
+    A terminal task is, and #939's actual guarantee — name the real reason, never
+    imply the target is at fault — is what this test exists to protect, not the
+    particular status that triggers it.
     """
     d = make_daemon(monkeypatch)
-    task = d.task_board.create(title="parked in backlog")
-    task.status = TaskStatus.BACKLOG
-    assert d.task_board.get(task.id).status == TaskStatus.BACKLOG
+    task = d.task_board.create(title="finished work")
+    d.task_board.assign(task.id, "swarm")
+    d.task_board.complete(task.id, "done")
+    assert d.task_board.get(task.id).status == TaskStatus.DONE
 
     out = _handle_reassign_task(
         d,
@@ -180,7 +189,7 @@ def test_reassign_refusal_names_blocked_status(monkeypatch):
         {"number": task.number, "to_worker": "hub", "reason": "needs an owner"},
     )
     text = out[0]["text"]
-    assert "backlog" in text.lower(), f"refusal must name the blocking status, got: {text}"
+    assert "done" in text.lower(), f"refusal must name the blocking status, got: {text}"
     # And it must not imply the target is the problem.
     assert "not available" not in text.lower()
 
@@ -191,12 +200,13 @@ def test_reassign_refusal_does_not_depend_on_target_load(monkeypatch):
     busy = d.task_board.create(title="hub is busy")
     d.task_board.assign(busy.id, "hub")
 
-    task = d.task_board.create(title="parked in backlog")
-    task.status = TaskStatus.BACKLOG
+    task = d.task_board.create(title="finished work")
+    d.task_board.assign(task.id, "swarm")
+    d.task_board.complete(task.id, "done")
 
     out = _handle_reassign_task(
         d,
         QUEEN_WORKER_NAME,
         {"number": task.number, "to_worker": "hub", "reason": "move it"},
     )
-    assert "backlog" in out[0]["text"].lower()
+    assert "done" in out[0]["text"].lower()

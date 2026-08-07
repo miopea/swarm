@@ -219,8 +219,19 @@ class SwarmTask:
     effort_tier: str = ""
 
     def assign(self, worker_name: str) -> None:
+        """Give the task an owner.
+
+        A BACKLOG task KEEPS its status (2026-08-07 operator decision). Backlog means
+        "parked, not for now"; promoting it to ASSIGNED on assignment would un-park it,
+        which is the opposite of what routing a parked item is for. Every other status
+        promotes as before. Safe by construction: no dispatch path accepts BACKLOG —
+        ``is_available`` requires UNASSIGNED, ``auto_start_next_assigned`` and the
+        state tracker both require ASSIGNED, and the Queen only ever selects from
+        ``available_tasks`` — so an owned Backlog task is inert.
+        """
         self.assigned_worker = worker_name
-        self.status = TaskStatus.ASSIGNED
+        if self.status is not TaskStatus.BACKLOG:
+            self.status = TaskStatus.ASSIGNED
         self.updated_at = time.time()
 
     def unassign(self) -> None:
@@ -329,9 +340,22 @@ class SwarmTask:
         entered by task creation and by :meth:`reopen` (Done/Failed → Backlog), so
         no open task could be parked back. Every other lane had a way in.
 
-        Drops the owner, like :meth:`reopen` does — a Backlog task is explicitly
-        parked pending operator promotion, and leaving it owned would claim a
-        worker holds work that is out of play.
+        KEEPS the owner. This previously dropped it, reasoning that showing an owner
+        would claim a worker holds work that is out of play. The operator overrode that
+        on 2026-08-07, having hit it directly: he set a task to Backlog, assigned it to
+        sculpt-studio, saved, and the assignment silently vanished. "Backlog is meant to
+        be a backlog for tasks not to get picked up for now, but should be able to carry
+        an assignment." Parked-and-owned is a state worth expressing — "this is
+        sculpt-studio's, later" — and the old rationale was about display, not safety.
+
+        Note the deliberate divergence from :meth:`reopen`, which still drops the owner:
+        reopening finished work is a different act from parking live work, and it was
+        not part of that decision.
+
+        STILL SAFE WITH RESPECT TO DISPATCH, which is what the old rationale was
+        really protecting: no dispatch path accepts BACKLOG (see :meth:`assign`), so an
+        owned Backlog task cannot be started by the drone, the Queen, or the auto-start
+        chain.
 
         SAFE WITH RESPECT TO DISPATCH by construction: BACKLOG is excluded from
         ``is_available`` (only UNASSIGNED qualifies), so this can only ever make a
@@ -342,7 +366,6 @@ class SwarmTask:
             f"Cannot demote a {self.status.value} task to backlog — use reopen()"
         )
         self.status = TaskStatus.BACKLOG
-        self.assigned_worker = None
         self.updated_at = time.time()
 
     def reject(self, resolution: str = "") -> None:

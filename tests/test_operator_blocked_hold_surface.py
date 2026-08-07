@@ -275,12 +275,26 @@ def test_an_open_task_can_be_parked_back_to_backlog(daemon_with_board, start):
     elif start == "blocked":
         t = _blocked_task(d)
 
+    owner_before = t.assigned_worker
     assert _apply_status_change(d, t.id, start, "backlog") is True, (
         f"{start} → backlog still unsupported"
     )
     after = d.task_board.get(t.id)
     assert after.status == TaskStatus.BACKLOG
-    assert not after.assigned_worker, "parked work still claims an owner"
+    # OWNER IS NOW KEPT — updated deliberately, not incidentally. This asserted
+    # `not after.assigned_worker` on the reasoning that parked work should not claim
+    # an owner. The operator overrode that on 2026-08-07 after hitting it: he set a
+    # task to Backlog, assigned it to sculpt-studio, saved, and the assignment
+    # silently vanished. "Backlog is meant to be a backlog for tasks not to get
+    # picked up for now, but should be able to carry an assignment."
+    #
+    # The old rationale was about DISPLAY. Its safety half is untouched and is
+    # asserted by the very next test — parking still cannot make a task
+    # dispatchable, whoever owns it. See tests/test_backlog_keeps_owner.py.
+    assert after.assigned_worker == owner_before, (
+        f"parking changed the owner ({owner_before!r} → {after.assigned_worker!r}); "
+        f"'this is X's, later' must survive a save, and an unowned task must stay unowned"
+    )
 
 
 def test_parking_to_backlog_cannot_make_a_task_dispatchable(daemon_with_board):

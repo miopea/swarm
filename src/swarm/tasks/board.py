@@ -369,8 +369,18 @@ class TaskBoard(EventEmitter):
             task = self._tasks.get(task_id)
             if not task:
                 return False
-            if not task.is_available and not (
-                override_hold and task.status == TaskStatus.UNASSIGNED and task.is_on_hold
+            # BACKLOG is routable by explicit assignment (2026-08-07). Same reasoning
+            # as ``override_hold`` above and #1281's fix: ``is_available`` answers "may
+            # the auto-assign DRONE take this", and using it as the gate for an
+            # OPERATOR deliberately handing a parked item to someone refuses a
+            # different question than it was asked. The task stays BACKLOG (see
+            # ``SwarmTask.assign``), so this cannot make it dispatchable — the drone
+            # and Queen still select through ``available_tasks``, which excludes it.
+            routing_parked_work = task.status == TaskStatus.BACKLOG
+            if (
+                not task.is_available
+                and not routing_parked_work
+                and not (override_hold and task.status == TaskStatus.UNASSIGNED and task.is_on_hold)
             ):
                 return False
             task.assign(worker_name)
