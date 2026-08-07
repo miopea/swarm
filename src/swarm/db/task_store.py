@@ -145,6 +145,21 @@ class SqliteTaskStore(BaseStore):
         value = rows[0]["m"]
         return int(value) if value is not None else 0
 
+    def jira_keys(self) -> set[str]:
+        """Every non-empty ``jira_key`` in the DB, INCLUDING archived rows.
+
+        Same shape as :meth:`max_number`, and the same reason. ``load()`` hides archived
+        tasks from the board, but their rows survive and keep their identifiers — so a
+        dedupe built from the board alone cannot see them. For task NUMBERS that caused
+        a live outage (reused number, UNIQUE violation, all creation broken); for
+        ``jira_key`` it means re-importing an archived issue silently creates a
+        DUPLICATE task instead of recognising it.
+        """
+        rows = self._db.fetchall(
+            "SELECT jira_key FROM tasks WHERE jira_key IS NOT NULL AND jira_key != ''"
+        )
+        return {str(r["jira_key"]) for r in rows if r["jira_key"]}
+
     def archive(self, task_id: str) -> bool:
         """Soft-delete *task_id*: stamp it archived, keeping the row and its history.
 

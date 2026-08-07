@@ -43,7 +43,11 @@ class JiraService:
 
         jira = self._get_jira()
         existing = {t.id: t for t in self._task_board.all_tasks}
-        new_tasks = await jira.import_issues(existing)
+        # Archived tasks keep their jira_key but are not on the board — pass the
+        # full set so a re-import recognises them instead of duplicating.
+        new_tasks = await jira.import_issues(
+            existing, extra_known_keys=self._task_board.known_jira_keys()
+        )
         for task in new_tasks:
             self._task_board.add(task)
             self._drone_log.add(
@@ -63,7 +67,8 @@ class JiraService:
         jira = self._get_jira()
         if not jira or not jira.enabled:
             return None
-        existing_keys = {t.jira_key for t in self._task_board.all_tasks if t.jira_key}
+        # Includes archived rows — see TaskBoard.known_jira_keys.
+        existing_keys = self._task_board.known_jira_keys()
         task = await jira.import_one(issue_key, existing_keys)
         if not task:
             # Surface "already imported" so the UI can navigate to the existing task.
@@ -75,6 +80,17 @@ class JiraService:
                         "jira_key": t.jira_key,
                         "duplicate": True,
                     }
+            # Known but not on the board = it was archived. Say so rather than
+            # returning None, which the UI reads as "nothing happened" and which would
+            # leave the operator re-importing an issue that is deliberately gone.
+            if issue_key in existing_keys:
+                return {
+                    "id": "",
+                    "title": "",
+                    "jira_key": issue_key,
+                    "duplicate": True,
+                    "archived": True,
+                }
             return None
         self._task_board.add(task)
         self._drone_log.add(

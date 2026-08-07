@@ -585,6 +585,27 @@ class TaskBoard(EventEmitter):
             self._notify()
         return True
 
+    def known_jira_keys(self) -> set[str]:
+        """Every jira_key this swarm has seen — live tasks AND archived rows.
+
+        Deduping an import against ``all_tasks`` alone misses archived tasks, because
+        archived rows are excluded when the store loads. Archiving a Jira-linked task
+        and re-running the import would then recreate it as a NEW task pointing at the
+        same issue. Identical in shape to the task-number reuse that broke all creation
+        on 2026-08-07: a hidden row still owns a unique identifier.
+        """
+        with self._lock:
+            keys = {t.jira_key for t in self._tasks.values() if t.jira_key}
+        getter = getattr(self._store, "jira_keys", None) if self._store else None
+        if getter is not None:
+            try:
+                keys |= set(getter())
+            except Exception:  # pragma: no cover - a store that cannot answer
+                _log.warning(
+                    "store.jira_keys() failed; dedupe may miss archived rows", exc_info=True
+                )
+        return keys
+
     def set_jira_key(self, task_id: str, jira_key: str) -> bool:
         """Set the jira_key on an existing task. Thread-safe."""
         import time

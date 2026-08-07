@@ -438,7 +438,11 @@ class JiraSyncService:
         jql += order_by
         return jql
 
-    async def import_issues(self, existing_tasks: dict[str, SwarmTask]) -> list[SwarmTask]:
+    async def import_issues(
+        self,
+        existing_tasks: dict[str, SwarmTask],
+        extra_known_keys: set[str] | None = None,
+    ) -> list[SwarmTask]:
         """Fetch issues from Jira and return new SwarmTasks to create.
 
         Deduplicates by checking ``jira_key`` against existing tasks.
@@ -455,7 +459,12 @@ class JiraSyncService:
             return []
 
         # Build set of existing jira_keys for dedup
+        # ``extra_known_keys`` carries keys the caller can see but the board cannot —
+        # archived rows keep their jira_key and are excluded when the store loads, so
+        # without them re-importing an archived issue creates a DUPLICATE task.
         known_keys = {t.jira_key for t in existing_tasks.values() if t.jira_key}
+        if extra_known_keys:
+            known_keys |= set(extra_known_keys)
 
         # Optional case-insensitive label filter (client-side)
         label_filter = self._config.import_label.lower() if self._config.import_label else ""
