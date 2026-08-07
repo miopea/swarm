@@ -51,6 +51,8 @@ class TaskBoard(EventEmitter):
         self._store = store
         # Cached sort of available_tasks. Invalidated when _notify() fires.
         self._available_cache: list[SwarmTask] | None = None
+        # Bumped by _notify() on every mutation — see that method.
+        self._version: int = 0
         if store:
             self._tasks = store.load()
         # Derive next number from existing tasks; backfill any with number=0
@@ -70,8 +72,30 @@ class TaskBoard(EventEmitter):
         self.on("change", callback)
 
     def _notify(self) -> None:
+        # THE RECONCILIATION ANCHOR. Every mutating verb on this board funnels through
+        # _notify, so incrementing here means the counter cannot miss a change without
+        # that change also failing to broadcast — one invariant instead of two.
+        #
+        # It exists because pushing `tasks_changed` is necessary but NOT sufficient: a
+        # frame can be dropped, debounced into a stranded timer (#1294), or arrive at a
+        # socket that has quietly died, and the operator then sees a stale board with no
+        # error and no way to tell. Push gives latency; a version the client can compare
+        # against gives CORRECTNESS, because a missed frame self-heals on the next
+        # comparison instead of sitting there indefinitely.
+        self._version += 1
         self._available_cache = None
         self.emit("change")
+
+    @property
+    def version(self) -> int:
+        """Monotonic counter, bumped on every board mutation.
+
+        Deliberately in-memory and not persisted: it identifies a RENDERED STATE within
+        one daemon lifetime, which is exactly the question the client asks ("is what I
+        am showing still current?"). A restart re-renders everything anyway, so
+        surviving one would add persistence cost for no answer.
+        """
+        return self._version
 
     def _persist(self) -> None:
         """Save tasks to store if configured."""

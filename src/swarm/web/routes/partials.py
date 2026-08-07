@@ -129,6 +129,9 @@ async def handle_partial_tasks(request: web.Request) -> dict[str, Any]:
         "task_total": total,
         "task_has_more": has_more,
         "task_summary": d.task_board.summary(),
+        # The version this render reflects. The client stores it and compares
+        # against /api/tasks/version to detect a board it has drifted behind.
+        "board_version": d.task_board.version,
         "task_buttons": [
             {
                 "label": b.label,

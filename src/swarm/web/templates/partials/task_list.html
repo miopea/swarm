@@ -1,3 +1,9 @@
+{# Stamped with the board version this HTML reflects (#task-view-reconcile). The
+   client compares it against /api/tasks/version so a task_changed frame that never
+   arrived — dropped, debounced into a dead timer, or sent to a socket that quietly
+   died — self-heals on the next comparison instead of leaving a silently stale
+   board that only a manual filter toggle can fix. #}
+<span id="task-board-version" data-version="{{ board_version | default(0) }}" hidden></span>
 {% for t in tasks %}
 {# Compact 1-2 line row. The metadata line carries everything you need
    to scan; the second line only appears for completed tasks (resolution

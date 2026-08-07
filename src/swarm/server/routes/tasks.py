@@ -27,6 +27,8 @@ from swarm.tasks.task import (
 
 def register(app: web.Application) -> None:
     app.router.add_get("/api/tasks", handle_tasks)
+    # MUST precede the /api/tasks/{task_id} route or "version" is read as an id.
+    app.router.add_get("/api/tasks/version", handle_task_board_version)
     app.router.add_get("/api/tasks/export", handle_export_tasks)
     app.router.add_post("/api/tasks", handle_create_task)
     app.router.add_post("/api/tasks/from-email", handle_create_task_from_email)
@@ -154,6 +156,23 @@ async def handle_get_task(request: web.Request) -> web.Response:
 
 
 @handle_errors
+async def handle_task_board_version(request: web.Request) -> web.Response:
+    """The board's current version — the client's reconciliation probe.
+
+    Deliberately tiny and cheap: an integer read, no query, no serialisation of tasks.
+    The dashboard polls it as a BACKSTOP for the pushed ``tasks_changed`` frame, which
+    is necessary but not sufficient — a frame can be dropped, stranded in a dead
+    debounce timer (#1294), or delivered to a socket that has quietly died, and the
+    operator is then left looking at a stale board with no error and no indication.
+    Comparing versions turns that from permanent-until-you-click into self-healing.
+
+    Kept OUT of the task payload deliberately: the whole point is that it must be
+    cheap enough to ask often, which a full task list is not.
+    """
+    d = get_daemon(request)
+    return web.json_response({"version": d.task_board.version})
+
+
 async def handle_tasks(request: web.Request) -> web.Response:
     d = get_daemon(request)
     limit = parse_limit(request)

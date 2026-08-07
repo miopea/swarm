@@ -1473,6 +1473,61 @@
         htmx.ajax('GET', url, '#buzz-log');
     }
 
+    // --- task view reconciliation -------------------------------------------
+    //
+    // WHY THIS EXISTS, and why it is not another patch. The task panel was updated
+    // PURELY by reacting to a pushed `tasks_changed` frame. That is necessary but not
+    // sufficient, and this project has now shipped four separate fixes for four
+    // separate ways the push can be lost: a stranded debounce timer (#1294), a
+    // reconnect that skipped the resync, a frame dropped with no running loop, and a
+    // filter-restore that failed silently. Each was real. None could have been the
+    // last one, because "react to a push" has no way to notice it missed one — the
+    // operator sees a stale board with no error, and only a manual filter toggle
+    // repairs it. He described the result exactly: "flaky".
+    //
+    // Reacting is an optimisation for latency. CORRECTNESS needs reconciliation: the
+    // server stamps every render with a monotonic board version, and the client
+    // periodically asks what the current version is. Different means this view has
+    // drifted, whatever the reason, and it re-renders. A missed frame then costs one
+    // poll interval instead of lasting until someone clicks something.
+    var _taskReconcileTimer = null;
+    var _RECONCILE_MS = 15000;
+
+    function renderedBoardVersion() {
+        var el = document.getElementById('task-board-version');
+        if (!el) return null;
+        var v = parseInt(el.dataset.version, 10);
+        return isNaN(v) ? null : v;
+    }
+
+    function reconcileTaskView() {
+        // Skip while hidden: a background tab cannot show staleness to anyone, and
+        // onAppFocus already re-fetches everything on return.
+        if (document.hidden) return Promise.resolve();
+        var rendered = renderedBoardVersion();
+        if (rendered === null) return Promise.resolve();
+        return fetch('/api/tasks/version', {
+            headers: { 'X-Requested-With': 'Dashboard' },
+            cache: 'no-store',
+        })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(data) {
+                if (!data || typeof data.version !== 'number') return;
+                if (data.version !== renderedBoardVersion()) {
+                    console.warn('[swarm] task view drifted (showing v' + renderedBoardVersion()
+                        + ', server v' + data.version + ') — re-rendering');
+                    refreshTasks();
+                }
+            })
+            .catch(function() { /* transient: the next tick retries */ });
+    }
+    window.reconcileTaskView = reconcileTaskView;
+
+    function startTaskReconciler() {
+        if (_taskReconcileTimer) clearInterval(_taskReconcileTimer);
+        _taskReconcileTimer = setInterval(reconcileTaskView, _RECONCILE_MS);
+    }
+
     window.switchBuzzFilter = function(cat) {
         if (cat === 'all') {
             activeBuzzCategories.clear();
@@ -6973,9 +7028,10 @@
         showToast('No email data found in drop. Copy the email (Ctrl+C) and paste here (Ctrl+V) instead.', true);
     };
 
-    window.showEditTask = function(taskId, title, desc, priority, taskType, tags, deps, resolution, status, isCross, sourceWorker, targetWorker, depType, acceptance, contextRefs, attachments, assignedWorker) {
-        openTaskModal('edit', { id: taskId, title: title, desc: desc, priority: priority, task_type: taskType, tags: tags, deps: deps, resolution: resolution || '', status: status || '', is_cross_project: isCross === 'true', source_worker: sourceWorker || '', target_worker: targetWorker || '', dep_type: depType || 'blocks', acceptance: acceptance || '', context_refs: contextRefs || '', attachments: attachments || '', assigned_worker: assignedWorker || '' });
-    };
+    // showEditTask (17 positional args, built from the row's data-* attributes) was
+    // deleted with the single-source-of-truth change: every edit path now goes through
+    // showTaskEditorById, which fetches /api/tasks/{id}. Kept as a note rather than a
+    // shim, because a shim would let the DOM-sourced path quietly come back.
 
     function openTaskModal(mode, data) {
         taskModalMode = mode;
@@ -10352,13 +10408,21 @@
         // the Edit button so either path opens the same modal.
         var editBtn = e.target.closest('.edit-task-btn');
         if (editBtn) {
-            showEditTask(editBtn.dataset.taskId, editBtn.dataset.taskTitle, editBtn.dataset.taskDesc, editBtn.dataset.taskPriority, editBtn.dataset.taskType || '', editBtn.dataset.taskTags, editBtn.dataset.taskDeps || '', editBtn.dataset.taskResolution || '', editBtn.dataset.taskStatus || '', editBtn.dataset.taskCross || '', editBtn.dataset.taskSourceWorker || '', editBtn.dataset.taskTargetWorker || '', editBtn.dataset.taskDepType || '', editBtn.dataset.taskAcceptance || '', editBtn.dataset.taskContextRefs || '', editBtn.dataset.taskAttachments || '', editBtn.dataset.taskWorker || '');
+            // SERVER, not the DOM. These handlers used to build the modal from ~17
+            // data-* attributes baked into the row at render time, which made the row a
+            // SECOND source of truth for every task. Two consequences, both observed:
+            // the modal displayed stale values whenever the panel had not re-rendered
+            // ("the modal still showed the wrong information"), and saving then wrote
+            // those stale values BACK — that is what silently wiped target_worker on
+            // #1301-#1303. Fetching by id means the editor cannot show, or persist,
+            // anything but current server state.
+            showTaskEditorById(editBtn.dataset.taskId);
             return;
         }
         var taskRow = e.target.closest('.task-row-clickable');
         if (taskRow && !e.target.closest('button, a, input, select, textarea, details, summary, .task-history-panel')) {
-            var ds = taskRow.dataset;
-            showEditTask(ds.taskId, ds.taskTitle, ds.taskDesc, ds.taskPriority, ds.taskType || '', ds.taskTags || '', ds.taskDeps || '', ds.taskResolution || '', ds.status || '', ds.taskCross || '', ds.taskSourceWorker || '', ds.taskTargetWorker || '', ds.taskDepType || '', ds.taskAcceptance || '', ds.taskContextRefs || '', ds.taskAttachments || '', ds.worker || '');
+            // Same single-source-of-truth rule as the Edit button above.
+            showTaskEditorById(taskRow.dataset.taskId);
             return;
         }
         // Task history toggle
@@ -11212,6 +11276,10 @@
     updateNotifButton();
     updateAppBadge(0);
     connect();
+    // Backstop for the pushed frame — see reconcileTaskView. Started unconditionally,
+    // including when the socket is healthy: the failures it covers all LOOK like a
+    // healthy socket from here, which is precisely why they went undiagnosed.
+    startTaskReconciler();
     refreshPipelines();
 
     // Auto-open launch modal on cold start (zero workers)
