@@ -52,6 +52,7 @@ from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
 from swarm.server.task_utils import log_task_exception as _log_task_exception
 from swarm.tasks.history import TaskAction
+from swarm.tasks.policy import assignment_refusal
 from swarm.tasks.task import TaskStatus
 
 if TYPE_CHECKING:
@@ -227,24 +228,14 @@ class TaskCoordinator:
         task = d.task_board.get(task_id)
         if not task:
             raise TaskOperationError(f"Task '{task_id}' not found")
-        # A HOLD task is UNASSIGNED by design — that is the hold mechanism — so
-        # the only thing separating it from an assignable task is the tag.
-        # BACKLOG is assignable and STAYS parked (2026-08-07). Widened here in the same
-        # pass as board.assign, because a gate relaxed at only one layer refuses at the
-        # other — the note below records that lesson and this is the same shape.
-        assignable = (
-            task.is_available
-            or task.status == TaskStatus.BACKLOG
-            or (override_hold and task.status == TaskStatus.UNASSIGNED and task.is_on_hold)
-        )
-        if not assignable:
-            detail = (
-                " — it is on hold; assign it explicitly from the dashboard"
-                if (task.is_on_hold and not override_hold)
-                else ""
-            )
+        # ONE rule, stated in swarm.tasks.policy — including the refusal TEXT, so the
+        # message cannot drift from the check. #939 cost an hour because this layer's
+        # wording implied the TARGET worker was the problem; the target is never
+        # consulted.
+        refusal = assignment_refusal(task, override_hold=override_hold)
+        if refusal is not None:
             raise TaskOperationError(
-                f"Task '{task_id}' is not available ({task.status.value}){detail}",
+                f"Task '{task_id}' cannot be assigned: {refusal}",
                 status_code=409,
             )
 

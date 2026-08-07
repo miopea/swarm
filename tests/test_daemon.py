@@ -644,8 +644,19 @@ async def test_assign_task_not_available(daemon):
     task = daemon.create_task(title="Test")
     daemon.task_board.assign(task.id, "api")
     daemon.task_board.complete(task.id)
-    with pytest.raises(TaskOperationError, match="not available"):
+    # ASSERTION UPDATED DELIBERATELY 2026-08-07. This matched "not available", which
+    # is the exact wording #939 filed a ticket about: it reads as though the TARGET
+    # worker is unavailable, and the target is never consulted. Now that the rule and
+    # its explanation live together in swarm.tasks.policy, the refusal names the real
+    # cause — the task's own status. Asserted as that PROPERTY rather than as a fixed
+    # string, so improving the wording again does not require touching this test.
+    with pytest.raises(TaskOperationError) as exc:
         await daemon.assign_task(task.id, "web")
+    message = str(exc.value).lower()
+    assert "done" in message, f"the refusal must name the blocking status: {message}"
+    assert "not available" not in message, (
+        f"the refusal still implies the target worker is the problem (#939): {message}"
+    )
 
 
 # --- complete_task ---

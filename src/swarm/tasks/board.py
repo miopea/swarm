@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
+from swarm.tasks.policy import assignment_refusal
 from swarm.tasks.task import (
     AWAITING_OPERATOR_REF,
     PARKED_TAG,
@@ -406,19 +407,9 @@ class TaskBoard(EventEmitter):
             task = self._tasks.get(task_id)
             if not task:
                 return False
-            # BACKLOG is routable by explicit assignment (2026-08-07). Same reasoning
-            # as ``override_hold`` above and #1281's fix: ``is_available`` answers "may
-            # the auto-assign DRONE take this", and using it as the gate for an
-            # OPERATOR deliberately handing a parked item to someone refuses a
-            # different question than it was asked. The task stays BACKLOG (see
-            # ``SwarmTask.assign``), so this cannot make it dispatchable — the drone
-            # and Queen still select through ``available_tasks``, which excludes it.
-            routing_parked_work = task.status == TaskStatus.BACKLOG
-            if (
-                not task.is_available
-                and not routing_parked_work
-                and not (override_hold and task.status == TaskStatus.UNASSIGNED and task.is_on_hold)
-            ):
+            # ONE rule, stated in swarm.tasks.policy. This layer used to re-implement
+            # it, and every divergence from the coordinator's copy has been a bug.
+            if assignment_refusal(task, override_hold=override_hold) is not None:
                 return False
             task.assign(worker_name)
             _log.info("task %s assigned to %s", task_id, worker_name)
