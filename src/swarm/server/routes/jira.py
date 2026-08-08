@@ -15,6 +15,12 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/jira/sync", handle_jira_sync)
     app.router.add_post("/api/jira/import-by-key", handle_jira_import_by_key)
     app.router.add_get("/api/jira/preview", handle_jira_preview)
+    # v2 phase 3 — setup flow. discover proposes, plan shows what a sweep WOULD do,
+    # confirm is the explicit go-ahead. Enabling the integration must not be a bulk
+    # write to a shared tracker.
+    app.router.add_get("/api/jira/discover", handle_jira_discover)
+    app.router.add_get("/api/jira/plan", handle_jira_plan)
+    app.router.add_post("/api/jira/confirm", handle_jira_confirm)
     app.router.add_post("/api/tasks/{task_id}/jira", handle_jira_create)
     app.router.add_post("/api/tasks/{task_id}/jira/refresh", handle_jira_refresh)
 
@@ -151,3 +157,88 @@ async def handle_jira_create(request: web.Request) -> web.Response:
         detail = f"linked to {jira_key}"
         d.task_history.append(task_id, TaskAction.EDITED, actor="user", detail=detail)
     return web.json_response({"jira_key": jira_key, "task_id": task_id})
+
+
+@handle_errors
+async def handle_jira_discover(request: web.Request) -> web.Response:
+    """Read a project's real workflow and PROPOSE a status map. Writes nothing.
+
+    The setup screen's data source. Returns the project's status vocabulary, the
+    proposed mapping, its terminal statuses, and — named explicitly — any Swarm status
+    the project offers no plausible target for. That last list is the case that failed
+    silently before: a hardcoded "Done" was refused by 11 real tickets whose workflow
+    only offered "Waiting for support", and nothing surfaced it until the export failed.
+    """
+    d = get_daemon(request)
+    project = request.query.get("project", "").strip()
+    if not project:
+        return json_error("project is required", status=400)
+    jira = getattr(d, "jira", None)
+    if jira is None or not jira.enabled:
+        return json_error("Jira integration not enabled", status=400)
+    return web.json_response(await jira.discover_workflow(project))
+
+
+@handle_errors
+async def handle_jira_plan(request: web.Request) -> web.Response:
+    """The DRY RUN: what a reconcile sweep would change, without changing it.
+
+    On 2026-08-07 a schema change made 25 tasks look unacknowledged and the reconciler
+    transitioned 14 real tickets before anyone had looked. This is what should have
+    been shown instead.
+    """
+    d = get_daemon(request)
+    svc = getattr(d, "jira_svc", None)
+    if svc is None:
+        return json_error("Jira integration not enabled", status=400)
+    plan = svc.plan_exports()
+    return web.json_response(
+        {
+            "count": len(plan),
+            "unconfirmed": sum(1 for p in plan if not p.get("project_confirmed")),
+            "changes": plan,
+        }
+    )
+
+
+@handle_errors
+async def handle_jira_confirm(request: web.Request) -> web.Response:
+    """Confirm a project's status map — the explicit go-ahead that lets the sweep write.
+
+    Takes the mapping the operator actually approved rather than re-deriving it, so
+    what was on screen is what gets stored. Confirming is a separate act from
+    discovering on purpose: Done / Resolved / Closed are rarely interchangeable and a
+    wrong automatic choice transitions real tickets while reporting success.
+    """
+    d = get_daemon(request)
+    body = await request.json()
+    project = str(body.get("project", "")).strip()
+    if not project:
+        return json_error("project is required", status=400)
+    status_map = body.get("status_map")
+    if not isinstance(status_map, dict) or not status_map:
+        return json_error("status_map is required and must be non-empty", status=400)
+
+    cfg = getattr(getattr(d, "jira", None), "_config", None)
+    if cfg is None:
+        return json_error("Jira integration not enabled", status=400)
+
+    cfg.project_status_maps[project] = {str(k): str(v) for k, v in status_map.items()}
+    if project not in cfg.confirmed_projects:
+        cfg.confirmed_projects.append(project)
+    mgr = getattr(d, "config_mgr", None)
+    if mgr is not None and hasattr(mgr, "save"):
+        mgr.save()
+    _log.warning(
+        "jira: workflow confirmed for project %s (%d mappings) — the reconcile sweep "
+        "may now converge this project",
+        project,
+        len(cfg.project_status_maps[project]),
+    )
+    return web.json_response(
+        {
+            "project": project,
+            "confirmed": True,
+            "status_map": cfg.project_status_maps[project],
+        }
+    )

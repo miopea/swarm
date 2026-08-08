@@ -207,6 +207,43 @@ class JiraService:
             lambda jira, task: jira.post_completion_comment(task),
         )
 
+    def plan_exports(self) -> list[dict[str, Any]]:
+        """What a reconcile WOULD change, without touching Jira. The dry run.
+
+        Returns one entry per outstanding task: its number, ticket, the status Jira
+        last acknowledged, the status it would be moved to, and whether that project
+        has been confirmed.
+
+        Exists because enabling an integration must not be a bulk write to someone
+        else's tracker. On 2026-08-07 a schema change made 25 tasks look unacknowledged
+        and the reconciler transitioned 14 real tickets before anyone had looked. A
+        settings toggle should never have that blast radius.
+        """
+        board = self._task_board
+        plan: list[dict[str, Any]] = []
+        for task in board.all_tasks:
+            if not task.jira_key or task.jira_exported_status == task.status.value:
+                continue
+            project = task.jira_key.split("-")[0] if "-" in task.jira_key else ""
+            plan.append(
+                {
+                    "number": task.number,
+                    "jira_key": task.jira_key,
+                    "project": project,
+                    "acknowledged": task.jira_exported_status or None,
+                    "would_become": task.status.value,
+                    "project_confirmed": self._project_confirmed(project),
+                }
+            )
+        return plan
+
+    def _project_confirmed(self, project_key: str) -> bool:
+        """Has this project's discovered workflow been confirmed by the operator?"""
+        cfg = getattr(self._get_jira(), "_config", None)
+        if cfg is None or not hasattr(cfg, "is_confirmed"):
+            return True  # pre-v2 config: do not gate an install that has no concept of it
+        return bool(cfg.is_confirmed(project_key))
+
     async def reconcile_exports(self) -> int:
         """Re-export every task whose status Jira has not acknowledged. Returns count.
 
@@ -252,6 +289,35 @@ class JiraService:
             and t.jira_exported_status != t.status.value
             and (t.id, t.status.value) not in refused
         ]
+
+        # UNCONFIRMED PROJECTS ARE PLANNED, NOT WRITTEN (v2 phase 3). The sweep is a
+        # BULK convergence: it can transition many tickets at once, on its own
+        # schedule, with nobody watching — which is exactly what happened when a
+        # migration made 25 tasks look unacknowledged and 14 real tickets moved.
+        #
+        # Individual exports caused by a real task transition are NOT gated: those are
+        # a direct consequence of an action the operator or a worker just took, and
+        # blocking them would break a working integration on upgrade. The dangerous
+        # thing is the unattended batch, so that is what needs a go-ahead.
+        unconfirmed = [
+            t
+            for t in stale
+            if not self._project_confirmed(t.jira_key.split("-")[0] if "-" in t.jira_key else "")
+        ]
+        if unconfirmed:
+            by_project: dict[str, int] = {}
+            for t in unconfirmed:
+                key = t.jira_key.split("-")[0] if "-" in t.jira_key else "?"
+                by_project[key] = by_project.get(key, 0) + 1
+            _log.warning(
+                "jira reconcile: %d task(s) NOT written because their project's "
+                "workflow is unconfirmed (%s) — confirm the discovered mapping to let "
+                "the sweep converge them",
+                len(unconfirmed),
+                ", ".join(f"{k}: {v}" for k, v in sorted(by_project.items())),
+            )
+            skipped_ids = {t.id for t in unconfirmed}
+            stale = [t for t in stale if t.id not in skipped_ids]
         skipped = sum(
             1
             for t in self._task_board.all_tasks
