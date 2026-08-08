@@ -312,12 +312,33 @@ class ProposalStore:
         self,
         valid_task_ids: set[str],
         valid_worker_names: set[str],
+        assignable_task_ids: set[str] | None = None,
     ) -> int:
         """Expire pending proposals where the task or worker is no longer valid.
+
+        TWO DIFFERENT QUESTIONS, and conflating them expired proposals that were
+        perfectly good. ``valid_task_ids`` means "the task still exists and is open".
+        ``assignable_task_ids`` means "the auto-assigner could still take it" — which is
+        UNASSIGNED and not on hold.
+
+        Only an ASSIGNMENT proposal needs the second: it is a proposal to give the task
+        to somebody, so a task that already has an owner makes it moot. Every other type
+        references a task the worker ALREADY OWNS — a promotion request, a completion, a
+        park — and none of those can ever be assignable. Checking them against the
+        assignable set expired them on the next sweep, before an operator could act.
+
+        Found 2026-08-08 on ``jira_promotion``, which expired within seconds every time.
+        It applies equally to COMPLETION and PARK, whose tasks are ACTIVE and therefore
+        just as unassignable; the earlier live test only survived because the operator
+        approved inside the sweep window.
+
+        ``assignable_task_ids`` defaults to ``valid_task_ids`` so existing callers keep
+        their previous behaviour.
 
         Also expires proposals older than ``_MAX_PROPOSAL_AGE``.
         Returns the number of proposals expired.
         """
+        assignable = valid_task_ids if assignable_task_ids is None else assignable_task_ids
         with self._lock:
             count = 0
             for p in list(self._proposals.values()):
@@ -327,6 +348,13 @@ class ProposalStore:
                     p.status = ProposalStatus.EXPIRED
                     count += 1
                 elif p.task_id and p.task_id not in valid_task_ids:
+                    p.status = ProposalStatus.EXPIRED
+                    count += 1
+                elif (
+                    p.proposal_type == ProposalType.ASSIGNMENT
+                    and p.task_id
+                    and p.task_id not in assignable
+                ):
                     p.status = ProposalStatus.EXPIRED
                     count += 1
             # RLock allows re-entrant call to expire_old

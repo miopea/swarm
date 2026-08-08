@@ -19,6 +19,7 @@ Spec: docs/specs/jira-integration-v2.md, decisions 4 and 5.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -507,4 +508,115 @@ def test_the_oauth_request_asks_for_the_user_scope():
     assert "read:jira-user" in _SCOPE, (
         "the scope /myself requires is still not requested, so every new install "
         "depends on the fallback"
+    )
+
+
+# --- proposals must survive long enough to be approved ------------------------
+
+
+def test_a_promotion_proposal_is_not_expired_for_being_unassignable():
+    """FOUND IN PRODUCTION 2026-08-08, on the second live test.
+
+    ``expire_stale`` validated every proposal's task against ``available_tasks`` —
+    UNASSIGNED and not on hold. A promotion proposal ALWAYS references a task assigned
+    to the worker that requested it, so it could never be in that set and was expired on
+    the very next sweep, seconds after being raised.
+
+    The first live test survived only because the operator approved it inside the sweep
+    window. Nothing failed; the proposal simply vanished from the surface, which is the
+    worst shape — an approval queue that silently drops what it is asked to hold.
+
+    Applies equally to COMPLETION and PARK, whose tasks are ACTIVE and therefore just as
+    unassignable, so this is fixed as a rule rather than as a special case.
+    """
+    from swarm.tasks.proposal import ProposalStore
+
+    store = ProposalStore()
+    task_id = "owned-task"
+    store.add(
+        AssignmentProposal.jira_promotion(
+            worker_name="api",
+            task_id=task_id,
+            task_title="t",
+            project="WWD",
+            reasoning="because",
+        )
+    )
+
+    # The task exists and is open, but is NOT assignable — it belongs to the worker.
+    expired = store.expire_stale(
+        valid_task_ids={task_id},
+        valid_worker_names={"api"},
+        assignable_task_ids=set(),
+    )
+
+    assert expired == 0, "the promotion request was expired before anyone could approve it"
+    assert len(store.pending) == 1
+
+
+def test_an_assignment_proposal_IS_still_expired_when_the_task_is_taken():
+    """The other half: assignment proposals are about giving a task to somebody, so a
+    task that already has an owner genuinely makes one moot. Relaxing that would leave
+    dead proposals on the surface."""
+    from swarm.tasks.proposal import ProposalStore
+
+    store = ProposalStore()
+    store.add(AssignmentProposal(worker_name="api", task_id="taken", task_title="t"))
+
+    expired = store.expire_stale(
+        valid_task_ids={"taken"},
+        valid_worker_names={"api"},
+        assignable_task_ids=set(),
+    )
+
+    assert expired == 1, "an assignment proposal for an already-owned task survived"
+
+
+def test_a_promotion_for_a_deleted_task_is_still_expired():
+    """ "Owned" must not become "never expires" — a proposal whose task is gone is dead."""
+    from swarm.tasks.proposal import ProposalStore
+
+    store = ProposalStore()
+    store.add(
+        AssignmentProposal.jira_promotion(
+            worker_name="api", task_id="gone", task_title="t", project="WWD"
+        )
+    )
+
+    assert store.expire_stale({"other"}, {"api"}, assignable_task_ids=set()) == 1
+
+
+def test_the_MANAGER_keeps_a_promotion_for_an_owned_task(board: TaskBoard):
+    """Drives ProposalManager.expire_stale against a real board.
+
+    The three checks above exercise the STORE. The defect was in what the MANAGER passed
+    it — `valid_task_ids` built from `available_tasks` — so all three stayed green with
+    the manager regressed. Sixth time in this work that a control passed because the test
+    sat on the wrong side of the wiring.
+    """
+    from swarm.server.proposals import ProposalManager
+    from swarm.tasks.proposal import ProposalStore
+
+    task = _task(board, worker="api")  # ASSIGNED, therefore NOT assignable
+    mgr = ProposalManager(
+        store=ProposalStore(),
+        broadcast_ws=lambda _p: None,
+        drone_log=MagicMock(),
+        notification_bus=MagicMock(),
+        task_board=board,
+        get_worker=lambda name: MagicMock(name=name),
+        get_workers=lambda: [SimpleNamespace(name="api")],
+        get_pilot=lambda: None,
+        assign_task=AsyncMock(),
+        complete_task=MagicMock(),
+        execute_escalation=AsyncMock(),
+    )
+    mgr.on_proposal(_promotion(task))
+    assert len(mgr.pending) == 1
+
+    mgr.expire_stale()
+
+    assert len(mgr.pending) == 1, (
+        "the manager expired a promotion for a task its own worker owns — the request "
+        "disappears from the operator's surface before it can be approved"
     )

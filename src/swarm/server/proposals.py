@@ -248,9 +248,20 @@ class ProposalManager:
         # during set comprehension if this ever moves to threaded code.
         available = self._task_board.available_tasks
         workers = list(self._get_workers())
-        valid_task_ids = {t.id for t in available}
+        # "Still exists and is open" — the right test for a proposal about a task the
+        # worker already owns (promotion, completion, park). Using the ASSIGNABLE set
+        # for those expired them on the next sweep, because an owned task is never
+        # assignable.
+        valid_task_ids = {
+            t.id
+            for t in self._task_board.all_tasks
+            if t.status not in (TaskStatus.DONE, TaskStatus.FAILED)
+        }
+        assignable_task_ids = {t.id for t in available}
         valid_worker_names = {w.name for w in workers}
-        expired = self.store.expire_stale(valid_task_ids, valid_worker_names)
+        expired = self.store.expire_stale(
+            valid_task_ids, valid_worker_names, assignable_task_ids=assignable_task_ids
+        )
         if expired:
             self._clear_and_broadcast()
 
