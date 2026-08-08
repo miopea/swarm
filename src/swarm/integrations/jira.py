@@ -343,6 +343,8 @@ class JiraClient:
         description: str,
         issue_type: str = "Task",
         priority: str = "Medium",
+        labels: list[str] | None = None,
+        assignee_account_id: str = "",
     ) -> dict[str, Any]:
         """Create a Jira issue. Returns the created issue dict with 'key' and 'id'."""
         session = await self._ensure_session()
@@ -355,6 +357,10 @@ class JiraClient:
                 "priority": {"name": priority},
             }
         }
+        if labels:
+            payload["fields"]["labels"] = list(labels)
+        if assignee_account_id:
+            payload["fields"]["assignee"] = {"accountId": assignee_account_id}
         if description:
             payload["fields"]["description"] = {
                 "type": "doc",
@@ -790,23 +796,75 @@ class JiraSyncService:
             self._record_error(f"assign {task.jira_key}", e)
             return False
 
-    async def create_jira_issue(self, task: SwarmTask) -> str:
+    # Provenance, reserved (v2 phase 5). Applied to tickets Swarm CREATED and to
+    # nothing else. It means exactly one thing: an agent raised this.
+    #
+    # The trap this avoids: the old import filter was `labels = "swarm"`. Had created
+    # tickets carried this label while it still drove routing, Swarm would re-import its
+    # own output as a new task — an echo loop. Separating "came from Swarm" from "route
+    # to Swarm" (the assignee) makes the loop impossible rather than merely deduped
+    # against. Nothing reads this label; that is the point.
+    PROVENANCE_LABEL = "swarm"
+
+    def default_create_project(self) -> str:
+        """Which project a newly created ticket belongs in.
+
+        Was ``self._config.project`` — the LEGACY single-project field. On a v2 config
+        that only sets ``projects`` it is empty, which Jira rejects, and on a multi-
+        project config it silently pinned creation to whichever project happened to be
+        in the old field. First configured project, legacy field as the fallback.
+        """
+        for candidate in self._config.projects or []:
+            if str(candidate).strip():
+                return str(candidate).strip()
+        return str(self._config.project or "").strip()
+
+    async def _my_account_id(self) -> str:
+        """The authenticated dev's Jira accountId, or "" if it cannot be read.
+
+        A ticket a worker raised is assigned to the dev whose swarm raised it, so the
+        outbound rule and the assignee-routing rule agree and it round-trips home to the
+        same board. Failing to resolve it is NOT fatal: an unassigned ticket that exists
+        is recoverable, a promotion that failed because a lookup 500'd is just lost work.
+        """
+        try:
+            me = await self.client.get_myself()
+        except Exception:
+            _log.warning(
+                "jira: could not resolve the authenticated account; the created ticket "
+                "will be unassigned and will not route back to this swarm",
+                exc_info=True,
+            )
+            return ""
+        return str(me.get("accountId", "") or "")
+
+    async def create_jira_issue(self, task: SwarmTask, *, project: str = "") -> str:
         """Create a Jira issue from a Swarm task. Returns the Jira key.
 
-        Raises RuntimeError if Jira is not enabled.
+        Raises RuntimeError if Jira is not enabled or no project is configured.
         """
         if not self.enabled:
             raise RuntimeError("Jira integration is not enabled")
+
+        target = (project or "").strip() or self.default_create_project()
+        if not target:
+            # Refuse rather than post an empty project key and surface Jira's own error.
+            raise RuntimeError(
+                "no Jira project configured — set one in Settings > Integrations "
+                "before promoting a task"
+            )
 
         issue_type = _SWARM_TYPE_TO_JIRA.get(task.task_type, "Task")
         priority = _SWARM_PRIORITY_TO_JIRA.get(task.priority, "Medium")
 
         result = await self.client.create_issue(
-            project=self._config.project,
+            project=target,
             summary=task.title,
             description=task.description,
             issue_type=issue_type,
             priority=priority,
+            labels=[self.PROVENANCE_LABEL],
+            assignee_account_id=await self._my_account_id(),
         )
         key = result.get("key", "")
         if key:

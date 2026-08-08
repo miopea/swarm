@@ -32,6 +32,12 @@ class ProposalType(str, Enum):
     # blocked on the operator (not on another task). One-click approve
     # parks it (→ BLOCKED) so the autonomous loops stand down.
     PARK = "park"
+    # A worker REQUESTING that its Swarm task become a Jira ticket (v2 phase 4).
+    # Workers never create tickets directly: an agent raising work in a shared
+    # tracker is visible to a whole team, so the operator approves. It rides the
+    # existing proposals surface rather than a second inbox, which is a thing that
+    # eventually goes unwatched.
+    JIRA_PROMOTION = "jira_promotion"
 
 
 class QueenAction(str, Enum):
@@ -67,6 +73,32 @@ class AssignmentProposal:
     @property
     def age(self) -> float:
         return time.time() - self.created_at
+
+    @classmethod
+    def jira_promotion(
+        cls,
+        *,
+        worker_name: str,
+        task_id: str,
+        task_title: str,
+        project: str,
+        reasoning: str = "",
+    ) -> AssignmentProposal:
+        """A worker's request to promote its task to a Jira ticket.
+
+        ``message`` carries the target project so the approval path does not have to
+        re-derive it: the operator approves what they were shown, and re-deriving at
+        approval time is how a confirmation ends up applying to something else.
+        """
+        return cls(
+            worker_name=worker_name,
+            task_id=task_id,
+            task_title=task_title,
+            message=project,
+            reasoning=reasoning,
+            proposal_type=ProposalType.JIRA_PROMOTION,
+            confidence=1.0,
+        )
 
     @classmethod
     def escalation(

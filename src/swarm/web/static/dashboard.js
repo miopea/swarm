@@ -3415,17 +3415,30 @@
             _proposalData[p.id] = p;
             var isEsc = p.proposal_type === 'escalation';
             var isCompletion = p.proposal_type === 'completion';
+            // Without its own branch a promotion falls through to the ASSIGNMENT shape
+            // below and renders an "ASSIGN" badge — so the operator would think they
+            // were approving a task assignment while actually authorising a ticket in a
+            // tracker their whole team reads. An approval surface that mislabels what it
+            // is approving is worse than no approval surface.
+            var isJira = p.proposal_type === 'jira_promotion';
             var confPct = Math.round((p.confidence || 1.0) * 100);
             var confClass = confPct >= 70 ? 'conf-high' : confPct >= 40 ? 'conf-mid' : 'conf-low';
             var emailAttr = (isCompletion && p.has_source_email) ? ' data-has-email="1"' : '';
             html += '<div class="proposal-item" data-proposal-id="' + escapeHtml(p.id) + '"' + emailAttr + '>';
             if (isEsc) html += '<span class="conf-badge conf-mid">ESC</span>';
             if (isCompletion) html += '<span class="conf-badge conf-high">DONE</span>';
+            if (isJira) html += '<span class="conf-badge conf-mid">JIRA</span>';
             html += '<span class="proposal-worker">' + escapeHtml(p.worker_name) + '</span>';
             if (isEsc) {
                 html += '<span class="text-beeswax flex-1">' + escapeHtml(p.assessment || p.reasoning || 'Escalation') + '</span>';
             } else if (isCompletion) {
                 html += '<span class="text-beeswax flex-1">' + escapeHtml(p.task_title) + '</span>';
+            } else if (isJira) {
+                html += '<span class="text-muted">&rarr; ' + escapeHtml(p.message || 'Jira') + '</span>';
+                html += '<span class="text-beeswax flex-1">' + escapeHtml(p.task_title) + '</span>';
+                if (p.reasoning) {
+                    html += '<span class="proposal-reason" title="' + escapeHtml(p.reasoning) + '">' + escapeHtml(p.reasoning) + '</span>';
+                }
             } else {
                 html += '<span class="text-muted">&larr;</span>';
                 html += '<span class="text-beeswax flex-1">' + escapeHtml(p.task_title) + '</span>';
@@ -3527,9 +3540,45 @@
             showQueenEscalation({proposal_id:p.id,worker:p.worker_name,assessment:p.assessment||'',reasoning:p.reasoning||'',action:p.queen_action||'',message:p.message||'',confidence:p.confidence||0});
         } else if (p.proposal_type === 'completion') {
             showQueenCompletion({proposal_id:p.id,worker:p.worker_name,task_id:p.task_id||'',task_title:p.task_title||'',assessment:p.assessment||'',reasoning:p.reasoning||'',confidence:p.confidence||0,has_source_email:p.has_source_email||false});
+        } else if (p.proposal_type === 'jira_promotion') {
+            showJiraPromotion(p);
         } else {
             showQueenAssignment(p);
         }
+    };
+
+    window.showJiraPromotion = function(p) {
+        // States the CONSEQUENCE, not just the request. "Approve" on a shared tracker
+        // is not undoable in the way approving an assignment is: the ticket exists, the
+        // team sees it, and someone triages it. The operator should not have to infer
+        // that from a proposal card.
+        var modal = document.getElementById('queen-modal');
+        var result = document.getElementById('queen-result');
+        var project = p.message || '(no project)';
+        var html = '<div class="queen-card queen-card-assign">';
+        html += '<div class="queen-card-header">';
+        html += '<span class="conf-badge conf-mid">JIRA TICKET</span>';
+        html += '<span class="conf-badge conf-high">' + escapeHtml(project) + '</span>';
+        html += '</div>';
+        html += '<div class="queen-summary"><strong>' + escapeHtml(p.worker_name)
+             + '</strong> is asking to raise a Jira ticket for <strong>'
+             + escapeHtml(p.task_title || '') + '</strong>.</div>';
+        if (p.reasoning) {
+            html += '<div class="queen-section"><div class="queen-section-label">Why they asked</div>'
+                 + '<div class="queen-section-body">' + escapeHtml(p.reasoning) + '</div></div>';
+        }
+        html += '<div class="queen-section"><div class="queen-section-label">If you approve</div>'
+             + '<div class="queen-section-body">A new ticket is created in <strong>'
+             + escapeHtml(project) + '</strong>, assigned to you, and labelled '
+             + '<code>swarm</code> so it is traceable to an agent. Your whole team can '
+             + 'see it. Nothing is created unless you approve.</div></div>';
+        html += '</div>';
+        result.innerHTML = html
+            + '<div class="queen-actions">'
+            + '<button class="btn btn-approve" data-approve-proposal="' + escapeHtml(p.id) + '">Create the ticket</button>'
+            + '<button class="btn btn-secondary" data-reject-proposal="' + escapeHtml(p.id) + '">Dismiss</button>'
+            + '</div>';
+        modal.style.display = 'flex';
     };
 
     window.showQueenAssignment = function(data) {

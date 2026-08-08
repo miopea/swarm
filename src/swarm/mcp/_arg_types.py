@@ -77,6 +77,14 @@ class ParkTaskArgs(TypedDict, total=False):
     task_number: int
 
 
+class RequestJiraTicketArgs(TypedDict, total=False):
+    """``swarm_request_jira_ticket`` — ask the operator to raise a Jira ticket."""
+
+    reason: str
+    task_number: int
+    project: str
+
+
 class StartTaskArgs(TypedDict, total=False):
     """``swarm_start_task`` — assert that you are now working a task."""
 

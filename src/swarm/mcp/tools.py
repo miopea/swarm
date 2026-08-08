@@ -40,6 +40,8 @@ from swarm.mcp.handlers._email import HANDLERS as _EMAIL_H
 from swarm.mcp.handlers._email import TOOLS as _EMAIL_T
 from swarm.mcp.handlers._files import HANDLERS as _FILES_H
 from swarm.mcp.handlers._files import TOOLS as _FILES_T
+from swarm.mcp.handlers._jira_promote import HANDLERS as _JIRA_PROMOTE_H
+from swarm.mcp.handlers._jira_promote import TOOLS as _JIRA_PROMOTE_T
 from swarm.mcp.handlers._learnings import HANDLERS as _LEARN_H
 from swarm.mcp.handlers._learnings import TOOLS as _LEARN_T
 from swarm.mcp.handlers._messages import HANDLERS as _MSG_H
@@ -142,6 +144,7 @@ TOOLS: list[dict[str, Any]] = [
     *_MSG_T,
     *_BLOCKER_T,
     *_BLOCK_EXT_T,
+    *_JIRA_PROMOTE_T,
     *_PARK_T,
     *_START_T,
     *_ANNOTATE_T,
@@ -164,6 +167,7 @@ _HANDLERS = {
     **_MSG_H,
     **_BLOCKER_H,
     **_BLOCK_EXT_H,
+    **_JIRA_PROMOTE_H,
     **_PARK_H,
     **_START_H,
     **_ANNOTATE_H,

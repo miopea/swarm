@@ -90,6 +90,15 @@ A ticket assigned to a dev in a project they have **not** configured is **ignore
 
 ### 4. Outbound creation — operator-approved promotion only
 
+**BUILT `2026.8.8.10`.** `swarm_request_jira_ticket` (worker MCP verb) raises a
+`ProposalType.JIRA_PROMOTION` on the existing proposals surface;
+`ProposalManager._approve_jira_promotion` creates the ticket on approval. Every refusal
+is re-checked AT APPROVAL TIME, not trusted from request time — a proposal waits for a
+human and the task can finish, be archived, or be linked by someone else in between.
+The dashboard renders it with its own badge and modal: falling through to the
+assignment renderer would have shown an "ASSIGN" badge for something that creates a
+team-visible ticket.
+
 Swarm tasks do **not** automatically become Jira tickets.
 
 - **Workers may REQUEST** promotion; the request lands on the **existing
@@ -106,6 +115,9 @@ Assignment of a created ticket:
 - created **from the operator modal** → the modal offers the full set of options.
 
 ### 5. Provenance — `swarm` becomes a reserved label
+
+**BUILT `2026.8.8.10`.** `JiraSyncService.PROVENANCE_LABEL`, applied in
+`create_jira_issue` only. Nothing reads it — that is the point.
 
 `swarm` no longer routes anything. It is **auto-applied to tickets Swarm created**, and
 means exactly one thing: an agent raised this.

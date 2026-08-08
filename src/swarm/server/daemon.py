@@ -262,6 +262,8 @@ class SwarmDaemon(EventEmitter):
             assign_task=self.assign_and_start_task,
             complete_task=self.complete_task,
             execute_escalation=lambda p: self.analyzer.execute_escalation(p),
+            get_jira=lambda: getattr(self, "jira", None),
+            task_history=self.task_history,
         )
         self.analyzer = QueenAnalyzer(
             queen=self.queen,

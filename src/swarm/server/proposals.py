@@ -16,11 +16,16 @@ from swarm.tasks.proposal import (
     ProposalType,
     QueenAction,
 )
+from swarm.tasks.task import TaskStatus
 from swarm.worker.worker import Worker, WorkerState
 
 if TYPE_CHECKING:
     from swarm.drones.pilot import DronePilot
     from swarm.events import ProposalCallback
+
+# Statuses for which a promotion is refused. DONE and FAILED are self-evident;
+# BACKLOG is deliberately NOT here — un-started work is exactly what is worth raising.
+_TERMINAL_FOR_PROMOTION = frozenset({TaskStatus.DONE, TaskStatus.FAILED})
 
 _log = get_logger("server.proposals")
 
@@ -41,6 +46,8 @@ class ProposalManager:
         assign_task: Callable[..., Awaitable[None]],
         complete_task: Callable[..., None],
         execute_escalation: Callable[[AssignmentProposal], Awaitable[bool]],
+        get_jira: Callable[[], Any] | None = None,
+        task_history: Any = None,  # set at construction; see get_jira for why it is not lazy
     ) -> None:
         self.store = store
         self._broadcast_ws = broadcast_ws
@@ -53,6 +60,17 @@ class ProposalManager:
         self._assign_task = assign_task
         self._complete_task = complete_task
         self._execute_escalation = execute_escalation
+        # Defaulted rather than required: nine test fixtures build a ProposalManager for
+        # flows that never touch Jira, and a daemon with no Jira wired genuinely cannot
+        # promote — the handler refuses and says so, which is the honest answer.
+        #
+        # A CALLABLE rather than the service itself, and that is not style. The daemon
+        # builds this manager before it builds `self.jira`, and REBUILDS `self.jira` on
+        # every config reload — so a captured reference would be None at construction
+        # and, worse, would pin a stale service across a reconnect that was supposed to
+        # replace it.
+        self._get_jira = get_jira
+        self._task_history = task_history
         self._on_new_proposal: ProposalCallback | None = None
 
     @property
@@ -302,6 +320,7 @@ class ProposalManager:
             ProposalType.ESCALATION: self._approve_escalation,
             ProposalType.COMPLETION: self._approve_completion,
             ProposalType.PARK: self._approve_park,
+            ProposalType.JIRA_PROMOTION: self._approve_jira_promotion,
         }
         handler = handlers.get(proposal.proposal_type, self._approve_assignment)
         log_detail = await handler(proposal, worker)
@@ -369,6 +388,69 @@ class ProposalManager:
             # Stall resolved before approval (task left ACTIVE) — park moot.
             raise TaskOperationError(f"Cannot park '{proposal.task_title}' — task no longer ACTIVE")
         return f"task parked (operator-blocked): {proposal.task_title}"
+
+    async def _approve_jira_promotion(
+        self,
+        proposal: AssignmentProposal,
+        worker: Worker,
+        **_kwargs: object,
+    ) -> str:
+        """Create the Jira ticket a worker asked for (v2 phase 4).
+
+        Every refusal below is re-checked HERE rather than trusted from request time.
+        A proposal sits until a human looks at it, and the world moves in between: the
+        task can be finished, archived, or linked by someone else while the request
+        waits. Validating only at request time would make approval a rubber stamp on a
+        fact that has since stopped being true.
+        """
+        from swarm.server.daemon import TaskOperationError
+
+        jira = self._get_jira() if self._get_jira else None
+        if jira is None or not getattr(jira, "enabled", False):
+            raise TaskOperationError(
+                "Jira is not enabled — nothing was created. Re-connect it in "
+                "Settings > Integrations, then request the promotion again."
+            )
+
+        task = self._task_board.get(proposal.task_id)
+        if task is None:
+            raise TaskOperationError(
+                f"Task '{proposal.task_title}' no longer exists — nothing was created."
+            )
+        if task.jira_key:
+            # Someone linked it while the request waited. Creating now would make a
+            # duplicate ticket for one piece of work, which is the failure the
+            # assignee-routing decision exists to prevent.
+            raise TaskOperationError(
+                f"#{task.number} is already linked to {task.jira_key} — nothing was created."
+            )
+        if task.status in _TERMINAL_FOR_PROMOTION:
+            # "Never for closed work" — one rule covering the ~1235 historical closed
+            # tasks and the short-lived ones that finish before anyone approves. A
+            # ticket raised for finished work is noise a whole team has to triage.
+            raise TaskOperationError(
+                f"#{task.number} is {task.status.value} — Swarm does not raise tickets "
+                f"for finished work. Nothing was created."
+            )
+
+        key = await jira.create_jira_issue(task, project=proposal.message or "")
+        if not key:
+            raise TaskOperationError(
+                f"Jira accepted the request for #{task.number} but returned no issue key "
+                f"— nothing was linked. Check the Jira log."
+            )
+
+        self._task_board.set_jira_key(task.id, key)
+        if self._task_history is not None:
+            from swarm.tasks.history import TaskAction
+
+            self._task_history.append(
+                task.id,
+                TaskAction.EDITED,
+                actor=proposal.worker_name,
+                detail=f"promoted to {key} (operator-approved)",
+            )
+        return f"promoted #{task.number} to {key}"
 
     async def _approve_assignment(
         self,

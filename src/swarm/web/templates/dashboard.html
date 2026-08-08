@@ -364,6 +364,7 @@
                         {% for p in proposals %}
                         <div class="proposal-item" data-proposal-id="{{ p.id }}"{% if p.proposal_type == 'completion' and p.has_source_email %} data-has-email="1"{% endif %}>
                             {% if p.proposal_type == 'escalation' %}<span class="conf-badge conf-mid">ESC</span>{% endif %}
+                            {% if p.proposal_type == 'jira_promotion' %}<span class="conf-badge conf-mid">JIRA</span>{% endif %}
                             <span class="proposal-worker">{{ p.worker_name }}</span>
                             {% if p.proposal_type == 'escalation' %}<span class="text-beeswax flex-1">{{ p.assessment or p.reasoning }}</span>{% else %}<span class="text-muted">&larr;</span><span class="text-beeswax flex-1">{{ p.task_title }}</span>{% endif %}
                             {% if p.reasoning and p.proposal_type != 'escalation' %}<span class="proposal-reason" title="{{ p.reasoning }}">{{ p.reasoning }}</span>{% endif %}
