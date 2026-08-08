@@ -307,3 +307,84 @@ def test_the_sweep_is_wired_into_the_sync_loop():
         "ownership is never re-checked on a schedule, so a handover in Jira leaves two "
         "swarms holding the ticket until someone notices by hand"
     )
+
+
+# --- ordering and the state a release leaves behind ---------------------------
+
+
+def test_ownership_is_reconciled_BEFORE_exports():
+    """OBSERVED LIVE 2026-08-08. The export sweep ran at 23:43:21 and wrote to
+    WWD-6715; ownership reconciliation discovered at 23:43:23 that the ticket was no
+    longer ours. Two seconds apart, in the wrong order — Swarm wrote to a ticket and
+    then found out it had been taken off it.
+
+    Establish what is ours, then act on it. Asserted on the ORDER in the loop because
+    the defect is not in either sweep, it is in their sequence.
+    """
+    from pathlib import Path as _P
+
+    src = _P("src/swarm/server/jira_service.py").read_text()
+    loop = src[src.index("async def sync_loop") :]
+    loop = loop[: loop.index("except asyncio.CancelledError")]
+    code = "\n".join(ln for ln in loop.split("\n") if not ln.strip().startswith("#"))
+    assert code.index("reconcile_ownership()") < code.index("reconcile_exports()"), (
+        "exports run before ownership, so the sweep can write to a ticket that the very "
+        "next call is about to discover is not ours"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_released_task_is_never_export_reconciled(board: TaskBoard):
+    """Releasing CHANGES the task's status, which by itself creates an export
+    divergence. Without a guard the sweep pushes Swarm's status onto a ticket the swarm
+    no longer owns — every cycle, forever, and it can genuinely transition someone
+    else's work."""
+    from swarm.server.jira_service import JiraService
+
+    task = _linked(board, "WWD-20", worker="api")
+    svc = _service(board, _jira_saying_reassigned([(task, "Bob")]))
+    await svc.reconcile_ownership()
+
+    released = board.get(task.id)
+    assert released.is_on_hold and not released.assigned_worker
+
+    exporter = MagicMock()
+    exporter.enabled = True
+    exporter._config = JiraConfig(enabled=True, projects=["WWD"], confirmed_projects=["WWD"])
+    exporter.export_status = AsyncMock(return_value=True)
+    svc2 = JiraService.__new__(JiraService)
+    svc2._task_board = board
+    svc2._get_jira = lambda: exporter
+    svc2._drone_log = MagicMock()
+    svc2._broadcast_ws = lambda _p: None
+    svc2._track_task = lambda _t: None
+
+    await svc2.reconcile_exports()
+
+    (
+        exporter.export_status.assert_not_called(),
+        ("the sweep exported a task whose ticket belongs to someone else now"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_owned_task_is_still_export_reconciled(board: TaskBoard):
+    """The guard must not become a blanket off-switch."""
+    from swarm.server.jira_service import JiraService
+
+    task = _linked(board, "WWD-21", worker="api")
+    board.activate(task.id)
+
+    exporter = MagicMock()
+    exporter.enabled = True
+    exporter._config = JiraConfig(enabled=True, projects=["WWD"], confirmed_projects=["WWD"])
+    exporter.export_status = AsyncMock(return_value=True)
+    svc = JiraService.__new__(JiraService)
+    svc._task_board = board
+    svc._get_jira = lambda: exporter
+    svc._drone_log = MagicMock()
+    svc._broadcast_ws = lambda _p: None
+    svc._track_task = lambda _t: None
+
+    assert await svc.reconcile_exports() == 1
+    exporter.export_status.assert_called_once()

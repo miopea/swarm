@@ -18,6 +18,20 @@ if TYPE_CHECKING:
 _log = get_logger("server.jira_service")
 
 
+def _is_disowned(task: Any) -> bool:
+    """True for a task this swarm has RELEASED because Jira reassigned its ticket.
+
+    Releasing changes the task's status, which by itself creates an export divergence —
+    so without this the sweep keeps pushing Swarm's status onto a ticket the swarm no
+    longer owns, forever, and could genuinely transition someone else's work.
+
+    UNASSIGNED + on hold + no owner is the shape ``reconcile_ownership`` leaves behind.
+    It is also the shape of an ordinary parked backlog item, which is equally not ours
+    to be reporting into Jira.
+    """
+    return task.status == TaskStatus.UNASSIGNED and task.is_on_hold and not task.assigned_worker
+
+
 class JiraService:
     """Manages Jira import/export/sync operations."""
 
@@ -394,6 +408,7 @@ class JiraService:
             if t.jira_key
             and t.jira_exported_status != t.status.value
             and (t.id, t.status.value) not in refused
+            and not _is_disowned(t)
         ]
 
         # UNCONFIRMED PROJECTS ARE PLANNED, NOT WRITTEN (v2 phase 3). The sweep is a
@@ -481,11 +496,13 @@ class JiraService:
                 interval = self._get_sync_interval()
                 await asyncio.sleep(interval)
                 await self.run_import()
+                # OWNERSHIP FIRST, and the order is load-bearing. Run it the other way
+                # round and the export sweep writes to a ticket, then the ownership sweep
+                # discovers two seconds later that it was never ours — observed live on
+                # WWD-6715 at 23:43:21 vs 23:43:23. Establish what is ours, then act.
+                await self.reconcile_ownership()
                 # Import alone leaves the OUTBOUND direction unchecked, which is where
                 # the two systems actually drifted.
                 await self.reconcile_exports()
-                # ...and neither direction notices a ticket changing HANDS, which leaves
-                # two devs' swarms holding one ticket.
-                await self.reconcile_ownership()
         except asyncio.CancelledError:
             return
