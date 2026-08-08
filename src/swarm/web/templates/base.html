@@ -1137,6 +1137,19 @@
            distinguish its presence. It earns its place only if a third visible child
            is ever added to this header (the cc-queen-strip in Command Center mode is
            the candidate). Recorded so nobody later assumes a test covers it. */
+        /* Jira v2 setup block (config page). Kept minimal and reusing the existing
+           config-input/table idiom rather than inventing a widget vocabulary. */
+        .jira-setup-row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+        .jira-setup-result {
+            margin-top: 0.5rem; padding: 0.5rem 0.75rem;
+            background: var(--panel); border: 1px solid var(--border); border-radius: 4px;
+        }
+        .jira-map-table { border-collapse: collapse; margin: 0.4rem 0; }
+        .jira-map-table td { padding: 0.15rem 0.4rem 0.15rem 0; vertical-align: middle; }
+        .jira-map-input { width: 14rem; }
+        .jira-plan-list { margin: 0.3rem 0 0 1rem; font-size: 0.75rem; }
+        .jira-plan-list li { margin: 0.1rem 0; }
+
         .detail-header-actions {
             display: flex;
             align-items: center;

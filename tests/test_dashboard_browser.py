@@ -303,3 +303,63 @@ def test_the_tile_controls_sit_together_at_the_right_of_the_detail_header(playwr
             f"the Tile button and the size select are {between:.0f}px apart; they are "
             f"meant to read as one control group"
         )
+
+
+def test_the_jira_setup_block_renders_on_the_config_page(playwright_page):
+    """The setup UI must actually appear and be wired, not merely exist in the template.
+
+    Every other check on this feature reads source. Source scans were green throughout
+    every dashboard bug of 2026-08-06/07, and the Jira setup block was built the same
+    day a renamed input silently broke the whole config save — so the page getting as
+    far as rendering it is worth asserting in a real browser.
+
+    Deliberately NOT asserting discovery results: that needs a live Atlassian instance,
+    and a test that pretends otherwise would prove less than it appears to.
+    """
+    page, daemon, base = playwright_page
+    page.goto(f"{base}/config", wait_until="domcontentloaded")
+    page.wait_for_selector("#jira-setup-block", state="attached", timeout=15000)
+    # Reachable, not merely present: the block sits in the integrations tab, and a
+    # setup UI nobody can navigate to is the same as one that does not exist.
+    page.click("[data-action='switchConfigTab'][data-tab='integrations']")
+    page.wait_for_selector("#jira-setup-block", state="visible", timeout=10000)
+
+    assert page.locator("#jira-discover-project").count() == 1, "no project input rendered"
+    assert page.locator("#cfg-jira-projects").count() == 1, "the projects field is missing"
+    assert page.locator("[data-action='jiraDiscover']").count() == 1, "no Discover control"
+    assert page.locator("[data-action='jiraPlan']").count() == 1, "no Preview control"
+
+    # The legacy routing fields must READ as inert rather than merely be ignored — a
+    # live-looking input that no longer does anything is a setting lying to the operator.
+    assert page.locator("#cfg-jira-import_filter").is_disabled(), (
+        "the legacy JQL filter still looks editable, so it reads as though it still routes"
+    )
+    assert page.locator("#cfg-jira-import_label").is_disabled(), (
+        "the legacy label field still looks editable"
+    )
+
+
+def test_clicking_discover_without_a_project_does_not_call_the_api(playwright_page):
+    """The cheapest possible guard on a button that talks to someone's Jira: it must
+    refuse locally rather than firing an empty request and surfacing a server error."""
+    page, daemon, base = playwright_page
+    page.goto(f"{base}/config", wait_until="domcontentloaded")
+    page.wait_for_selector("#jira-setup-block", state="attached", timeout=15000)
+
+    calls: list[str] = []
+    page.on("request", lambda r: calls.append(r.url) if "/api/jira/" in r.url else None)
+
+    # The Jira settings live in the "integrations" TAB, which ships display:none. Without
+    # switching to it the button never becomes actionable and page.click waits forever —
+    # the test hangs rather than failing, which is the worse outcome of the two.
+    page.click("[data-action='switchConfigTab'][data-tab='integrations']")
+    page.wait_for_selector("#jira-setup-block", state="visible", timeout=10000)
+    page.click("[data-action='jiraDiscover']")
+    page.wait_for_timeout(400)
+
+    assert not calls, f"an empty project key still hit the Jira API: {calls}"
+    result = page.locator("#jira-discover-result")
+    assert result.is_visible(), "no feedback shown for the empty case"
+    assert "project key" in result.inner_text().lower(), (
+        f"the message does not say what to do: {result.inner_text()!r}"
+    )

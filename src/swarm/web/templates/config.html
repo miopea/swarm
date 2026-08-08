@@ -806,21 +806,55 @@
 
             {# --- Shared fields --- #}
             <div class="config-field">
-                <label>project <span class="hint">Default Jira project key</span></label>
-                <input class="config-input w-input-lg" id="cfg-jira-project" placeholder="PROJ" value="{{ jr.get('project', '') }}">
+                <label>projects <span class="hint">Comma-separated project keys to sync (e.g. WWD, IS)</span></label>
+                <input class="config-input w-input-lg" id="cfg-jira-projects" placeholder="WWD, IS"
+                       value="{{ (jr.get('projects') or ([jr.get('project')] if jr.get('project') else []))|join(', ') }}">
+            </div>
+
+            {# --- v2 setup: discover the workflow, confirm the mapping ---------------
+                 Replaces hand-typing status_map. A map typed once is the artefact that
+                 silently rots when a Jira admin edits a workflow — and a hardcoded
+                 "Done" was refused by 11 real tickets whose workflow only offered
+                 "Waiting for support", with nothing surfacing it until the export
+                 failed. Discovery reads what is actually there; the operator confirms,
+                 because Done / Resolved / Closed are rarely interchangeable and a wrong
+                 automatic choice transitions real tickets while reporting success. #}
+            <div class="config-field config-field-col" id="jira-setup-block">
+                <label>Workflow setup
+                    <span class="hint">Read each project's real states, then confirm the mapping</span>
+                </label>
+                <div class="jira-setup-row">
+                    <input class="config-input text-left" id="jira-discover-project" placeholder="Project key, e.g. WWD">
+                    <button class="btn btn-sm btn-secondary" data-action="jiraDiscover">Discover workflow</button>
+                    <button class="btn btn-sm btn-secondary" data-action="jiraPlan">Preview sync plan</button>
+                </div>
+                <div id="jira-discover-result" class="jira-setup-result" style="display:none"></div>
+                <div id="jira-plan-result" class="jira-setup-result" style="display:none"></div>
             </div>
             {{ config_number('sync_interval_minutes', 'Minutes between sync cycles', 'cfg-jira-sync_interval', jr.get('sync_interval_minutes', 5), step=1, min=1, extra_class='w-input-lg') }}
             {{ config_number('lookback_days', 'How far back to look for issues (0 = no limit)', 'cfg-jira-lookback_days', jr.get('lookback_days', 30), step=1, min=0, extra_class='w-input-lg') }}
             <div class="config-field">
-                <label>import_filter <span class="hint">JQL filter for importing tickets</span></label>
-                <input class="config-input text-left w-input-lg" id="cfg-jira-import_filter" placeholder="JQL filter (optional)" value="{{ jr.get('import_filter', '') }}">
+                <label>import_filter
+                    <span class="hint text-muted">LEGACY &mdash; no longer routes imports</span>
+                </label>
+                <input class="config-input text-left w-input-lg" id="cfg-jira-import_filter" placeholder="JQL filter (unused)" value="{{ jr.get('import_filter', '') }}" disabled>
             </div>
             <div class="config-field">
-                <label>import_label <span class="hint">Only import tickets with this Jira label (blank = all)</span></label>
-                <input class="config-input w-input-lg" id="cfg-jira-import_label" placeholder="swarm" value="{{ jr.get('import_label', '') }}">
+                <label>import_label
+                    <span class="hint text-muted">LEGACY &mdash; <code>swarm</code> is now a reserved provenance label</span>
+                </label>
+                <input class="config-input w-input-lg" id="cfg-jira-import_label" placeholder="unused" value="{{ jr.get('import_label', '') }}" disabled>
             </div>
+            <p class="text-xs text-muted mt-sm">
+                Imports are routed by <strong>Jira assignee</strong> and the projects above, not by label or JQL.
+                With the integration enabled for several people, a shared label makes every swarm import the
+                same tickets and race to transition them. The <code>swarm</code> label now only marks tickets
+                Swarm <em>created</em>.
+            </p>
             <div class="config-field config-field-col">
-                <label>status_map <span class="hint">JSON: swarm status &rarr; Jira status</span></label>
+                <label>status_map
+                    <span class="hint">Fallback map. Per-project maps set by Discover take precedence.</span>
+                </label>
                 <textarea class="config-input w-input-lg" id="cfg-jira-status_map" rows="4" placeholder='{"pending":"To Do","in_progress":"In Progress","completed":"Done","failed":"To Do"}'>{{ jr.get('status_map', {})|tojson }}</textarea>
             </div>
         </div>
@@ -2134,7 +2168,13 @@
                 ...(document.getElementById('cfg-jira-client_secret').value
                     ? { client_secret: document.getElementById('cfg-jira-client_secret').value }
                     : {}),
-                project: document.getElementById('cfg-jira-project').value,
+                // `projects` is the v2 field; `project` is kept in step with it rather
+                // than left to drift, so an install that still reads the legacy field
+                // sees the same first project. Parsed from a comma-separated input.
+                projects: (document.getElementById('cfg-jira-projects').value || '')
+                    .split(',').map(function(x) { return x.trim(); }).filter(Boolean),
+                project: ((document.getElementById('cfg-jira-projects').value || '')
+                    .split(',').map(function(x) { return x.trim(); }).filter(Boolean)[0]) || '',
                 sync_interval_minutes: parseFloat(document.getElementById('cfg-jira-sync_interval').value),
                 lookback_days: parseInt(document.getElementById('cfg-jira-lookback_days').value, 10),
                 import_filter: document.getElementById('cfg-jira-import_filter').value,
@@ -2310,6 +2350,145 @@
         }
         var availEl = document.getElementById('group-edit-available');
         availEl.innerHTML = availHtml || '<span class="text-muted text-xs">All workers are in this group</span>';
+    }
+
+    // --- Jira v2 setup: discover -> confirm ---------------------------------
+    //
+    // Replaces hand-typing status_map. The map was hardcoded and GLOBAL, and on
+    // 2026-08-07 that was refused by 11 real tickets whose workflow offered only
+    // "Waiting for support" while it worked fine for another project. Discovery reads
+    // what is actually in the project; the operator confirms, because Done / Resolved /
+    // Closed are rarely interchangeable and a wrong automatic choice transitions real
+    // tickets while reporting success.
+
+    function _jiraEsc(v) {
+        return String(v == null ? '' : v).replace(/[&<>"']/g, function(c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+
+    function jiraDiscover() {
+        var project = (document.getElementById('jira-discover-project').value || '').trim();
+        var out = document.getElementById('jira-discover-result');
+        if (!project) {
+            out.style.display = '';
+            out.innerHTML = '<span class="text-poppy">Enter a project key first.</span>';
+            return;
+        }
+        out.style.display = '';
+        out.innerHTML = '<span class="text-muted">Reading ' + _jiraEsc(project) + '\u2019s workflow\u2026</span>';
+        fetch('/api/jira/discover?project=' + encodeURIComponent(project), {
+            headers: { 'X-Requested-With': 'Config' }, cache: 'no-store',
+        })
+            .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
+            .then(function(res) {
+                if (!res.ok) {
+                    out.innerHTML = '<span class="text-poppy">' + _jiraEsc(res.d.error || 'Discovery failed') + '</span>';
+                    return;
+                }
+                out.innerHTML = _jiraRenderDiscovery(res.d);
+            })
+            .catch(function(err) {
+                out.innerHTML = '<span class="text-poppy">' + _jiraEsc(err && err.message ? err.message : err) + '</span>';
+            });
+    }
+
+    function _jiraRenderDiscovery(d) {
+        var map = d.proposed_status_map || {};
+        var html = '<div class="jira-discovery">';
+        html += '<p class="text-xs text-muted">Statuses found in <strong>' + _jiraEsc(d.project)
+             + '</strong>: ' + (d.statuses || []).map(function(s) {
+                   return '<code>' + _jiraEsc(s.name) + '</code>';
+               }).join(', ') + '</p>';
+
+        html += '<table class="jira-map-table"><tbody>';
+        var keys = Object.keys(map).sort();
+        for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            html += '<tr><td class="text-muted">' + _jiraEsc(k) + '</td><td>&rarr;</td>'
+                 + '<td><input class="config-input jira-map-input" data-swarm-status="' + _jiraEsc(k)
+                 + '" value="' + _jiraEsc(map[k]) + '"></td></tr>';
+        }
+        html += '</tbody></table>';
+
+        // Named explicitly, not left as an absence: a Swarm status with no target is
+        // exactly the case that failed silently before, and it must be visible BEFORE
+        // anything is confirmed rather than discovered when an export is refused.
+        if ((d.unmapped || []).length) {
+            html += '<p class="text-xs" style="color:var(--amber)">No status in this project matches: '
+                 + (d.unmapped || []).map(function(u) { return '<code>' + _jiraEsc(u) + '</code>'; }).join(', ')
+                 + '. Exports for those will be refused rather than guessed.</p>';
+        }
+        html += '<button class="btn btn-sm" data-action="jiraConfirm" data-project="' + _jiraEsc(d.project)
+             + '">Confirm mapping for ' + _jiraEsc(d.project) + '</button>';
+        html += '</div>';
+        return html;
+    }
+
+    function jiraConfirm(project) {
+        var out = document.getElementById('jira-discover-result');
+        // Send exactly what is ON SCREEN, including any edit. Re-deriving here would
+        // let what is stored differ from what the operator approved.
+        var map = {};
+        out.querySelectorAll('.jira-map-input').forEach(function(input) {
+            var v = (input.value || '').trim();
+            if (v) map[input.dataset.swarmStatus] = v;
+        });
+        if (!Object.keys(map).length) {
+            out.innerHTML += '<p class="text-poppy text-xs">Nothing to confirm — every mapping is blank.</p>';
+            return;
+        }
+        fetch('/api/jira/confirm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'Config' },
+            body: JSON.stringify({ project: project, status_map: map }),
+        })
+            .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
+            .then(function(res) {
+                if (!res.ok) {
+                    out.innerHTML += '<p class="text-poppy text-xs">' + _jiraEsc(res.d.error || 'Confirm failed') + '</p>';
+                    return;
+                }
+                out.innerHTML += '<p class="text-leaf text-xs">Confirmed ' + _jiraEsc(project)
+                    + ' — the reconcile sweep may now converge this project.</p>';
+            });
+    }
+
+    function jiraPlan() {
+        var out = document.getElementById('jira-plan-result');
+        out.style.display = '';
+        out.innerHTML = '<span class="text-muted">Checking what a sync would change\u2026</span>';
+        fetch('/api/jira/plan', { headers: { 'X-Requested-With': 'Config' }, cache: 'no-store' })
+            .then(function(r) { return r.json().then(function(d) { return { ok: r.ok, d: d }; }); })
+            .then(function(res) {
+                if (!res.ok) {
+                    out.innerHTML = '<span class="text-poppy">' + _jiraEsc(res.d.error || 'Plan failed') + '</span>';
+                    return;
+                }
+                var d = res.d;
+                if (!d.count) {
+                    out.innerHTML = '<span class="text-leaf text-xs">Nothing outstanding — Jira matches the board.</span>';
+                    return;
+                }
+                var html = '<p class="text-xs"><strong>' + d.count + '</strong> ticket(s) would change';
+                if (d.unconfirmed) {
+                    html += ', <span style="color:var(--amber)">' + d.unconfirmed
+                         + ' blocked pending confirmation</span>';
+                }
+                html += '. Nothing has been written.</p><ul class="jira-plan-list">';
+                (d.changes || []).slice(0, 25).forEach(function(c) {
+                    html += '<li><code>' + _jiraEsc(c.jira_key) + '</code> '
+                         + _jiraEsc(c.acknowledged || 'never exported') + ' &rarr; <strong>'
+                         + _jiraEsc(c.would_become) + '</strong>'
+                         + (c.project_confirmed ? '' : ' <span style="color:var(--amber)">(unconfirmed)</span>')
+                         + '</li>';
+                });
+                html += '</ul>';
+                if (d.count > 25) {
+                    html += '<p class="text-xs text-muted">Showing 25 of ' + d.count + '.</p>';
+                }
+                out.innerHTML = html;
+            });
     }
 
     // Event delegation for add/remove member buttons within group edit modal
@@ -3402,6 +3581,9 @@
         var action = el.dataset.action;
         var _actions = {
             saveSettings: function() { saveSettings(); },
+            jiraDiscover: function() { jiraDiscover(); },
+            jiraPlan: function() { jiraPlan(); },
+            jiraConfirm: function() { jiraConfirm(el.dataset.project); },
             switchConfigTab: function() { switchConfigTab(el.dataset.tab); },
             addActionButton: function() { addActionButton(); },
             resetActionButtons: function() { resetActionButtons(); },
