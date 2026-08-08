@@ -76,7 +76,7 @@ def apply_jira(
     """Validate and apply the ``jira`` section of a config update.
 
     Every JiraConfig field has bespoke validation (regex-shape
-    client_id, range-checked sync_interval, default-merged status_map,
+    client_id, range-checked sync_interval, per-project status maps,
     empty-string fallbacks for credentials) so the body of this
     handler stays hand-coded.  Phase 7 instruments it to track
     consumed keys and emit the standard unknown-sub-key WARNING via
@@ -102,21 +102,6 @@ def apply_jira(
         jc.sync_interval_minutes = float(val)
         consumed.append("sync_interval_minutes")
     _apply_jira_v2_fields(jc, body, consumed)
-    if "status_map" in body:
-        val = body["status_map"]
-        if not isinstance(val, dict):
-            raise ValueError("jira.status_map must be an object")
-        # Merge with defaults so empty {} doesn't wipe all mappings
-        default_map = {
-            "backlog": "To Do",
-            "unassigned": "To Do",
-            "assigned": "To Do",
-            "active": "In Progress",
-            "done": "Done",
-            "failed": "To Do",
-        }
-        jc.status_map = {**default_map, **{str(k): str(v) for k, v in val.items()}}
-        consumed.append("status_map")
     # Drift sweep — every JiraConfig field is custom-handled above, so
     # dispatch only fires for unknown sub-keys.
     outcome = FieldOutcome(consumed=list(consumed))

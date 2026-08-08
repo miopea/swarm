@@ -422,18 +422,6 @@ class JiraConfig:
     # produced stale-blocker problems. Sub-tasks are genuine work.
     issue_types: list[str] = field(default_factory=lambda: ["Story", "Task", "Bug", "Sub-task"])
     sync_interval_minutes: float = 5.0
-    status_map: dict[str, str] = field(
-        default_factory=lambda: {
-            "backlog": "To Do",
-            "unassigned": "To Do",
-            "assigned": "To Do",
-            "active": "In Progress",
-            "blocked": "In Progress",
-            "done": "Done",
-            "failed": "To Do",
-        }
-    )
-
     client_id: str = ""  # Atlassian OAuth app client ID
     client_secret: str = ""  # Atlassian OAuth app client secret (or $ENV_VAR)
     cloud_id: str = ""  # Auto-discovered Jira Cloud site ID
@@ -448,13 +436,28 @@ class JiraConfig:
     confirmed_projects: list[str] = field(default_factory=list)
 
     def status_map_for(self, project_key: str) -> dict[str, str]:
-        """The status map to use for *project_key*, falling back to the global one.
+        """The confirmed map for *project_key*, or empty. NO global fallback.
 
-        Fallback is deliberate rather than strict: an install upgrading from v1 has a
-        global map and no per-project maps, and refusing to export until every project
-        is re-confirmed would break a working integration on upgrade.
+        There used to be one, justified as upgrade safety: a v1 install has a global map
+        and no per-project maps, so refusing to export until every project was
+        re-confirmed would break a working integration. That reasoning was defeated by
+        the field's own default. ``status_map`` defaulted to a full hardcoded map
+        (``done -> "Done"``), so the fallback never returned empty and every unmapped
+        project silently got that map — on every install, including fresh ones that had
+        never configured Jira at all. "Genuine v1 config" and "nobody ever touched this"
+        were indistinguishable.
+
+        That hardcoded map is the one 11 real IS tickets refused on 2026-08-07, and the
+        worse case never fired only by luck: if the wrongly-inherited status name also
+        exists in the target project's workflow, the export SUCCEEDS and moves someone's
+        ticket to a state nobody chose.
+
+        So an unmapped project now returns {} and the export is refused. This module's
+        own rule, applied one level up: an absent mapping means "we do not know" and can
+        be refused honestly; a wrong mapping transitions a real ticket and looks like
+        success.
         """
-        return self.project_status_maps.get(project_key) or self.status_map
+        return dict(self.project_status_maps.get(project_key) or {})
 
     def is_confirmed(self, project_key: str) -> bool:
         """Has the operator confirmed this project's discovered map?"""

@@ -280,27 +280,17 @@ class TestSerializeConfig:
         assert loaded.jira.client_secret == "secret"
         assert loaded.jira.cloud_id == "cloud-abc"
 
-    def test_empty_status_map_uses_defaults(self, tmp_path):
-        """An empty status_map in YAML should fall back to defaults, not stay empty."""
-        data = {
-            "workers": [],
-            "jira": {
-                "enabled": True,
-                "client_id": "cid",
-                "client_secret": "secret",
-                "project": "PROJ",
-                "status_map": {},
-            },
-        }
-        cfg = _parse_config(_write_yaml(tmp_path, data))
-        # Must have all four default mappings, not an empty dict
-        assert cfg.jira.status_map.get("done") == "Done"
-        assert cfg.jira.status_map.get("unassigned") == "To Do"
-        assert cfg.jira.status_map.get("active") == "In Progress"
-        assert cfg.jira.status_map.get("failed") == "To Do"
+    def test_a_stored_global_status_map_no_longer_becomes_config(self, tmp_path):
+        """REPLACED 2026.8.8.9. The two tests here previously pinned the mechanism that
+        made the global map dangerous: an EMPTY status_map was filled in with defaults,
+        and a PARTIAL one was merged with them. Either way the result was a full
+        hardcoded map (``done -> "Done"``) that then applied to any project without a
+        per-project map — the map 11 real IS tickets refused, reaching projects nobody
+        had ever configured.
 
-    def test_partial_status_map_merges_with_defaults(self, tmp_path):
-        """A partial status_map should merge with defaults, not replace them."""
+        Transition targets are per-project and discovered now, so a stored global map is
+        read as a removed setting and does not become configuration.
+        """
         data = {
             "workers": [],
             "jira": {
@@ -312,11 +302,19 @@ class TestSerializeConfig:
             },
         }
         cfg = _parse_config(_write_yaml(tmp_path, data))
-        # User override wins
-        assert cfg.jira.status_map["done"] == "Closed"
-        # Defaults fill missing keys
-        assert cfg.jira.status_map["unassigned"] == "To Do"
-        assert cfg.jira.status_map["active"] == "In Progress"
+        assert not hasattr(cfg.jira, "status_map"), (
+            "the global status map is still a config field, so it can still supply a "
+            "transition target to a project nobody mapped"
+        )
+        # The rest of the section must still load — removing a field cannot break an
+        # existing config.
+        assert cfg.jira.enabled is True
+        assert cfg.jira.project == "PROJ"
+
+    def test_the_removed_global_map_is_reported_as_removed_not_as_a_typo(self, tmp_path):
+        from swarm.config._known_keys import _REMOVED_JIRA_KEYS
+
+        assert "status_map" in _REMOVED_JIRA_KEYS
 
     def test_serialize_always_includes_test_section(self):
         """serialize_config must always include 'test' even when all defaults.

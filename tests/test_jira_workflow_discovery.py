@@ -168,13 +168,57 @@ def test_the_map_is_resolved_per_project():
     )
 
 
-def test_a_project_without_a_confirmed_map_falls_back_to_the_global_one():
-    """Upgrades must not break: a v1 install has a global map and no per-project maps,
-    and refusing to export until every project is re-confirmed would break a working
-    integration on upgrade."""
-    cfg = JiraConfig(enabled=True, projects=["WWD"], status_map={"done": "Done"})
-    assert cfg.status_map_for("WWD")["done"] == "Done"
-    assert cfg.status_map_for("ANYTHING")["done"] == "Done"
+def test_an_unmapped_project_gets_NO_map_rather_than_a_global_one():
+    """REVERSED DELIBERATELY 2026.8.8.9 — this test used to assert the opposite.
+
+    It pinned a global fallback justified as upgrade safety: a v1 install has a global
+    map and no per-project maps, so refusing to export until every project was
+    re-confirmed would break a working integration.
+
+    That reasoning was defeated by the field's own default. ``status_map`` defaulted to
+    a FULL hardcoded map, so the fallback never returned empty: every unmapped project
+    silently received ``done -> "Done"``, on every install including fresh ones that had
+    never configured Jira. "Genuine v1 config" and "nobody ever touched this" were
+    indistinguishable, so the compatibility case the fallback existed for could not be
+    told apart from the case it broke.
+
+    The old test could not catch that because it CONSTRUCTED the global map it then
+    asserted on — it never asked what an unconfigured install would get.
+    """
+    cfg = JiraConfig(enabled=True, projects=["WWD"])
+    assert cfg.status_map_for("WWD") == {}, (
+        "an unmapped project still inherits a map it never confirmed"
+    )
+    assert cfg.status_map_for("ANYTHING") == {}
+
+
+def test_a_fresh_config_maps_nothing_at_all():
+    """The case the old test never asked about, and the reason the fallback was
+    invisible for so long."""
+    assert JiraConfig().status_map_for("WWD") == {}, (
+        "a brand-new install ships a hardcoded transition map for every project"
+    )
+
+
+def test_a_confirmed_project_is_unaffected_by_another_projects_map():
+    """Strictness must not become a wall: mapping still has to work."""
+    cfg = JiraConfig(
+        enabled=True,
+        projects=["WWD", "IS"],
+        project_status_maps={"WWD": {"done": "Done"}},
+    )
+    assert cfg.status_map_for("WWD") == {"done": "Done"}
+    assert cfg.status_map_for("IS") == {}, "IS inherited WWD's map"
+
+
+def test_the_returned_map_is_a_copy():
+    """A caller mutating the result must not silently rewrite stored config — the
+    lookup is on the export path and runs on every transition."""
+    cfg = JiraConfig(enabled=True, project_status_maps={"WWD": {"done": "Done"}})
+    cfg.status_map_for("WWD")["done"] = "Wrong"
+    assert cfg.project_status_maps["WWD"]["done"] == "Done", (
+        "the export path can mutate stored configuration"
+    )
 
 
 def test_confirmation_is_tracked_separately_from_the_map():
@@ -583,3 +627,128 @@ def test_the_legacy_single_project_field_still_produces_a_row():
     cfg = JiraConfig(enabled=True, project="WWD")
     rows = [r["project"] for r in _mappings(cfg)]
     assert rows == ["WWD"], f"a legacy install shows no projects at all: {rows}"
+
+
+# --- an unmapped project refuses, and SAYS SO ---------------------------------
+
+
+def _svc(cfg: JiraConfig):
+    """A service that is genuinely ENABLED, with the Jira HTTP calls stubbed.
+
+    The token manager is not optional scaffolding. `export_status` returns early when
+    `enabled` is False, and `enabled` requires a connected token manager — so a service
+    built without one refuses everything for a reason that has nothing to do with the
+    status map. The first version of these tests omitted it, and the unmapped-project
+    test passed while proving only that a disconnected service does nothing.
+
+    The stubs are on the HTTP client, NOT on the mapping lookup under test.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from swarm.integrations.jira import JiraSyncService
+
+    mgr = MagicMock()
+    mgr.is_connected.return_value = True
+    mgr.api_base_url = "https://api.atlassian.com/ex/jira/test-cloud"
+    svc = JiraSyncService(cfg, token_manager=mgr)
+    assert svc.enabled, (
+        "positive control: the service must be enabled or every test here passes vacuously"
+    )
+    svc.client.get_transitions = AsyncMock(return_value=[{"id": "31", "name": "Done"}])
+    svc.client.transition_issue = AsyncMock(return_value=True)
+    return svc
+
+
+@pytest.mark.asyncio
+async def test_an_unmapped_project_is_not_transitioned_at_all():
+    """THE HAZARD, and it is worse than the IS refusal that started this.
+
+    The inherited global map named "Done". If the target project's workflow happens to
+    HAVE a "Done" transition — most do — the export succeeds and moves someone's ticket
+    to a state nobody chose, reporting success. The IS case only looked like the whole
+    problem because that workflow had no Done transition to hit.
+    """
+    from swarm.tasks.task import SwarmTask, TaskStatus
+
+    cfg = JiraConfig(enabled=True, projects=["OTHER"])  # never mapped
+    svc = _svc(cfg)
+    task = SwarmTask(title="t", jira_key="OTHER-1")
+
+    ok = await svc.export_status(task, TaskStatus.DONE)
+
+    assert ok is False, "an unmapped project was transitioned anyway"
+    svc.client.transition_issue.assert_not_called()
+    # It must not even ASK, so a misconfiguration costs no API calls either.
+    svc.client.get_transitions.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_is_logged_at_warning_with_what_to_do(caplog):
+    """It was DEBUG. Operators run at default WARNING, so a task moving in Swarm while
+    its ticket silently did not move in Jira produced nothing anyone would see."""
+    import logging
+
+    from swarm.tasks.task import SwarmTask, TaskStatus
+
+    svc = _svc(JiraConfig(enabled=True, projects=["OTHER"]))
+    with caplog.at_level(logging.WARNING):
+        await svc.export_status(SwarmTask(title="t", jira_key="OTHER-9"), TaskStatus.DONE)
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warnings, "a silent no-op on a state change produced no operator-visible log"
+    joined = " ".join(warnings)
+    assert "OTHER" in joined and "OTHER-9" in joined, (
+        f"the log names neither project nor ticket: {joined}"
+    )
+    assert "confirm" in joined.lower() or "discover" in joined.lower(), (
+        f"the warning does not say how to fix it: {joined}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_warning_fires_once_per_pair_not_every_transition():
+    """A discovered map legitimately omits states it could not justify, and export runs
+    on every transition — warning each time would bury the signal, which is the same
+    noise problem the export reconciler hit with 11 tickets retried every sync."""
+    import logging
+
+    from swarm.tasks.task import SwarmTask, TaskStatus
+
+    svc = _svc(JiraConfig(enabled=True, projects=["OTHER"]))
+    seen: list[str] = []
+
+    class _Cap(logging.Handler):
+        def emit(self, record):
+            if record.levelno >= logging.WARNING:
+                seen.append(record.getMessage())
+
+    logger = logging.getLogger("swarm.integrations.jira")
+    handler = _Cap()
+    logger.addHandler(handler)
+    try:
+        for _ in range(4):
+            await svc.export_status(SwarmTask(title="t", jira_key="OTHER-1"), TaskStatus.DONE)
+        # A DIFFERENT status is a different gap and must warn on its own.
+        await svc.export_status(SwarmTask(title="t", jira_key="OTHER-2"), TaskStatus.ACTIVE)
+    finally:
+        logger.removeHandler(handler)
+
+    assert len(seen) == 2, (
+        f"expected one warning per (project, status) pair, got {len(seen)}: {seen}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_confirmed_project_still_exports():
+    """The gate must be a gate, not a wall."""
+    from swarm.tasks.task import SwarmTask, TaskStatus
+
+    cfg = JiraConfig(
+        enabled=True,
+        projects=["WWD"],
+        project_status_maps={"WWD": {"done": "Done"}},
+        confirmed_projects=["WWD"],
+    )
+    svc = _svc(cfg)
+    assert await svc.export_status(SwarmTask(title="t", jira_key="WWD-1"), TaskStatus.DONE) is True
+    svc.client.transition_issue.assert_called_once_with("WWD-1", "31")

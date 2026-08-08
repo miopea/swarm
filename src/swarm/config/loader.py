@@ -172,24 +172,10 @@ def _parse_jira_section(jira_data: dict[str, object]) -> JiraConfig:
             "Delete them from swarm.yaml; nothing consults them.",
             sorted(removed),
         )
-    default_status_map = {
-        "backlog": "To Do",
-        "unassigned": "To Do",
-        "assigned": "To Do",
-        "active": "In Progress",
-        "blocked": "In Progress",
-        "done": "Done",
-        "failed": "To Do",
-    }
-    raw_status_map = jira_data.get("status_map")
-    if not isinstance(raw_status_map, dict):
-        raw_status_map = {}
-    jira_status_map = {**default_status_map, **raw_status_map}
     return JiraConfig(
         enabled=jira_data.get("enabled", False),
         project=jira_data.get("project", ""),
         sync_interval_minutes=jira_data.get("sync_interval_minutes", 5.0),
-        status_map=jira_status_map,
         projects=[str(x) for x in (jira_data.get("projects") or []) if str(x).strip()],
         issue_types=[
             str(x)

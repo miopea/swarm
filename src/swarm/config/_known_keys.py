@@ -171,6 +171,11 @@ _REMOVED_JIRA_KEYS = {
     "import_filter",
     "import_label",
     "lookback_days",
+    # The GLOBAL status map. Removed 2026.8.8.9: it defaulted to a full hardcoded map,
+    # so it silently supplied `done -> "Done"` to every project that had never been
+    # mapped — the map 11 IS tickets refused. Transition targets are per-project and
+    # discovered.
+    "status_map",
 }
 
 _STALE_JIRA_KEYS = _AUTH_STALE_JIRA_KEYS | _REMOVED_JIRA_KEYS

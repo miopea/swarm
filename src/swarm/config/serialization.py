@@ -362,7 +362,6 @@ def _serialize_jira_optional(config: HiveConfig, data: dict[str, Any]) -> None:
         "enabled": j.enabled,
         "project": j.project,
         "sync_interval_minutes": j.sync_interval_minutes,
-        "status_map": dict(j.status_map),
         # v2 fields. Omitting these was a silent data-loss bug: the UI reported
         # "Confirmed IS" truthfully about memory and falsely about disk, because the
         # confirmation never reached the serializer and vanished on restart.

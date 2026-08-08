@@ -391,6 +391,8 @@ class JiraSyncService:
         self.client = JiraClient(config, token_manager)
         self.stats = JiraSyncStats()
         self._running = False
+        # (project, swarm status) pairs already warned about — see export_status.
+        self._unmapped_warned: set[tuple[str, str]] = set()
         self._uploads_dir = (
             _Path(str(uploads_dir)) if uploads_dir else _Path.home() / ".swarm" / "uploads"
         )
@@ -682,10 +684,28 @@ class JiraSyncService:
         project_key = task.jira_key.split("-")[0] if "-" in task.jira_key else ""
         target_name = self._config.status_map_for(project_key).get(new_status.value, "")
         if not target_name:
-            _log.debug(
-                "no Jira status mapping for %s",
-                new_status.value,
-            )
+            # WARNING, not DEBUG. This is a state change that silently does not happen:
+            # the task moves in Swarm and the ticket does not move in Jira, with nothing
+            # in the log an operator running at default level would ever see. Suppressed
+            # to ONCE per (project, status) because a discovered map legitimately omits
+            # states it could not justify, and a warning per transition would flood.
+            if (project_key, new_status.value) not in self._unmapped_warned:
+                self._unmapped_warned.add((project_key, new_status.value))
+                _log.warning(
+                    "jira: no confirmed mapping for %s status '%s' — %s was NOT "
+                    "transitioned. Discover and confirm this project's workflow in "
+                    "Settings > Integrations. (Further occurrences for this pair are "
+                    "logged at debug.)",
+                    project_key or "(unknown project)",
+                    new_status.value,
+                    task.jira_key,
+                )
+            else:
+                _log.debug(
+                    "no Jira status mapping for %s/%s",
+                    project_key,
+                    new_status.value,
+                )
             return False
 
         try:

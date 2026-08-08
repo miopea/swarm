@@ -37,7 +37,10 @@ class TestJiraConfig:
         cfg = JiraConfig()
         assert cfg.enabled is False
         assert cfg.sync_interval_minutes == 5.0
-        assert "unassigned" in cfg.status_map
+        # A fresh config maps NOTHING. It used to ship a full hardcoded map, which then
+        # applied to every project the operator had never mapped.
+        assert cfg.project_status_maps == {}
+        assert cfg.status_map_for("ANY") == {}
 
     def test_resolved_client_secret_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MY_SECRET", "s3cret")
@@ -392,9 +395,25 @@ class TestJiraIssueToTask:
 class TestJiraSyncService:
     def _make_service(self, **kwargs: object) -> JiraSyncService:
         mgr = kwargs.pop("_mgr", None) or _mock_mgr()
+        # The map is EXPLICIT here. It used to come from JiraConfig's hardcoded default,
+        # which is exactly what made the old global fallback invisible: these tests
+        # passed without anyone configuring a mapping, so nothing showed that real
+        # installs were getting the same unconfirmed map.
         defaults: dict[str, Any] = {
             "enabled": True,
             "project": "PROJ",
+            "project_status_maps": {
+                "PROJ": {
+                    "backlog": "To Do",
+                    "unassigned": "To Do",
+                    "assigned": "To Do",
+                    "active": "In Progress",
+                    "blocked": "In Progress",
+                    "done": "Done",
+                    "failed": "To Do",
+                }
+            },
+            "confirmed_projects": ["PROJ"],
         }
         defaults.update(kwargs)
         cfg = JiraConfig(**defaults)
@@ -486,8 +505,8 @@ class TestJiraSyncService:
 
     @pytest.mark.asyncio
     async def test_export_status_blocked_is_mapped(self) -> None:
-        """TaskStatus.BLOCKED has a default status_map entry, so exporting a
-        blocked task transitions the Jira issue rather than silently no-opping."""
+        """BLOCKED is in the confirmed map, so exporting a blocked task transitions the
+        Jira issue rather than silently no-opping."""
         svc = self._make_service()
         svc.client.get_transitions = AsyncMock(return_value=[{"id": "21", "name": "In Progress"}])
         svc.client.transition_issue = AsyncMock(return_value=True)
