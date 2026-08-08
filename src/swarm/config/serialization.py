@@ -366,6 +366,13 @@ def _serialize_jira_optional(config: HiveConfig, data: dict[str, Any]) -> None:
         "import_label": j.import_label,
         "lookback_days": j.lookback_days,
         "status_map": dict(j.status_map),
+        # v2 fields. Omitting these was a silent data-loss bug: the UI reported
+        # "Confirmed IS" truthfully about memory and falsely about disk, because the
+        # confirmation never reached the serializer and vanished on restart.
+        "projects": list(j.projects),
+        "issue_types": list(j.issue_types),
+        "project_status_maps": {k: dict(v) for k, v in j.project_status_maps.items()},
+        "confirmed_projects": list(j.confirmed_projects),
     }
     if j.client_id:
         jira_out["client_id"] = j.client_id

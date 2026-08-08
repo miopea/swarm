@@ -179,6 +179,19 @@ def _parse_jira_section(jira_data: dict[str, object]) -> JiraConfig:
         import_label=jira_data.get("import_label", ""),
         lookback_days=int(jira_data.get("lookback_days", 30)),
         status_map=jira_status_map,
+        projects=[str(x) for x in (jira_data.get("projects") or []) if str(x).strip()],
+        issue_types=[
+            str(x)
+            for x in (jira_data.get("issue_types") or ["Story", "Task", "Bug", "Sub-task"])
+            if str(x).strip()
+        ],
+        project_status_maps={
+            str(k): {str(sk): str(sv) for sk, sv in (v or {}).items()}
+            for k, v in (jira_data.get("project_status_maps") or {}).items()
+        },
+        confirmed_projects=[
+            str(x) for x in (jira_data.get("confirmed_projects") or []) if str(x).strip()
+        ],
         client_id=jira_data.get("client_id", ""),
         client_secret=jira_data.get("client_secret", ""),
         cloud_id=jira_data.get("cloud_id", ""),

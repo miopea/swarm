@@ -830,9 +830,45 @@
                 </div>
                 <div id="jira-discover-result" class="jira-setup-result" style="display:none"></div>
                 <div id="jira-plan-result" class="jira-setup-result" style="display:none"></div>
+
+                {# Rendered from SAVED config, not from the last Discover click. Without
+                   it the mapping was visible only in the moments after discovering:
+                   reload the page and there was no way to see what a project was
+                   actually confirmed as, or whether it was confirmed at all. #}
+                {% set maps = jr.get('project_status_maps') or {} %}
+                {% set confirmed = jr.get('confirmed_projects') or [] %}
+                <div class="jira-setup-result" id="jira-confirmed-maps">
+                    <p class="text-xs text-muted" style="margin:0 0 0.35rem">Saved mappings</p>
+                    {% if not maps %}
+                        <p class="text-xs" style="color:var(--amber);margin:0">
+                            No project has a confirmed mapping yet. Until a project is confirmed,
+                            the reconcile sweep will <strong>not</strong> converge it &mdash; it
+                            reports what it would do and writes nothing.
+                        </p>
+                    {% else %}
+                        {% for proj, pmap in maps.items() %}
+                        <div class="jira-confirmed-project">
+                            <strong>{{ proj }}</strong>
+                            {% if proj in confirmed %}
+                                <span class="text-xs text-leaf">confirmed</span>
+                            {% else %}
+                                <span class="text-xs" style="color:var(--amber)">discovered, not confirmed</span>
+                            {% endif %}
+                            <span class="text-xs text-muted">
+                                {% for k, v in pmap.items() %}{{ k }}&rarr;{{ v }}{% if not loop.last %} &middot; {% endif %}{% endfor %}
+                            </span>
+                        </div>
+                        {% endfor %}
+                    {% endif %}
+                </div>
             </div>
             {{ config_number('sync_interval_minutes', 'Minutes between sync cycles', 'cfg-jira-sync_interval', jr.get('sync_interval_minutes', 5), step=1, min=1, extra_class='w-input-lg') }}
-            {{ config_number('lookback_days', 'How far back to look for issues (0 = no limit)', 'cfg-jira-lookback_days', jr.get('lookback_days', 30), step=1, min=0, extra_class='w-input-lg') }}
+            <div class="config-field">
+                <label>lookback_days
+                    <span class="hint text-muted">LEGACY &mdash; unused since imports became assignee-routed</span>
+                </label>
+                <input class="config-input w-input-lg" id="cfg-jira-lookback_days" value="{{ jr.get('lookback_days', 0) }}" disabled>
+            </div>
             <div class="config-field">
                 <label>import_filter
                     <span class="hint text-muted">LEGACY &mdash; no longer routes imports</span>
@@ -853,7 +889,9 @@
             </p>
             <div class="config-field config-field-col">
                 <label>status_map
-                    <span class="hint">Fallback map. Per-project maps set by Discover take precedence.</span>
+                    <span class="hint">Fallback only &mdash; used for a project with no confirmed mapping above.
+                    Keys that are not real Swarm statuses (backlog, unassigned, assigned, active, blocked,
+                    done, failed) are ignored.</span>
                 </label>
                 <textarea class="config-input w-input-lg" id="cfg-jira-status_map" rows="4" placeholder='{"pending":"To Do","in_progress":"In Progress","completed":"Done","failed":"To Do"}'>{{ jr.get('status_map', {})|tojson }}</textarea>
             </div>

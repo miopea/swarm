@@ -295,3 +295,76 @@ def test_whole_word_matching_is_load_bearing_on_its_own():
         f"an ambiguous To Do category should stay unmapped rather than guess: {proposal}"
     )
     assert proposal["active"] == "In Progress", "the unambiguous mappings must still work"
+
+
+# --- the v2 config must actually persist -------------------------------------
+
+
+def test_the_v2_fields_survive_a_save_and_reload():
+    """SILENT DATA LOSS, caught by the operator asking to see his mapping again.
+
+    ``projects``, ``project_status_maps`` and ``confirmed_projects`` were added to the
+    dataclass but wired into NEITHER the serializer NOR the loader NOR the config
+    applier. So the projects box never saved, and confirming a project updated memory
+    while the UI reported success — "Confirmed IS" was true about RAM and false about
+    disk, and the confirmation vanished on the next restart.
+
+    Adding a field to a config model is four changes, not one: model, serializer,
+    loader, applier. This asserts the whole round trip rather than any one of them.
+    """
+    from swarm.config.loader import _parse_jira_section
+    from swarm.config.models import HiveConfig
+    from swarm.config.serialization import _serialize_jira_optional
+
+    cfg = HiveConfig(session_name="t")
+    cfg.jira = JiraConfig(
+        enabled=True,
+        projects=["WWD", "IS"],
+        project_status_maps={"IS": {"done": "Done", "backlog": "ToDo"}},
+        confirmed_projects=["IS"],
+    )
+
+    out: dict = {}
+    _serialize_jira_optional(cfg, out)
+    reloaded = _parse_jira_section(out["jira"])
+
+    assert reloaded.projects == ["WWD", "IS"], "the configured projects did not survive"
+    assert reloaded.confirmed_projects == ["IS"], (
+        "the confirmation did not survive a restart — the sweep would refuse to "
+        "converge a project the operator had already approved"
+    )
+    assert reloaded.project_status_maps["IS"]["done"] == "Done", "the mapping was lost"
+    assert reloaded.is_confirmed("IS") is True
+
+
+def test_the_config_applier_accepts_the_v2_fields():
+    """The UI's save path. Without this the projects box round-tripped back to its old
+    value and the operator watched their input revert with no error."""
+    from swarm.server.config_appliers.jira import _apply_jira_v2_fields
+
+    cfg = JiraConfig(enabled=True)
+    consumed: list[str] = []
+    _apply_jira_v2_fields(
+        cfg,
+        {
+            "projects": ["WWD", " IS ", ""],
+            "confirmed_projects": ["IS"],
+            "project_status_maps": {"IS": {"done": "Resolved"}},
+        },
+        consumed,
+    )
+    assert cfg.projects == ["WWD", "IS"], "blank/whitespace entries were not cleaned"
+    assert cfg.confirmed_projects == ["IS"]
+    assert cfg.project_status_maps["IS"]["done"] == "Resolved"
+    assert set(consumed) >= {"projects", "confirmed_projects", "project_status_maps"}, (
+        f"unconsumed keys are reported as unknown config: {consumed}"
+    )
+
+
+def test_the_new_keys_are_registered_as_known():
+    """Otherwise every load logs 'unrecognized key ... (typo?)' for keys the system
+    itself writes — a warning that trains the operator to ignore warnings."""
+    from swarm.config._known_keys import _KNOWN_JIRA_KEYS
+
+    for key in ("projects", "issue_types", "project_status_maps", "confirmed_projects"):
+        assert key in _KNOWN_JIRA_KEYS, f"{key} would be warned about on every load"

@@ -33,6 +33,42 @@ def _apply_jira_strings(cfg: object, jr: dict[str, Any], keys: tuple[str, ...]) 
             setattr(cfg, key, val)
 
 
+def _apply_jira_v2_fields(jc: Any, body: dict[str, Any], consumed: list[str]) -> None:
+    """Apply the v2 list/dict fields (projects, issue types, per-project maps).
+
+    Extracted to keep apply_jira under the complexity gate. Without these the UI's
+    projects box silently never saved: the applier consumed nothing, so the value
+    round-tripped back to the old one and the operator watched their input revert with
+    no error at all. Confirmations were lost the same way.
+    """
+    if "projects" in body:
+        val = body["projects"]
+        if not isinstance(val, list):
+            raise ValueError("jira.projects must be a list")
+        jc.projects = [str(x).strip() for x in val if str(x).strip()]
+        consumed.append("projects")
+    if "issue_types" in body:
+        val = body["issue_types"]
+        if not isinstance(val, list):
+            raise ValueError("jira.issue_types must be a list")
+        jc.issue_types = [str(x).strip() for x in val if str(x).strip()]
+        consumed.append("issue_types")
+    if "project_status_maps" in body:
+        val = body["project_status_maps"]
+        if not isinstance(val, dict):
+            raise ValueError("jira.project_status_maps must be an object")
+        jc.project_status_maps = {
+            str(k): {str(sk): str(sv) for sk, sv in (v or {}).items()} for k, v in val.items()
+        }
+        consumed.append("project_status_maps")
+    if "confirmed_projects" in body:
+        val = body["confirmed_projects"]
+        if not isinstance(val, list):
+            raise ValueError("jira.confirmed_projects must be a list")
+        jc.confirmed_projects = [str(x).strip() for x in val if str(x).strip()]
+        consumed.append("confirmed_projects")
+
+
 def apply_jira(
     cfg: HiveConfig,
     body: dict[str, Any],
@@ -73,6 +109,7 @@ def apply_jira(
             raise ValueError("jira.lookback_days must be >= 0")
         jc.lookback_days = int(val)
         consumed.append("lookback_days")
+    _apply_jira_v2_fields(jc, body, consumed)
     if "status_map" in body:
         val = body["status_map"]
         if not isinstance(val, dict):

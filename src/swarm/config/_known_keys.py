@@ -142,6 +142,13 @@ _KNOWN_JIRA_KEYS = {
     "import_label",
     "lookback_days",
     "status_map",
+    # v2 (docs/specs/jira-integration-v2.md). Missing entries here do not break
+    # anything, but every load logs "unrecognized key ... (typo?)" for a key the
+    # system itself writes — a warning that trains the operator to ignore warnings.
+    "projects",
+    "issue_types",
+    "project_status_maps",
+    "confirmed_projects",
     "client_id",
     "client_secret",
     "cloud_id",
