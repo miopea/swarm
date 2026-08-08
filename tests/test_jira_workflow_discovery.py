@@ -368,3 +368,73 @@ def test_the_new_keys_are_registered_as_known():
 
     for key in ("projects", "issue_types", "project_status_maps", "confirmed_projects"):
         assert key in _KNOWN_JIRA_KEYS, f"{key} would be warned about on every load"
+
+
+# --- dead settings are GONE, not merely disabled -----------------------------
+
+
+@pytest.mark.parametrize("field", ["import_filter", "import_label", "lookback_days"])
+def test_the_dead_settings_are_removed_from_every_layer(field: str):
+    """OPERATOR-REPORTED: "removing from the UI (and the backend) what no longer
+    applies".
+
+    These three stopped doing anything when imports became assignee-routed:
+    import_filter and import_label no longer route, and lookback_days was read by no
+    query at all — it was plumbed through loader, applier and known-keys purely to
+    reach a field nothing consulted. Disabling them in the UI was not enough: a
+    setting the operator can still see reads as configuration even when it is
+    decoration, and the backend kept carrying three fields that had to be serialized,
+    loaded and validated forever.
+    """
+    from pathlib import Path as _P
+
+    assert not hasattr(JiraConfig(), field), f"JiraConfig still carries {field}"
+    for path in (
+        "src/swarm/config/serialization.py",
+        "src/swarm/config/loader.py",
+        "src/swarm/server/config_appliers/jira.py",
+    ):
+        src = _P(path).read_text()
+        code = "\n".join(ln for ln in src.split("\n") if not ln.strip().startswith("#"))
+        assert f'"{field}"' not in code, f"{path} still handles {field}"
+
+
+@pytest.mark.parametrize("field", ["import_filter", "import_label", "lookback_days"])
+def test_removed_settings_are_reported_as_stale_not_as_typos(field: str):
+    """An existing config still has these keys. Dropping them from the known set
+    without listing them as REMOVED would warn "unrecognized key (typo?)" — telling
+    the operator they mistyped something they never touched."""
+    from swarm.config._known_keys import _STALE_JIRA_KEYS
+
+    assert field in _STALE_JIRA_KEYS, (
+        f"{field} would be reported as a typo rather than as a removed setting"
+    )
+
+
+def test_the_config_page_no_longer_offers_the_dead_settings():
+    from pathlib import Path as _P
+
+    page = _P("src/swarm/web/templates/config.html").read_text()
+    for field in ("cfg-jira-import_filter", "cfg-jira-import_label", "cfg-jira-lookback_days"):
+        assert field not in page, f"{field} is still on the config page"
+    # The raw JSON textarea is gone too: hand-editing it is how a map targeting "Done"
+    # ended up refused by every ticket in a project with no Done transition.
+    assert "cfg-jira-status_map" not in page, "the raw status_map textarea is still present"
+
+
+def test_saved_mappings_are_rendered_from_config_not_from_a_discover_click():
+    """The operator's actual request: seeing what is mapped, after the fact."""
+    from pathlib import Path as _P
+
+    page = _P("src/swarm/web/templates/config.html").read_text()
+    # Window bounded to the setup BLOCK, not to the panel's own div id: the {% set %}
+    # that reads stored config sits just above the div, so anchoring on the id alone
+    # excluded the very line under test — the same shape as the scan windows that were
+    # mis-sized in both directions earlier in this work.
+    block = page[page.index('id="jira-setup-block"') : page.index("Step 3: cadence")]
+    assert "project_status_maps" in block, (
+        "the saved-mappings panel does not read stored config, so it can only show "
+        "what the last Discover click returned"
+    )
+    assert "confirmed_projects" in block, "confirmation state is not shown"
+    assert "Re-discover" in page, "a saved project cannot be re-read without retyping its key"

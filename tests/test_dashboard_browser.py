@@ -329,14 +329,17 @@ def test_the_jira_setup_block_renders_on_the_config_page(playwright_page):
     assert page.locator("[data-action='jiraDiscover']").count() == 1, "no Discover control"
     assert page.locator("[data-action='jiraPlan']").count() == 1, "no Preview control"
 
-    # The legacy routing fields must READ as inert rather than merely be ignored — a
-    # live-looking input that no longer does anything is a setting lying to the operator.
-    assert page.locator("#cfg-jira-import_filter").is_disabled(), (
-        "the legacy JQL filter still looks editable, so it reads as though it still routes"
-    )
-    assert page.locator("#cfg-jira-import_label").is_disabled(), (
-        "the legacy label field still looks editable"
-    )
+    # The legacy routing fields must be ABSENT, not merely disabled. A greyed-out input
+    # is still a setting on the screen, and the operator asked for what no longer
+    # applies to be removed rather than deactivated.
+    for dead in ("cfg-jira-import_filter", "cfg-jira-import_label", "cfg-jira-lookback_days"):
+        assert page.locator(f"#{dead}").count() == 0, (
+            f"the removed setting {dead} is still rendered"
+        )
+    # The raw status_map JSON box is gone too: the dropdowns are built from the
+    # project's real vocabulary, and hand-typed JSON is how a map targeting a status
+    # the workflow does not offer got saved in the first place.
+    assert page.locator("#cfg-jira-status_map").count() == 0, "the raw status_map textarea remains"
 
 
 def test_clicking_discover_without_a_project_does_not_call_the_api(playwright_page):

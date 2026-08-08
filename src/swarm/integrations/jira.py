@@ -442,17 +442,11 @@ class JiraSyncService:
         if not projects:
             return ""
 
-        legacy = self._config.import_filter or self._config.import_label
-        if legacy and not getattr(self, "_warned_legacy_filter", False):
-            self._warned_legacy_filter = True
-            # Loud, once. Silently ignoring configuration the operator can still see in
-            # the UI is how a setting becomes a lie about what the system is doing.
-            _log.warning(
-                "jira: import_filter/import_label are LEGACY and no longer route "
-                "imports — routing is by assignee + project (see "
-                "docs/specs/jira-integration-v2.md). Ignoring: %r",
-                legacy,
-            )
+        # No legacy-filter warning here any more: import_filter and import_label were
+        # DELETED rather than left disabled (2026.8.8.7). A setting that exists and does
+        # nothing is worse than one that is gone — the operator can still see it, so it
+        # reads as configuration when it is decoration. Older configs carrying those keys
+        # are reported by the loader's stale-key check instead.
 
         def _quote(value: str) -> str:
             return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'

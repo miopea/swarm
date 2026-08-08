@@ -265,14 +265,12 @@ class TestSerializeConfig:
                 client_secret="secret",
                 cloud_id="cloud-abc",
                 project="PROJ",
-                import_label="swarm",
             ),
         )
         data = serialize_config(cfg)
         assert data["jira"]["client_id"] == "my-client-id"
         assert data["jira"]["client_secret"] == "secret"
         assert data["jira"]["cloud_id"] == "cloud-abc"
-        assert data["jira"]["import_label"] == "swarm"
 
         out = tmp_path / "swarm.yaml"
         save_config(cfg, str(out))
@@ -281,7 +279,6 @@ class TestSerializeConfig:
         assert loaded.jira.client_id == "my-client-id"
         assert loaded.jira.client_secret == "secret"
         assert loaded.jira.cloud_id == "cloud-abc"
-        assert loaded.jira.import_label == "swarm"
 
     def test_empty_status_map_uses_defaults(self, tmp_path):
         """An empty status_map in YAML should fall back to defaults, not stay empty."""

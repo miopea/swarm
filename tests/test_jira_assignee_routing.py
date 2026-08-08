@@ -48,51 +48,61 @@ def test_the_query_routes_by_assignee():
 
 
 def test_the_query_no_longer_routes_by_label():
-    """`labels = "swarm"` must not appear even when the legacy field is still set —
-    the operator's live config still carries it."""
-    jql = _jql(projects=["WWD"], import_label="swarm")
+    """`labels = "swarm"` must not appear in the query at all. The label is now
+    reserved PROVENANCE — it marks tickets Swarm created — and must never decide what
+    comes in."""
+    jql = _jql(projects=["WWD"])
     assert "labels" not in jql.lower(), (
-        f"the legacy label still routes imports, so the multi-dev duplication remains: {jql}"
+        f"the label still routes imports, so the multi-dev duplication remains: {jql}"
     )
 
 
-def test_a_legacy_filter_is_ignored_but_not_silently(caplog):
-    """Silently ignoring configuration the operator can still see in the UI turns a
-    setting into a lie about what the system is doing."""
-    cfg = JiraConfig(enabled=True, projects=["WWD"], import_filter='labels = "swarm"')
-    svc = JiraSyncService.__new__(JiraSyncService)
-    svc._config = cfg
+def test_the_legacy_routing_settings_are_gone_from_the_model():
+    """import_filter and import_label were DELETED (2026.8.8.7), not disabled.
+
+    They were kept briefly as inert fields so an existing config would not error. That
+    is the worse state: a setting the operator can still see reads as configuration
+    even when nothing consults it. The on-disk keys are handled by the stale-key
+    warning instead — see tests/test_jira_workflow_discovery.py.
+    """
+    cfg = JiraConfig()
+    for dead in ("import_filter", "import_label", "lookback_days"):
+        assert not hasattr(cfg, dead), f"JiraConfig still carries the dead field {dead}"
+
+
+def test_an_existing_config_carrying_the_dead_keys_still_loads(tmp_path, caplog):
+    """THE UPGRADE PATH. Every dev's swarm.yaml currently has these keys. Removing a
+    field must not make an existing config fail to load — and must not report it as a
+    typo either, which is what an unknown key normally means."""
+    import yaml
+
+    from swarm.config.loader import load_config
+
+    path = tmp_path / "swarm.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "workers": [],
+                "jira": {
+                    "enabled": True,
+                    "projects": ["WWD"],
+                    "import_filter": 'labels = "swarm"',
+                    "import_label": "swarm",
+                    "lookback_days": 30,
+                },
+            }
+        )
+    )
     with caplog.at_level(logging.WARNING):
-        jql = svc.build_jql()
-    assert 'labels = "swarm"' not in jql, "the legacy JQL is still being used"
-    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
-    assert any("LEGACY" in m or "legacy" in m.lower() for m in warnings), (
-        f"a configured import_filter was ignored with no warning: {warnings}"
+        cfg = load_config(str(path))
+
+    assert cfg.jira.enabled is True, "a config with the old keys failed to load"
+    assert cfg.jira.projects == ["WWD"], "the surviving settings were lost"
+    messages = " ".join(r.getMessage() for r in caplog.records)
+    assert "import_filter" in messages, "a removed setting vanished with no word to the operator"
+    assert "no longer" in messages.lower() or "removed" in messages.lower(), (
+        f"the removed keys are reported as unrecognized (i.e. as typos): {messages}"
     )
-
-
-def test_the_legacy_warning_fires_once_not_every_sync():
-    """It runs every sync interval; warning each time would bury real signal — the
-    same noise problem that made the export reconciler retry 11 tickets forever."""
-    cfg = JiraConfig(enabled=True, projects=["WWD"], import_filter="x")
-    svc = JiraSyncService.__new__(JiraSyncService)
-    svc._config = cfg
-    logger = logging.getLogger("swarm.integrations.jira")
-    seen: list[str] = []
-
-    class _Cap(logging.Handler):
-        def emit(self, record):
-            seen.append(record.getMessage())
-
-    handler = _Cap()
-    logger.addHandler(handler)
-    try:
-        for _ in range(5):
-            svc.build_jql()
-    finally:
-        logger.removeHandler(handler)
-    legacy = [m for m in seen if "legacy" in m.lower() or "LEGACY" in m]
-    assert len(legacy) == 1, f"the legacy warning fired {len(legacy)} times, expected once"
 
 
 # --- scope -------------------------------------------------------------------

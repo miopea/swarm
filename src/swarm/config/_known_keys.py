@@ -138,9 +138,6 @@ _KNOWN_JIRA_KEYS = {
     "enabled",
     "project",
     "sync_interval_minutes",
-    "import_filter",
-    "import_label",
-    "lookback_days",
     "status_map",
     # v2 (docs/specs/jira-integration-v2.md). Missing entries here do not break
     # anything, but every load logs "unrecognized key ... (typo?)" for a key the
@@ -154,7 +151,29 @@ _KNOWN_JIRA_KEYS = {
     "cloud_id",
 }
 # Legacy keys that were removed -- warn if present
-_STALE_JIRA_KEYS = {"url", "email", "token", "auth_mode"}
+# Removed keys — present in older configs, warned about rather than silently dropped.
+# import_filter/import_label stopped routing when imports became assignee-based, and
+# lookback_days was read by no query at all; leaving them in the model would have
+# kept three settings that look live and do nothing.
+# Superseded by OAuth: the operator should move the credential, not delete the concept.
+_AUTH_STALE_JIRA_KEYS = {
+    "url",
+    "email",
+    "token",
+    "auth_mode",
+}
+
+# REMOVED outright (2026.8.8.7). import_filter and import_label routed imports by label,
+# which does not survive Jira being enabled for every dev — every swarm imported the same
+# tickets. lookback_days was read by no query at all. They stay listed so an existing
+# swarm.yaml is told the setting is gone rather than being told it looks like a typo.
+_REMOVED_JIRA_KEYS = {
+    "import_filter",
+    "import_label",
+    "lookback_days",
+}
+
+_STALE_JIRA_KEYS = _AUTH_STALE_JIRA_KEYS | _REMOVED_JIRA_KEYS
 
 _KNOWN_TEST_KEYS = {
     "enabled",

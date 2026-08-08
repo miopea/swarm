@@ -13,8 +13,6 @@ if TYPE_CHECKING:
 
 _JIRA_STRING_KEYS: tuple[str, ...] = (
     "project",
-    "import_filter",
-    "import_label",
     "client_id",
     "client_secret",
     "cloud_id",
@@ -103,12 +101,6 @@ def apply_jira(
             raise ValueError("jira.sync_interval_minutes must be > 0")
         jc.sync_interval_minutes = float(val)
         consumed.append("sync_interval_minutes")
-    if "lookback_days" in body:
-        val = body["lookback_days"]
-        if not isinstance(val, (int, float)) or val < 0:
-            raise ValueError("jira.lookback_days must be >= 0")
-        jc.lookback_days = int(val)
-        consumed.append("lookback_days")
     _apply_jira_v2_fields(jc, body, consumed)
     if "status_map" in body:
         val = body["status_map"]

@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from swarm.config._known_keys import (
+    _AUTH_STALE_JIRA_KEYS,
     _KNOWN_COORDINATION_KEYS,
     _KNOWN_DRONE_KEYS,
     _KNOWN_JIRA_KEYS,
@@ -21,6 +22,7 @@ from swarm.config._known_keys import (
     _KNOWN_TERMINAL_KEYS,
     _KNOWN_TEST_KEYS,
     _KNOWN_TOP_KEYS,
+    _REMOVED_JIRA_KEYS,
     _STALE_JIRA_KEYS,
     _TUNING_FIELDS,
     _parse_tuning,
@@ -151,12 +153,24 @@ def _parse_llms_and_overrides(
 def _parse_jira_section(jira_data: dict[str, object]) -> JiraConfig:
     """Parse the ``jira:`` config section into a JiraConfig."""
     _warn_unknown_keys("jira", jira_data, _KNOWN_JIRA_KEYS | _STALE_JIRA_KEYS)
-    stale_found = set(jira_data) & _STALE_JIRA_KEYS
-    if stale_found:
+    # Two DIFFERENT groups of dead keys, and one message for both told the operator to
+    # fix `lookback_days` by switching to OAuth. Remediation advice that does not apply
+    # to the key it names is worse than none: it sends someone to change credentials
+    # over a routing setting.
+    superseded_by_oauth = set(jira_data) & _AUTH_STALE_JIRA_KEYS
+    if superseded_by_oauth:
         _log.warning(
-            "jira config contains legacy keys %s — these are ignored; "
+            "jira config contains legacy auth keys %s — these are ignored; "
             "use OAuth (client_id/client_secret) instead",
-            stale_found,
+            sorted(superseded_by_oauth),
+        )
+    removed = set(jira_data) & _REMOVED_JIRA_KEYS
+    if removed:
+        _log.warning(
+            "jira settings %s were REMOVED and are no longer read: imports are routed "
+            "by Jira assignee and the transition map is discovered per project. "
+            "Delete them from swarm.yaml; nothing consults them.",
+            sorted(removed),
         )
     default_status_map = {
         "backlog": "To Do",
@@ -175,9 +189,6 @@ def _parse_jira_section(jira_data: dict[str, object]) -> JiraConfig:
         enabled=jira_data.get("enabled", False),
         project=jira_data.get("project", ""),
         sync_interval_minutes=jira_data.get("sync_interval_minutes", 5.0),
-        import_filter=jira_data.get("import_filter", ""),
-        import_label=jira_data.get("import_label", ""),
-        lookback_days=int(jira_data.get("lookback_days", 30)),
         status_map=jira_status_map,
         projects=[str(x) for x in (jira_data.get("projects") or []) if str(x).strip()],
         issue_types=[

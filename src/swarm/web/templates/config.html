@@ -805,96 +805,98 @@
             </div>
 
             {# --- Shared fields --- #}
+            {# --- Step 1: which projects ------------------------------------------ #}
             <div class="config-field">
-                <label>projects <span class="hint">Comma-separated project keys to sync (e.g. WWD, IS)</span></label>
+                <label>1. Projects to sync
+                    <span class="hint">Comma-separated keys, e.g. WWD, IS</span>
+                </label>
                 <input class="config-input w-input-lg" id="cfg-jira-projects" placeholder="WWD, IS"
                        value="{{ (jr.get('projects') or ([jr.get('project')] if jr.get('project') else []))|join(', ') }}">
             </div>
+            <p class="text-xs text-muted" style="margin:-0.2rem 0 0.6rem">
+                Swarm imports issues <strong>assigned to you</strong> in these projects that are not
+                finished &mdash; Story, Task, Bug and Sub-task, not Epics. Routing is by assignee, so
+                each person&rsquo;s swarm gets their own work and no two race to transition the same
+                ticket. The <code>swarm</code> label only marks tickets Swarm <em>created</em>.
+            </p>
 
-            {# --- v2 setup: discover the workflow, confirm the mapping ---------------
-                 Replaces hand-typing status_map. A map typed once is the artefact that
-                 silently rots when a Jira admin edits a workflow — and a hardcoded
-                 "Done" was refused by 11 real tickets whose workflow only offered
-                 "Waiting for support", with nothing surfacing it until the export
-                 failed. Discovery reads what is actually there; the operator confirms,
-                 because Done / Resolved / Closed are rarely interchangeable and a wrong
-                 automatic choice transitions real tickets while reporting success. #}
+            {# --- Step 2: map each project's workflow ------------------------------ #}
             <div class="config-field config-field-col" id="jira-setup-block">
-                <label>Workflow setup
-                    <span class="hint">Read each project's real states, then confirm the mapping</span>
+                <label>2. Workflow mapping
+                    <span class="hint">Read a project&rsquo;s real states, then confirm what each Swarm state means</span>
                 </label>
                 <div class="jira-setup-row">
-                    <input class="config-input text-left" id="jira-discover-project" placeholder="Project key, e.g. WWD">
+                    <input class="config-input" id="jira-discover-project" placeholder="Project key, e.g. WWD">
                     <button class="btn btn-sm btn-secondary" data-action="jiraDiscover">Discover workflow</button>
                     <button class="btn btn-sm btn-secondary" data-action="jiraPlan">Preview sync plan</button>
                 </div>
                 <div id="jira-discover-result" class="jira-setup-result" style="display:none"></div>
                 <div id="jira-plan-result" class="jira-setup-result" style="display:none"></div>
 
-                {# Rendered from SAVED config, not from the last Discover click. Without
-                   it the mapping was visible only in the moments after discovering:
-                   reload the page and there was no way to see what a project was
-                   actually confirmed as, or whether it was confirmed at all. #}
+                {# Rendered from SAVED config, not from the last Discover click: before this
+                   the mapping was visible only in the moments after discovering, and a
+                   reload left no way to see what a project was confirmed as. #}
                 {% set maps = jr.get('project_status_maps') or {} %}
                 {% set confirmed = jr.get('confirmed_projects') or [] %}
                 <div class="jira-setup-result" id="jira-confirmed-maps">
-                    <p class="text-xs text-muted" style="margin:0 0 0.35rem">Saved mappings</p>
+                    <p class="text-xs text-muted" style="margin:0 0 0.4rem">Saved mappings</p>
                     {% if not maps %}
                         <p class="text-xs" style="color:var(--amber);margin:0">
-                            No project has a confirmed mapping yet. Until a project is confirmed,
-                            the reconcile sweep will <strong>not</strong> converge it &mdash; it
-                            reports what it would do and writes nothing.
+                            Nothing confirmed yet. Until a project is confirmed the sync
+                            <strong>reports what it would do and writes nothing</strong> &mdash;
+                            deliberately, so enabling Jira is never a bulk write to a shared tracker.
                         </p>
                     {% else %}
-                        {% for proj, pmap in maps.items() %}
-                        <div class="jira-confirmed-project">
-                            <strong>{{ proj }}</strong>
-                            {% if proj in confirmed %}
-                                <span class="text-xs text-leaf">confirmed</span>
-                            {% else %}
-                                <span class="text-xs" style="color:var(--amber)">discovered, not confirmed</span>
-                            {% endif %}
-                            <span class="text-xs text-muted">
-                                {% for k, v in pmap.items() %}{{ k }}&rarr;{{ v }}{% if not loop.last %} &middot; {% endif %}{% endfor %}
-                            </span>
-                        </div>
-                        {% endfor %}
+                        <table class="jira-saved-table">
+                            <thead>
+                                <tr><th>Project</th><th>State</th><th>Mapping</th><th></th></tr>
+                            </thead>
+                            <tbody>
+                            {% for proj, pmap in maps.items() %}
+                                <tr>
+                                    <td><strong>{{ proj }}</strong></td>
+                                    <td>
+                                        {% if proj in confirmed %}
+                                            <span class="text-leaf">&#10003; confirmed</span>
+                                        {% else %}
+                                            <span style="color:var(--amber)">not confirmed</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="jira-saved-map">
+                                        {% for k, v in pmap.items() %}<span class="jira-pair">{{ k }} &rarr; <strong>{{ v }}</strong></span>{% endfor %}
+                                    </td>
+                                    <td>
+                                        <button class="btn btn-sm btn-secondary" data-action="jiraDiscover"
+                                                data-project="{{ proj }}">Re-discover</button>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
                     {% endif %}
                 </div>
             </div>
-            {{ config_number('sync_interval_minutes', 'Minutes between sync cycles', 'cfg-jira-sync_interval', jr.get('sync_interval_minutes', 5), step=1, min=1, extra_class='w-input-lg') }}
+
+            {# Sync cadence is the only remaining knob: import_filter, import_label and
+               lookback_days were DELETED (2026.8.8.7), not disabled. A setting the
+               operator can still see reads as configuration even when it does nothing.
+               The raw status_map textarea is gone too — the per-project mapping above
+               replaces it, and hand-editing JSON was how a map targeting "Done" ended
+               up refused by every ticket in a project that has no Done transition. #}
+            {# --- Step 3: cadence -------------------------------------------------- #}
             <div class="config-field">
-                <label>lookback_days
-                    <span class="hint text-muted">LEGACY &mdash; unused since imports became assignee-routed</span>
+                <label>3. Sync interval
+                    <span class="hint">Minutes between sync cycles</span>
                 </label>
-                <input class="config-input w-input-lg" id="cfg-jira-lookback_days" value="{{ jr.get('lookback_days', 0) }}" disabled>
+                <input class="config-input w-input-lg" id="cfg-jira-sync_interval" type="number"
+                       min="1" step="1" value="{{ jr.get('sync_interval_minutes', 5) }}">
             </div>
-            <div class="config-field">
-                <label>import_filter
-                    <span class="hint text-muted">LEGACY &mdash; no longer routes imports</span>
-                </label>
-                <input class="config-input text-left w-input-lg" id="cfg-jira-import_filter" placeholder="JQL filter (unused)" value="{{ jr.get('import_filter', '') }}" disabled>
-            </div>
-            <div class="config-field">
-                <label>import_label
-                    <span class="hint text-muted">LEGACY &mdash; <code>swarm</code> is now a reserved provenance label</span>
-                </label>
-                <input class="config-input w-input-lg" id="cfg-jira-import_label" placeholder="unused" value="{{ jr.get('import_label', '') }}" disabled>
-            </div>
-            <p class="text-xs text-muted mt-sm">
-                Imports are routed by <strong>Jira assignee</strong> and the projects above, not by label or JQL.
-                With the integration enabled for several people, a shared label makes every swarm import the
-                same tickets and race to transition them. The <code>swarm</code> label now only marks tickets
-                Swarm <em>created</em>.
+            <p class="text-xs text-muted" style="margin:-0.2rem 0 0">
+                Each cycle imports your assigned issues and reconciles any export Jira has not
+                acknowledged. A dropped export is repaired on the next cycle rather than left to
+                drift &mdash; which is why there are no webhooks here.
             </p>
-            <div class="config-field config-field-col">
-                <label>status_map
-                    <span class="hint">Fallback only &mdash; used for a project with no confirmed mapping above.
-                    Keys that are not real Swarm statuses (backlog, unassigned, assigned, active, blocked,
-                    done, failed) are ignored.</span>
-                </label>
-                <textarea class="config-input w-input-lg" id="cfg-jira-status_map" rows="4" placeholder='{"pending":"To Do","in_progress":"In Progress","completed":"Done","failed":"To Do"}'>{{ jr.get('status_map', {})|tojson }}</textarea>
-            </div>
+
         </div>
     </div>
 
@@ -2034,12 +2036,6 @@
             try { if (el.value.trim()) new RegExp(el.value.trim()); }
             catch(e) { errors.push('Approval rule #' + (i+1) + ': invalid regex — ' + e.message); }
         });
-        // Jira status map must be valid JSON if non-empty
-        var statusMap = document.getElementById('cfg-jira-status_map');
-        if (statusMap && statusMap.value.trim()) {
-            try { JSON.parse(statusMap.value); }
-            catch(e) { errors.push('Jira status map: invalid JSON'); }
-        }
         // SMTP: if email enabled, host and from_address required
         var emailEnabled = document.getElementById('cfg-notif-email-enabled');
         if (emailEnabled && emailEnabled.checked) {
@@ -2214,10 +2210,8 @@
                 project: ((document.getElementById('cfg-jira-projects').value || '')
                     .split(',').map(function(x) { return x.trim(); }).filter(Boolean)[0]) || '',
                 sync_interval_minutes: parseFloat(document.getElementById('cfg-jira-sync_interval').value),
-                lookback_days: parseInt(document.getElementById('cfg-jira-lookback_days').value, 10),
-                import_filter: document.getElementById('cfg-jira-import_filter').value,
-                import_label: document.getElementById('cfg-jira-import_label').value,
-                status_map: (function() { try { return JSON.parse(document.getElementById('cfg-jira-status_map').value || '{}'); } catch(e) { return {}; } })(),
+
+
             },
             port: parseInt(document.getElementById('cfg-advanced-port').value),
             trust_proxy: document.getElementById('cfg-advanced-trust_proxy').checked,
@@ -2405,8 +2399,12 @@
         });
     }
 
-    function jiraDiscover() {
-        var project = (document.getElementById('jira-discover-project').value || '').trim();
+    function jiraDiscover(preset) {
+        // `preset` comes from a Re-discover button on a saved row, so an existing
+        // project can be re-read without retyping its key.
+        var field = document.getElementById('jira-discover-project');
+        if (preset) field.value = preset;
+        var project = (field.value || '').trim();
         var out = document.getElementById('jira-discover-result');
         if (!project) {
             out.style.display = '';
@@ -3667,7 +3665,7 @@
         var action = el.dataset.action;
         var _actions = {
             saveSettings: function() { saveSettings(); },
-            jiraDiscover: function() { jiraDiscover(); },
+            jiraDiscover: function() { jiraDiscover(el.dataset.project); },
             jiraPlan: function() { jiraPlan(); },
             jiraConfirm: function() { jiraConfirm(el.dataset.project); },
             switchConfigTab: function() { switchConfigTab(el.dataset.tab); },

@@ -587,7 +587,7 @@ class TestLabelFiltering:
     @pytest.mark.asyncio
     async def test_an_unlabelled_issue_is_still_imported(self) -> None:
         """The regression this class now exists to prevent."""
-        svc = self._make_service(import_label="swarm")
+        svc = self._make_service()
         svc.client.search_issues = AsyncMock(
             return_value=[
                 {
