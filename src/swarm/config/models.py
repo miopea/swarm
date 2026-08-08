@@ -441,6 +441,28 @@ class JiraConfig:
     client_secret: str = ""  # Atlassian OAuth app client secret (or $ENV_VAR)
     cloud_id: str = ""  # Auto-discovered Jira Cloud site ID
 
+    # Confirmed per-project status maps, keyed by project key (v2 phase 2).
+    # A GLOBAL map cannot be right: on 2026-08-07 the single map targeted "Done" and
+    # was refused by every IS ticket, whose workflow offers only "Waiting for support",
+    # while working fine for WWD. Workflows are per-project, so the map must be too.
+    project_status_maps: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Projects whose discovered map the operator has CONFIRMED. Discovery proposes;
+    # nothing writes to real tickets on a proposal alone.
+    confirmed_projects: list[str] = field(default_factory=list)
+
+    def status_map_for(self, project_key: str) -> dict[str, str]:
+        """The status map to use for *project_key*, falling back to the global one.
+
+        Fallback is deliberate rather than strict: an install upgrading from v1 has a
+        global map and no per-project maps, and refusing to export until every project
+        is re-confirmed would break a working integration on upgrade.
+        """
+        return self.project_status_maps.get(project_key) or self.status_map
+
+    def is_confirmed(self, project_key: str) -> bool:
+        """Has the operator confirmed this project's discovered map?"""
+        return project_key in self.confirmed_projects
+
     def active_projects(self) -> list[str]:
         """Projects to sync, migrating the legacy single ``project`` field.
 

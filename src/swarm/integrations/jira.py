@@ -223,6 +223,23 @@ class JiraClient:
             data = await resp.json()
         return data.get("transitions", [])
 
+    async def get_project_statuses(self, project_key: str) -> list[dict[str, Any]]:
+        """Every status the project's workflows use, grouped by issue type.
+
+        Discovery for the setup flow (v2 phase 2). Asked at the PROJECT level rather
+        than per issue, because ``get_transitions`` only reports transitions available
+        from one issue's CURRENT state — which is how a status map can look complete
+        while being wrong for every ticket that is not in that state. On 2026-08-07 a
+        hardcoded map targeting "Done" was refused by 11 real tickets whose workflow
+        offered only "Waiting for support"; nothing could see that until it failed.
+        """
+        session = await self._ensure_session()
+        url = f"{self._base_url}/rest/api/3/project/{project_key}/statuses"
+        async with session.get(url) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+        return data if isinstance(data, list) else []
+
     async def transition_issue(self, issue_key: str, transition_id: str) -> bool:
         """Transition an issue to a new status. Retries transient failures —
         a lost transition leaves Swarm and Jira permanently out of sync."""
@@ -450,6 +467,52 @@ class JiraSyncService:
             clauses.append(f"issuetype IN ({', '.join(_quote(t) for t in types)})")
         return " AND ".join(clauses) + " ORDER BY created DESC"
 
+    async def discover_workflow(self, project_key: str) -> dict[str, Any]:
+        """Read a project's real workflow and PROPOSE a status map for confirmation.
+
+        The setup flow's core call (v2 phase 2). Returns the project's status
+        vocabulary, a proposed ``swarm status -> jira status`` map, the terminal names,
+        and any Swarm status the project offers no plausible target for.
+
+        WRITES NOTHING and CONFIRMS NOTHING. Done / Resolved / Closed are rarely
+        interchangeable, and a wrong automatic choice transitions someone's ticket to
+        the wrong state while reporting success. The operator confirms; this only shows
+        them what is actually there — which is precisely what nobody could see when a
+        hardcoded "Done" was refused by 11 real tickets.
+        """
+        from swarm.integrations.jira_workflow import (
+            flatten_statuses,
+            propose_status_map,
+            terminal_status_names,
+        )
+
+        raw = await self.client.get_project_statuses(project_key)
+        statuses = flatten_statuses(raw)
+        proposed = propose_status_map(statuses)
+        return {
+            "project": project_key,
+            "statuses": statuses,
+            "proposed_status_map": proposed,
+            "terminal_statuses": terminal_status_names(statuses),
+            # Named explicitly rather than left as an absence: a Swarm status with no
+            # target is exactly the case that failed silently before, and the operator
+            # needs to see it on the confirmation screen rather than discover it when an
+            # export is refused.
+            "unmapped": sorted(
+                s
+                for s in (
+                    "backlog",
+                    "unassigned",
+                    "assigned",
+                    "active",
+                    "blocked",
+                    "done",
+                    "failed",
+                )
+                if s not in proposed
+            ),
+        }
+
     async def import_issues(
         self,
         existing_tasks: dict[str, SwarmTask],
@@ -619,7 +682,11 @@ class JiraSyncService:
         if not self.enabled or not task.jira_key:
             return False
 
-        target_name = self._config.status_map.get(new_status.value, "")
+        # PER-PROJECT map, keyed off the ticket's own project. A single global map is
+        # what made 11 IS tickets fail while WWD succeeded: workflows differ per
+        # project, so "what does done look like here" has no global answer.
+        project_key = task.jira_key.split("-")[0] if "-" in task.jira_key else ""
+        target_name = self._config.status_map_for(project_key).get(new_status.value, "")
         if not target_name:
             _log.debug(
                 "no Jira status mapping for %s",
