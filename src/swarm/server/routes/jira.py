@@ -21,6 +21,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/jira/discover", handle_jira_discover)
     app.router.add_get("/api/jira/plan", handle_jira_plan)
     app.router.add_post("/api/jira/confirm", handle_jira_confirm)
+    app.router.add_get("/api/jira/mappings", handle_jira_mappings)
     app.router.add_post("/api/tasks/{task_id}/jira", handle_jira_create)
     app.router.add_post("/api/tasks/{task_id}/jira/refresh", handle_jira_refresh)
 
@@ -242,3 +243,63 @@ async def handle_jira_confirm(request: web.Request) -> web.Response:
             "status_map": cfg.project_status_maps[project],
         }
     )
+
+
+# The Swarm statuses a project map is expected to cover. An absent entry is not
+# cosmetic: export_status looks up the target name here and refuses the transition when
+# it is missing, so "not mapped" means "this state will never reach Jira".
+_MAPPED_STATUSES: tuple[str, ...] = (
+    "backlog",
+    "unassigned",
+    "assigned",
+    "active",
+    "blocked",
+    "done",
+    "failed",
+)
+
+
+@handle_errors
+async def handle_jira_mappings(request: web.Request) -> web.Response:
+    """Return the saved workflow mappings — the READ side of the setup screen.
+
+    Exists because the mappings panel was server-rendered once at page load, so
+    confirming a workflow updated the config and the operator still saw the old table
+    until they refreshed. Rather than pushing an update after confirm, the panel now
+    re-reads this: a view that can re-derive its state from the authority recovers from
+    any missed update, including ones nobody predicted. Same reasoning as the task
+    board's reconciler.
+
+    Reports one row per CONFIGURED project, not per mapped project. A project listed in
+    ``projects`` with no map is exactly the case the operator cannot currently see — it
+    imports issues and silently exports nothing.
+    """
+    d = get_daemon(request)
+    cfg = getattr(getattr(d, "jira", None), "_config", None)
+    if cfg is None:
+        return web.json_response({"enabled": False, "rows": []})
+
+    maps: dict[str, dict[str, str]] = dict(getattr(cfg, "project_status_maps", {}) or {})
+    confirmed = list(getattr(cfg, "confirmed_projects", []) or [])
+    projects = list(getattr(cfg, "projects", None) or [])
+    legacy = str(getattr(cfg, "project", "") or "").strip()
+    if legacy and legacy not in projects:
+        projects.append(legacy)
+    # A project can hold a saved map without being in `projects` — it was removed from
+    # the sync scope after being mapped. Showing it is honest: the map is still stored
+    # and would apply again the moment the key is re-added.
+    for key in maps:
+        if key not in projects:
+            projects.append(key)
+
+    rows = [
+        {
+            "project": key,
+            "confirmed": key in confirmed,
+            "in_scope": key in (getattr(cfg, "projects", None) or []) or key == legacy,
+            "status_map": maps.get(key, {}),
+            "unmapped": [s for s in _MAPPED_STATUSES if s not in maps.get(key, {})],
+        }
+        for key in projects
+    ]
+    return web.json_response({"enabled": bool(getattr(cfg, "enabled", False)), "rows": rows})

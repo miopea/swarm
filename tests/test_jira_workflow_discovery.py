@@ -422,19 +422,164 @@ def test_the_config_page_no_longer_offers_the_dead_settings():
     assert "cfg-jira-status_map" not in page, "the raw status_map textarea is still present"
 
 
-def test_saved_mappings_are_rendered_from_config_not_from_a_discover_click():
-    """The operator's actual request: seeing what is mapped, after the fact."""
+def _config_page() -> str:
     from pathlib import Path as _P
 
-    page = _P("src/swarm/web/templates/config.html").read_text()
-    # Window bounded to the setup BLOCK, not to the panel's own div id: the {% set %}
-    # that reads stored config sits just above the div, so anchoring on the id alone
-    # excluded the very line under test — the same shape as the scan windows that were
-    # mis-sized in both directions earlier in this work.
-    block = page[page.index('id="jira-setup-block"') : page.index("Step 3: cadence")]
-    assert "project_status_maps" in block, (
-        "the saved-mappings panel does not read stored config, so it can only show "
-        "what the last Discover click returned"
+    return _P("src/swarm/web/templates/config.html").read_text()
+
+
+def _page_code() -> str:
+    """The page with whole-line comments blanked.
+
+    Scans in this repo have repeatedly matched the PROSE EXPLAINING A CHANGE rather
+    than the change — three times now — and the comments added with this fix name
+    both the function and the endpoint under test.
+    """
+    return "\n".join(
+        ln
+        for ln in _config_page().split("\n")
+        if not ln.strip().startswith(("//", "{#", "*", "<!--"))
     )
-    assert "confirmed_projects" in block, "confirmation state is not shown"
-    assert "Re-discover" in page, "a saved project cannot be re-read without retyping its key"
+
+
+def test_the_saved_mappings_panel_has_exactly_one_renderer():
+    """OPERATOR-REPORTED 2026-08-08: "after I save discover the map list doesn't update.
+    I have to refresh the page."
+
+    The panel was a Jinja loop, so it was built ONCE at page load: confirming a workflow
+    saved the config and the operator kept looking at the old table until they
+    refreshed. The fix is not to push an update after confirm — that is the patch shape
+    that kept failing on the task board — but to make the panel RE-READ the authority,
+    so it is right even after an update nobody thought to send.
+
+    Two renderers for one panel is the specific regression: a Jinja version and a JS
+    version drift, and the server-rendered one wins at page load.
+    """
+    setup = _config_page()
+    block = setup[setup.index('id="jira-setup-block"') : setup.index("Step 3: cadence")]
+    assert "{% for proj" not in block, (
+        "the Jinja loop is back alongside the JS renderer; the two will drift and the "
+        "server-rendered table wins at page load"
+    )
+    assert "jira-maps-body" in block, "the panel has no container for the JS renderer"
+
+
+def test_the_panel_reloads_after_a_confirm_and_on_load():
+    code = _page_code()
+    confirm = code[code.index("function jiraConfirm(") : code.index("function jiraPlan(")]
+    assert "jiraLoadSavedMaps()" in confirm, (
+        "confirming does not refresh the saved-mappings table, so the operator still "
+        "has to reload the page — the reported bug"
+    )
+    # Three call sites: confirm, tab-switch, and page load. The load call matters
+    # because the Integrations tab can be the one already open, in which case no switch
+    # event ever fires and the table would sit on "Loading…" forever.
+    assert code.count("jiraLoadSavedMaps()") >= 3, (
+        f"expected calls from confirm, tab-switch and load; found "
+        f"{code.count('jiraLoadSavedMaps()')}"
+    )
+
+
+def test_the_renderer_re_reads_the_api_rather_than_applying_the_confirm_response():
+    """Applying what confirm returned would leave the panel correct only for the updates
+    somebody remembered to send. Re-reading recovers from the ones they did not."""
+    page = _config_page()
+    fn = page[
+        page.index("function jiraLoadSavedMaps(") : page.index("function _jiraRenderSavedMaps(")
+    ]
+    assert "/api/jira/mappings" in fn, "the panel does not re-read the authority"
+    assert ".catch(" in fn, (
+        "a failed mappings read leaves the table on 'Loading…', which reads as "
+        "'nothing configured' — the opposite of 'I could not tell you'"
+    )
+
+
+def test_only_one_switchConfigTab_decorator_exists():
+    """#1292's shape: two `var _orig… = switchConfigTab` wrappers, and whichever
+    assignment runs last silently discards the other's behaviour."""
+    code = _page_code()
+    assert code.count("_origSwitchConfigTab = switchConfigTab") == 1, (
+        "a second tab-switch decorator was added; one of them will be discarded"
+    )
+
+
+def test_unmapped_states_are_shown_rather_than_omitted():
+    """An unmapped Swarm state is not cosmetic: export_status refuses the transition, so
+    that state silently never reaches Jira. Omitting it from the row makes 'not mapped'
+    indistinguishable from 'not shown'."""
+    page = _config_page()
+    fn = page[page.index("function _jiraRenderSavedMaps(") :]
+    fn = fn[: fn.index("\n    function ")]
+    assert "unmapped" in fn, "the renderer never surfaces unmapped states"
+    assert "not mapped" in fn, "there is no visible label for an unmapped state"
+
+
+# --- the mappings endpoint ---------------------------------------------------
+#
+# The scans above prove the PANEL re-reads an endpoint. They cannot prove the endpoint
+# answers correctly, and a panel faithfully rendering wrong data is still wrong.
+
+
+def _mappings(cfg: JiraConfig) -> list[dict]:
+    """Call the handler against a config, without a daemon or a network."""
+    import asyncio
+    import json as _json
+    from types import SimpleNamespace
+
+    from swarm.server.routes.jira import handle_jira_mappings
+
+    class _Req:
+        """get_daemon() reads request.app["daemon"] and nothing else."""
+
+        def __init__(self, daemon):
+            self.app = {"daemon": daemon}
+
+    daemon = SimpleNamespace(jira=SimpleNamespace(_config=cfg))
+    resp = asyncio.run(handle_jira_mappings(_Req(daemon)))
+    return _json.loads(resp.body.decode())["rows"]
+
+
+def test_the_endpoint_reports_a_row_per_configured_project_not_per_mapped_one():
+    """The case the operator could not previously see. A project listed in `projects`
+    with no map imports issues and silently exports NOTHING — before this it simply did
+    not appear in the table, indistinguishable from not being configured."""
+    cfg = JiraConfig(
+        enabled=True,
+        projects=["WWD", "NEW"],
+        project_status_maps={"WWD": {"done": "Done"}},
+        confirmed_projects=["WWD"],
+    )
+    rows = {r["project"]: r for r in _mappings(cfg)}
+    assert set(rows) == {"WWD", "NEW"}, f"an unmapped configured project is invisible: {rows}"
+    assert rows["NEW"]["status_map"] == {}
+    assert rows["NEW"]["confirmed"] is False
+
+
+def test_unmapped_states_are_named_so_the_gap_is_visible():
+    """export_status refuses a transition whose target is absent, so an unmapped state
+    never reaches Jira. Naming them is the difference between a visible gap and silence."""
+    cfg = JiraConfig(
+        enabled=True,
+        projects=["IS"],
+        project_status_maps={"IS": {"done": "Resolved", "active": "In Progress"}},
+    )
+    row = _mappings(cfg)[0]
+    assert "blocked" in row["unmapped"], f"the unmapped states are not reported: {row}"
+    assert "done" not in row["unmapped"], "a mapped state was reported as unmapped"
+
+
+def test_a_map_kept_for_a_project_no_longer_in_scope_is_still_shown():
+    """The map is still stored and applies again the moment the key is re-added, so
+    hiding it is a lie of omission."""
+    cfg = JiraConfig(enabled=True, projects=["WWD"], project_status_maps={"OLD": {"done": "Done"}})
+    rows = {r["project"]: r for r in _mappings(cfg)}
+    assert "OLD" in rows, "a stored map vanished from the view because its key left scope"
+    assert rows["OLD"]["in_scope"] is False
+    assert rows["WWD"]["in_scope"] is True
+
+
+def test_the_legacy_single_project_field_still_produces_a_row():
+    """A v1 install has `project`, not `projects`; it must not read as unconfigured."""
+    cfg = JiraConfig(enabled=True, project="WWD")
+    rows = [r["project"] for r in _mappings(cfg)]
+    assert rows == ["WWD"], f"a legacy install shows no projects at all: {rows}"

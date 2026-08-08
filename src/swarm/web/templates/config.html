@@ -826,54 +826,29 @@
                     <span class="hint">Read a project&rsquo;s real states, then confirm what each Swarm state means</span>
                 </label>
                 <div class="jira-setup-row">
-                    <input class="config-input" id="jira-discover-project" placeholder="Project key, e.g. WWD">
+                    {# A datalist rather than a <select>: the configured keys are offered
+                       so nobody retypes WWD, but a key can still be discovered BEFORE it
+                       is added to step 1, which a closed dropdown would forbid. #}
+                    <input class="config-input" id="jira-discover-project" list="jira-project-options"
+                           placeholder="Project key, e.g. WWD" autocomplete="off">
+                    <datalist id="jira-project-options"></datalist>
                     <button class="btn btn-sm btn-secondary" data-action="jiraDiscover">Discover workflow</button>
                     <button class="btn btn-sm btn-secondary" data-action="jiraPlan">Preview sync plan</button>
                 </div>
                 <div id="jira-discover-result" class="jira-setup-result" style="display:none"></div>
                 <div id="jira-plan-result" class="jira-setup-result" style="display:none"></div>
 
-                {# Rendered from SAVED config, not from the last Discover click: before this
-                   the mapping was visible only in the moments after discovering, and a
-                   reload left no way to see what a project was confirmed as. #}
-                {% set maps = jr.get('project_status_maps') or {} %}
-                {% set confirmed = jr.get('confirmed_projects') or [] %}
+                {# Rendered by JS from /api/jira/mappings, NOT by Jinja.
+
+                   It WAS a Jinja loop, which meant the table was built once at page
+                   load: confirming a workflow saved the config and the operator kept
+                   looking at the stale table until they refreshed the page. Two
+                   renderers for one panel would drift, so there is deliberately only
+                   one, and it RE-READS the authority rather than being handed a delta —
+                   the same reason the task board reconciles instead of reacting. #}
                 <div class="jira-setup-result" id="jira-confirmed-maps">
                     <p class="text-xs text-muted" style="margin:0 0 0.4rem">Saved mappings</p>
-                    {% if not maps %}
-                        <p class="text-xs" style="color:var(--amber);margin:0">
-                            Nothing confirmed yet. Until a project is confirmed the sync
-                            <strong>reports what it would do and writes nothing</strong> &mdash;
-                            deliberately, so enabling Jira is never a bulk write to a shared tracker.
-                        </p>
-                    {% else %}
-                        <table class="jira-saved-table">
-                            <thead>
-                                <tr><th>Project</th><th>State</th><th>Mapping</th><th></th></tr>
-                            </thead>
-                            <tbody>
-                            {% for proj, pmap in maps.items() %}
-                                <tr>
-                                    <td><strong>{{ proj }}</strong></td>
-                                    <td>
-                                        {% if proj in confirmed %}
-                                            <span class="text-leaf">&#10003; confirmed</span>
-                                        {% else %}
-                                            <span style="color:var(--amber)">not confirmed</span>
-                                        {% endif %}
-                                    </td>
-                                    <td class="jira-saved-map">
-                                        {% for k, v in pmap.items() %}<span class="jira-pair">{{ k }} &rarr; <strong>{{ v }}</strong></span>{% endfor %}
-                                    </td>
-                                    <td>
-                                        <button class="btn btn-sm btn-secondary" data-action="jiraDiscover"
-                                                data-project="{{ proj }}">Re-discover</button>
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                            </tbody>
-                        </table>
-                    {% endif %}
+                    <div id="jira-maps-body"><p class="text-xs text-muted" style="margin:0">Loading&hellip;</p></div>
                 </div>
             </div>
 
@@ -2509,6 +2484,102 @@
     // real DOM, and the alternative is a live Atlassian call inside a test.
     window._jiraRenderDiscoveryForTest = _jiraRenderDiscovery;
 
+    // --- saved mappings: ONE renderer, fed by the authority ---------------------
+    //
+    // Called on load and after every confirm. It re-reads /api/jira/mappings rather
+    // than applying what confirm returned, so the panel is correct even after an update
+    // nobody thought to send — which is precisely the failure it was built to fix.
+    function jiraLoadSavedMaps() {
+        var body = document.getElementById('jira-maps-body');
+        if (!body) return;
+        fetch('/api/jira/mappings')
+            .then(function(r) { return r.json(); })
+            .then(function(d) { _jiraRenderSavedMaps(d.rows || []); })
+            .catch(function() {
+                // Say so rather than leaving "Loading…" forever. A panel stuck on a
+                // placeholder reads as "nothing configured", which is the opposite of
+                // "I could not tell you".
+                body.innerHTML = '<p class="text-xs text-poppy" style="margin:0">'
+                    + 'Could not read saved mappings — the table below may be out of date.</p>';
+            });
+    }
+
+    function _jiraRenderSavedMaps(rows) {
+        var body = document.getElementById('jira-maps-body');
+        if (!body) return;
+
+        // Offer the known keys in step 2 so nobody retypes a project they already listed.
+        var opts = document.getElementById('jira-project-options');
+        if (opts) {
+            opts.innerHTML = rows.map(function(r) {
+                return '<option value="' + _jiraEsc(r.project) + '">';
+            }).join('');
+        }
+
+        if (!rows.length) {
+            body.innerHTML = '<p class="text-xs" style="color:var(--amber);margin:0">'
+                + 'No projects configured yet. Add one above, then Discover its workflow.</p>';
+            return;
+        }
+
+        var html = '<table class="jira-saved-table"><thead><tr>'
+            + '<th>Project</th><th>State</th><th>Mapping</th><th></th></tr></thead><tbody>';
+        var anyUnconfirmed = false;
+        rows.forEach(function(r) {
+            var mapped = Object.keys(r.status_map || {});
+            if (!r.confirmed) anyUnconfirmed = true;
+
+            var state;
+            if (!mapped.length) {
+                state = '<span style="color:var(--amber)">not mapped</span>';
+            } else if (r.confirmed) {
+                state = '<span class="text-leaf">&#10003; confirmed</span>';
+            } else {
+                state = '<span style="color:var(--amber)">not confirmed</span>';
+            }
+            if (!r.in_scope) {
+                // A stored map for a project no longer being synced. The map still
+                // applies the moment the key is added back, so hiding it would be a lie
+                // of omission.
+                state += '<br><span class="text-xs text-muted">not in sync scope</span>';
+            }
+
+            var cell;
+            if (!mapped.length) {
+                cell = '<span class="text-xs text-muted">Nothing exports for this project '
+                    + 'until its workflow is mapped.</span>';
+            } else {
+                cell = mapped.map(function(k) {
+                    return '<span class="jira-pair">' + _jiraEsc(k) + ' &rarr; <strong>'
+                        + _jiraEsc(r.status_map[k]) + '</strong></span>';
+                }).join('');
+                // An UNMAPPED state is not cosmetic: export_status refuses the
+                // transition, so that state silently never reaches Jira. Before this it
+                // was invisible — absent from the row and indistinguishable from a state
+                // that simply was not shown.
+                if ((r.unmapped || []).length) {
+                    cell += '<span class="jira-pair" style="color:var(--amber)">'
+                        + _jiraEsc(r.unmapped.join(', ')) + ' &rarr; <em>not mapped</em></span>';
+                }
+            }
+
+            html += '<tr><td><strong>' + _jiraEsc(r.project) + '</strong></td>'
+                + '<td>' + state + '</td>'
+                + '<td class="jira-saved-map">' + cell + '</td>'
+                + '<td><button class="btn btn-sm btn-secondary" data-action="jiraDiscover" '
+                + 'data-project="' + _jiraEsc(r.project) + '">'
+                + (mapped.length ? 'Re-discover' : 'Discover') + '</button></td></tr>';
+        });
+        html += '</tbody></table>';
+
+        if (anyUnconfirmed) {
+            html += '<p class="text-xs" style="color:var(--amber);margin:0.4rem 0 0">'
+                + 'Unconfirmed projects are <strong>reported but never written</strong> — '
+                + 'enabling Jira is deliberately not a bulk write to a shared tracker.</p>';
+        }
+        body.innerHTML = html;
+    }
+
     function jiraConfirm(project) {
         var out = document.getElementById('jira-discover-result');
         // Send exactly what is ON SCREEN, including any edit. Re-deriving here would
@@ -2535,6 +2606,9 @@
                 }
                 out.innerHTML += '<p class="text-leaf text-xs">Confirmed ' + _jiraEsc(project)
                     + ' — the reconcile sweep may now converge this project.</p>';
+                // The whole point of this fix: the saved-mappings table reflects the
+                // confirm without the operator refreshing the page.
+                jiraLoadSavedMaps();
             });
     }
 
@@ -3976,12 +4050,21 @@
         }
     };
 
-    // Load passkeys when security tab is shown
+    // Per-tab loads. ONE decorator, extended — a second `var _orig… = switchConfigTab`
+    // wrapper is how #1292 lost a decorator entirely: whichever assignment ran last
+    // silently discarded the other's behaviour.
     var _origSwitchConfigTab = switchConfigTab;
     switchConfigTab = function(tab) {
         _origSwitchConfigTab(tab);
         if (tab === 'security') loadPasskeys();
+        // Re-read on every visit rather than once: a confirm from another tab, or from
+        // a second browser window, must not leave this table stale.
+        if (tab === 'integrations') jiraLoadSavedMaps();
     };
+
+    // …and once at load, because the Integrations tab can be the one already open (the
+    // tab is remembered) and no switch event would ever fire.
+    jiraLoadSavedMaps();
 })();
 </script>
 {% endblock %}

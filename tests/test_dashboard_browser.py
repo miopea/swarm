@@ -341,17 +341,46 @@ def test_the_jira_setup_block_renders_on_the_config_page(playwright_page):
     # the workflow does not offer got saved in the first place.
     assert page.locator("#cfg-jira-status_map").count() == 0, "the raw status_map textarea remains"
 
-    # The saved-mappings panel is the one part of this section rendered by JINJA from
-    # stored config. Every other test for it reads config.html as TEXT, so a template
-    # syntax error in the {% for %} over project_status_maps would pass all of them and
-    # only surface when someone opened the page. This is the assertion that requires the
-    # template to actually render.
-    assert page.locator("#jira-confirmed-maps").count() == 1, (
-        "the saved-mappings panel did not render — a Jinja error here takes the whole "
-        "config page with it, and the source scans cannot see it"
+    # The saved-mappings panel is rendered by JS from /api/jira/mappings, so every other
+    # test for it reads config.html as TEXT and cannot see a broken fetch or a renderer
+    # that throws. This drives the whole path with REAL data.
+    #
+    # An earlier version only asserted the panel left "Loading…" and was non-empty. That
+    # passed with the endpoint UNREGISTERED, because the failure branch renders "Could
+    # not read saved mappings" — which is also non-empty and also not "Loading". The
+    # error state was satisfying the test. Asserting on the actual rows is what makes
+    # the control bite.
+    from swarm.config.models import JiraConfig
+    from swarm.integrations.jira import JiraSyncService
+
+    # The REAL sync service against a real JiraConfig — no stub at the seam under test.
+    # token_manager is optional and nothing here talks to Atlassian: the endpoint reads
+    # local config only. The browser fixture's daemon has no `jira` attribute at all,
+    # which is precisely why the weaker version of this test could not tell a working
+    # panel from a 404 — both rendered a plausible-looking empty state.
+    daemon.jira = JiraSyncService(
+        JiraConfig(
+            enabled=True,
+            projects=["WWD", "NEWPROJ"],
+            project_status_maps={"WWD": {"done": "Done", "active": "In Progress"}},
+            confirmed_projects=["WWD"],
+        )
     )
-    assert "Saved mappings" in page.locator("#jira-confirmed-maps").inner_text(), (
-        "the panel rendered empty"
+    page.reload(wait_until="domcontentloaded")
+    page.click("[data-action='switchConfigTab'][data-tab='integrations']")
+    page.wait_for_selector("#jira-setup-block", state="visible", timeout=10000)
+    page.wait_for_selector("#jira-maps-body table", timeout=10000)
+
+    text = page.locator("#jira-maps-body").inner_text()
+    assert "Could not read saved mappings" not in text, (
+        "the mappings fetch failed; the panel is showing its error branch"
+    )
+    assert "WWD" in text and "Done" in text, f"the confirmed project's mapping is missing: {text!r}"
+    # A configured project with NO map is the case that was previously invisible: it
+    # imports issues and silently exports nothing.
+    assert "NEWPROJ" in text, f"a configured but unmapped project is not listed: {text!r}"
+    assert "not mapped" in text.lower(), (
+        f"the unmapped project is listed without saying it will never export: {text!r}"
     )
 
 
@@ -362,8 +391,17 @@ def test_clicking_discover_without_a_project_does_not_call_the_api(playwright_pa
     page.goto(f"{base}/config", wait_until="domcontentloaded")
     page.wait_for_selector("#jira-setup-block", state="attached", timeout=15000)
 
+    # Watch only the endpoints that REACH JIRA. /api/jira/mappings is excluded on
+    # purpose: it reads local config and never opens a connection to Atlassian, and the
+    # page fetches it on load to populate the saved-mappings table. Narrowing a filter
+    # is normally how a regression gets hidden, so the exclusion is by explicit name
+    # rather than by loosening the pattern — a new outbound endpoint still trips this.
+    _REACHES_JIRA = ("/api/jira/discover", "/api/jira/plan", "/api/jira/sync")
     calls: list[str] = []
-    page.on("request", lambda r: calls.append(r.url) if "/api/jira/" in r.url else None)
+    page.on(
+        "request",
+        lambda r: calls.append(r.url) if any(e in r.url for e in _REACHES_JIRA) else None,
+    )
 
     # The Jira settings live in the "integrations" TAB, which ships display:none. Without
     # switching to it the button never becomes actionable and page.click waits forever —
