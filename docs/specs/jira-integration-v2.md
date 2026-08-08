@@ -170,6 +170,15 @@ shared tracker as its blast radius.
 
 ### 9. Unreachable transitions — surface once, decide once
 
+**RESOLVED `2026.8.8.13`, and the decision dissolved on measurement.** All 10
+unacknowledged IS tickets (not 11 — the earlier figure was wrong) were already
+`Resolved` in Jira, statusCategory `done`, offering only a `Waiting for support`
+transition that REOPENS. There was nothing to remap and nothing to unlink: Jira was
+right and Swarm had never recorded it. `export_status` now checks whether the ticket is
+already terminal before reporting failure, and records agreement without writing. Name
+equality was the wrong test — this project calls it `Resolved`, the map targets `Done`,
+and both mean the work is over.
+
 When the discovered workflow has no transition to the mapped status, the divergence is
 **reported once to the operator** as needing a decision (remap / mark already-done /
 unlink). It is **not** retried on a loop, and it is **not** recorded as acknowledged —

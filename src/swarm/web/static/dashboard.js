@@ -8142,7 +8142,7 @@
         var html = '<div class="queen-card">';
         html += '<div class="queen-card-header"><span class="conf-badge conf-mid">ADD APPROVAL RULE</span></div>';
         html += '<div class="mb-sm"><strong class="text-honey">Pattern (regex)</strong></div>';
-        html += '<div class="mb-sm"><input type="text" id="add-rule-pattern" class="input-field" value="' + escapeHtml(pattern || '') + '" style="width:100%;font-family:monospace" placeholder="e.g. \\baz\\b"></div>';
+        html += '<div class="mb-sm"><input type="text" id="add-rule-pattern" class="modal-input" value="' + escapeHtml(pattern || '') + '" style="width:100%;font-family:monospace" placeholder="e.g. \\baz\\b"></div>';
         html += '<div class="text-muted text-xs mb-sm">This regex will be matched against future tool prompts. Matching prompts will be auto-approved.</div>';
         html += '</div>';
         html += '<div class="modal-footer">';

@@ -466,3 +466,21 @@ def test_every_queen_class_used_is_defined():
         f"these queen-* classes are used in markup but defined in no stylesheet, so "
         f"every use silently renders unstyled: {missing}"
     )
+
+
+def test_no_class_is_used_that_only_one_place_defines_nowhere():
+    """The two instances found by auditing the sweep's own output, kept as regressions.
+
+    `input-field` was on a real <input> in the approval-rule modal and defined nowhere,
+    while every other input in the same file uses `modal-input`, which IS defined. One
+    use against three is a typo, not a convention.
+
+    NOT included here: `muted` and `local-time`, which the same audit flagged and which
+    are NOT defects. `muted` was a phantom of the scan's tokenizer — every real use is
+    `text-muted`. `local-time` is a JS HOOK for timestamp formatting, always carrying
+    `text-muted text-xs` for its appearance. Recording that distinction because the
+    obvious next move is to "fix" all of them, and two of the three would be wrong.
+    """
+    assert 'class="input-field"' not in _JS, (
+        "input-field is back; it is defined in no stylesheet while modal-input is"
+    )

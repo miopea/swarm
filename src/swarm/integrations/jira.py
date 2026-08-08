@@ -27,6 +27,11 @@ _JIRA_SYNC_MARKER = "\n\n--- Jira sync ---\n"
 
 # Field list requested from the Jira REST search/get APIs. Includes comment
 # and attachment so we can mirror them into the Swarm task on import.
+# Swarm statuses that mean "finished". Only for these does an already-terminal Jira
+# ticket count as agreement — a done-category ticket while Swarm says ACTIVE is a real
+# divergence, not a match.
+_TERMINAL_STATUSES = (TaskStatus.DONE, TaskStatus.FAILED)
+
 _JIRA_ISSUE_FIELDS = "summary,description,status,issuetype,priority,labels,comment,attachment"
 
 # Cap how much of the synced text we append to a task description so we don't
@@ -729,6 +734,30 @@ class JiraSyncService:
         # Find transition matching target status name
         transition_id = _find_transition(transitions, target_name)
         if not transition_id:
+            # BEFORE reporting failure, ASK WHETHER JIRA IS ALREADY THERE.
+            #
+            # Measured on the operator's real board 2026-08-08: all 10 unacknowledged
+            # IS tickets were already `Resolved` (statusCategory=done) and offered only
+            # a `Waiting for support` transition — reopening. The reconciler had been
+            # retrying an impossible transition every sync interval, forever, to put
+            # them into a state they were already in.
+            #
+            # "Jira refused the transition" is not evidence Jira is in the desired
+            # state — but "Jira reports statusCategory=done and Swarm says done" IS.
+            # Name equality was the wrong test: this project calls it Resolved, ours
+            # maps to Done, and the INTENT ("this work is finished") is satisfied by
+            # either. So this records agreement instead of writing, which is the same
+            # comparison-over-push move the task board and this file's reconciler
+            # already make.
+            if new_status in _TERMINAL_STATUSES and await self._already_terminal(task.jira_key):
+                _log.info(
+                    "%s is already terminal in Jira (Swarm: %s); recording agreement "
+                    "without a write — no transition to '%s' exists from there",
+                    task.jira_key,
+                    new_status.value,
+                    target_name,
+                )
+                return True
             _log.warning(
                 "no transition to '%s' found for %s (available: %s)",
                 target_name,
@@ -880,6 +909,28 @@ class JiraSyncService:
             if account:
                 return account
         return ""
+
+    async def _already_terminal(self, jira_key: str) -> bool:
+        """True when the ticket is already in Jira's DONE status category.
+
+        statusCategory is universal across every workflow (new / indeterminate / done),
+        so this needs no per-project discovery — the same property that makes it the
+        right test for excluding finished work from imports.
+
+        Deliberately only consulted when a transition could NOT be found: the happy path
+        costs no extra API call, and a ticket that CAN be transitioned should be, rather
+        than have its current state accepted.
+        """
+        try:
+            issue = await self.client.get_issue(jira_key)
+        except Exception:
+            # Cannot tell -> do not claim agreement. Silence here would convert an
+            # unreachable API into a false "Jira is up to date".
+            _log.debug("could not read %s to check terminal state", jira_key, exc_info=True)
+            return False
+        status = (issue.get("fields") or {}).get("status") or {}
+        category = str((status.get("statusCategory") or {}).get("key", "")).lower()
+        return category == "done"
 
     async def create_jira_issue(self, task: SwarmTask, *, project: str = "") -> str:
         """Create a Jira issue from a Swarm task. Returns the Jira key.
