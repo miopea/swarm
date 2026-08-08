@@ -752,3 +752,34 @@ async def test_a_confirmed_project_still_exports():
     svc = _svc(cfg)
     assert await svc.export_status(SwarmTask(title="t", jira_key="WWD-1"), TaskStatus.DONE) is True
     svc.client.transition_issue.assert_called_once_with("WWD-1", "31")
+
+
+def test_a_project_with_linked_tasks_but_no_config_is_still_listed():
+    """MTR-11806: a real task linked to a real ticket in a project that is in neither
+    `projects` nor `project_status_maps`. It was invisible on the setup screen while the
+    reconciler warned about it every five minutes — the one project the board is already
+    entangled with, and the only one the operator could not see."""
+    import asyncio
+    import json as _json
+    from types import SimpleNamespace
+
+    from swarm.server.routes.jira import handle_jira_mappings
+
+    class _Req:
+        def __init__(self, daemon):
+            self.app = {"daemon": daemon}
+
+    task = SimpleNamespace(jira_key="MTR-11806")
+    daemon = SimpleNamespace(
+        jira=SimpleNamespace(_config=JiraConfig(enabled=True, projects=["WWD"])),
+        task_board=SimpleNamespace(all_tasks=[task]),
+    )
+    rows = {
+        r["project"]: r
+        for r in _json.loads(asyncio.run(handle_jira_mappings(_Req(daemon))).body)["rows"]
+    }
+
+    assert "MTR" in rows, f"a project with linked tasks is invisible on the setup screen: {rows}"
+    assert rows["MTR"]["linked_tasks"] == 1
+    assert rows["MTR"]["in_scope"] is False
+    assert rows["WWD"]["linked_tasks"] == 0

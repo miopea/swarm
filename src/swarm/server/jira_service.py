@@ -244,6 +244,32 @@ class JiraService:
             return True  # pre-v2 config: do not gate an install that has no concept of it
         return bool(cfg.is_confirmed(project_key))
 
+    async def _record_existing_agreement(self, jira: Any, tasks: list[Any]) -> int:
+        """Record tasks whose Jira ticket is ALREADY in the desired state. Returns count.
+
+        A pure read followed by a local write. Split out to keep ``reconcile_exports``
+        under the complexity gate.
+
+        WHY IT RUNS ON UNCONFIRMED PROJECTS. The confirmation gate stops an unattended
+        sweep from BULK WRITING to a shared tracker. A comparison writes nothing, so
+        gating it achieves no safety and costs real noise: MTR-11806 was done in Swarm
+        and already `Done` in Jira, and warned every five minutes forever about a
+        divergence that did not exist.
+        """
+        agreed = 0
+        for task in tasks:
+            try:
+                if await jira.agrees_already(task, task.status):
+                    self._task_board.record_jira_export(task.id, task.status.value)
+                    agreed += 1
+            except Exception:
+                _log.warning(
+                    "jira reconcile: agreement check for %s raised",
+                    task.jira_key,
+                    exc_info=True,
+                )
+        return agreed
+
     async def reconcile_exports(self) -> int:
         """Re-export every task whose status Jira has not acknowledged. Returns count.
 
@@ -318,6 +344,19 @@ class JiraService:
             )
             skipped_ids = {t.id for t in unconfirmed}
             stale = [t for t in stale if t.id not in skipped_ids]
+            # ...but a task Jira ALREADY AGREES WITH is reconciled by comparison, which
+            # is not a write and so is not what the confirmation gate is protecting.
+            # Without this, MTR-11806 — done in Swarm and already `Done` in Jira —
+            # warned every five minutes forever about a divergence that did not exist.
+            # The gate stops the sweep from CHANGING an unconfirmed project's tickets;
+            # it should not stop it from noticing they need no change.
+            agreed = await self._record_existing_agreement(jira, unconfirmed)
+            if agreed:
+                _log.warning(
+                    "jira reconcile: %d of those already match Jira and were recorded "
+                    "without any write",
+                    agreed,
+                )
         skipped = sum(
             1
             for t in self._task_board.all_tasks

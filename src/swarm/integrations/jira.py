@@ -910,6 +910,19 @@ class JiraSyncService:
                 return account
         return ""
 
+    async def agrees_already(self, task: SwarmTask, status: TaskStatus) -> bool:
+        """True when Jira is ALREADY in the state *status* wants — a pure read.
+
+        Public because the reconciler needs it for projects whose workflow is NOT
+        confirmed. That gate exists to stop an unattended sweep from BULK WRITING to a
+        shared tracker; it does not need to stop a COMPARISON. Blocking one behind the
+        other left MTR-11806 — done in Swarm, already `Done` in Jira — warning on every
+        sync interval, permanently, about a divergence that did not exist.
+        """
+        if not task.jira_key or status not in _TERMINAL_STATUSES:
+            return False
+        return await self._already_terminal(task.jira_key)
+
     async def _already_terminal(self, jira_key: str) -> bool:
         """True when the ticket is already in Jira's DONE status category.
 

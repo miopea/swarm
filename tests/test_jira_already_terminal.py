@@ -143,3 +143,105 @@ async def test_a_reachable_transition_is_still_performed(board: TaskBoard):
     assert ok is True
     svc.client.transition_issue.assert_called_once_with("IS-10278", "31")
     svc.client.get_issue.assert_not_called(), "the happy path paid for an extra API call"
+
+
+# --- the same defect in a different hat: unconfirmed projects -----------------
+
+
+@pytest.mark.asyncio
+async def test_agreement_is_recorded_even_for_an_UNCONFIRMED_project(board: TaskBoard):
+    """MTR-11806, found while verifying the IS fix: done in Swarm, already `Done` in
+    Jira, in a project that is neither in the sync scope nor confirmed. The sweep
+    dropped it before the agreement check and warned about it every five minutes,
+    permanently, over a divergence that did not exist.
+
+    The confirmation gate stops an unattended sweep from BULK WRITING to a shared
+    tracker. A comparison writes nothing, so gating it buys no safety and costs real
+    noise. This is the same "retry something impossible forever" defect as the IS
+    tickets, one layer up — which is why it is fixed rather than point-patched.
+    """
+    from swarm.server.jira_service import JiraService
+
+    svc = JiraService.__new__(JiraService)
+    svc._task_board = board
+    task = _task(board, "MTR-11806")
+    board.complete(task.id, "done")
+
+    jira = MagicMock()
+    jira.agrees_already = AsyncMock(return_value=True)
+
+    agreed = await svc._record_existing_agreement(jira, [board.get(task.id)])
+
+    assert agreed == 1
+    after = board.get(task.id)
+    assert after.jira_exported_status == after.status.value, (
+        "the task is still outstanding, so it warns again next interval"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_disagreeing_unconfirmed_task_is_left_alone(board: TaskBoard):
+    """The gate must still hold: an unconfirmed project's ticket that genuinely needs a
+    transition must NOT be silently marked acknowledged."""
+    from swarm.server.jira_service import JiraService
+
+    svc = JiraService.__new__(JiraService)
+    svc._task_board = board
+    task = _task(board, "MTR-2")
+    board.complete(task.id, "done")
+
+    jira = MagicMock()
+    jira.agrees_already = AsyncMock(return_value=False)
+
+    assert await svc._record_existing_agreement(jira, [board.get(task.id)]) == 0
+    assert board.get(task.id).jira_exported_status == ""
+
+
+@pytest.mark.asyncio
+async def test_agrees_already_refuses_non_terminal_and_unlinked(board: TaskBoard):
+    svc = _svc()
+    svc.client.get_issue = AsyncMock(return_value=_issue("done"))
+    linked = _task(board, "IS-1")
+
+    assert await svc.agrees_already(linked, TaskStatus.ACTIVE) is False
+    unlinked = board.add(SwarmTask(title="x", description=""))
+    assert await svc.agrees_already(unlinked, TaskStatus.DONE) is False
+
+
+@pytest.mark.asyncio
+async def test_the_SWEEP_reconciles_an_unconfirmed_project_that_already_agrees(board: TaskBoard):
+    """Drives ``reconcile_exports`` itself, not the helper.
+
+    The first version of the test above called ``_record_existing_agreement`` directly,
+    so deleting its CALL SITE in the sweep left the test green — it proved the helper
+    worked, not that anything reached it. That is the same mistake as asserting a
+    JS function is defined rather than that it is dispatched, and it is the third time
+    in this work. The wiring is what broke, so the wiring is what needs the test.
+    """
+    from swarm.server.jira_service import JiraService
+
+    svc = JiraService.__new__(JiraService)
+    svc._task_board = board
+    svc._drone_log = None
+    svc._broadcast_ws = lambda _p: None
+    svc._track_task = lambda _t: None
+
+    task = _task(board, "MTR-11806")
+    board.complete(task.id, "done")
+
+    jira = MagicMock()
+    jira.enabled = True
+    # Unconfirmed project: config lists neither MTR in projects nor in confirmed.
+    jira._config = JiraConfig(enabled=True, projects=["WWD"], confirmed_projects=["WWD"])
+    jira.agrees_already = AsyncMock(return_value=True)
+    jira.export_status = AsyncMock(return_value=True)
+    svc._get_jira = lambda: jira
+
+    await svc.reconcile_exports()
+
+    after = board.get(task.id)
+    assert after.jira_exported_status == after.status.value, (
+        "the sweep left an already-agreeing unconfirmed task outstanding, so it warns "
+        "again every interval forever"
+    )
+    jira.export_status.assert_not_called(), "it wrote to an unconfirmed project's ticket"

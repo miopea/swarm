@@ -292,6 +292,25 @@ async def handle_jira_mappings(request: web.Request) -> web.Response:
         if key not in projects:
             projects.append(key)
 
+    # ...and a project can have LINKED TASKS while appearing in neither list. MTR-11806
+    # was exactly that: a real task linked to a real ticket in a project that is not in
+    # the sync scope, has no map, and was therefore invisible on this screen while the
+    # reconciler warned about it every five minutes. A project the board is already
+    # entangled with is precisely what the operator needs to see.
+    d_board = getattr(d, "task_board", None)
+    for task in getattr(d_board, "all_tasks", []) or []:
+        key = str(getattr(task, "jira_key", "") or "")
+        prefix = key.split("-")[0] if "-" in key else ""
+        if prefix and prefix not in projects:
+            projects.append(prefix)
+
+    linked: dict[str, int] = {}
+    for task in getattr(d_board, "all_tasks", []) or []:
+        key = str(getattr(task, "jira_key", "") or "")
+        prefix = key.split("-")[0] if "-" in key else ""
+        if prefix:
+            linked[prefix] = linked.get(prefix, 0) + 1
+
     rows = [
         {
             "project": key,
@@ -299,6 +318,7 @@ async def handle_jira_mappings(request: web.Request) -> web.Response:
             "in_scope": key in (getattr(cfg, "projects", None) or []) or key == legacy,
             "status_map": maps.get(key, {}),
             "unmapped": [s for s in _MAPPED_STATUSES if s not in maps.get(key, {})],
+            "linked_tasks": linked.get(key, 0),
         }
         for key in projects
     ]

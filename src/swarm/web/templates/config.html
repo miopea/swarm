@@ -2537,6 +2537,14 @@
             } else {
                 state = '<span style="color:var(--amber)">not confirmed</span>';
             }
+            if (r.linked_tasks) {
+                // A project can have LINKED TASKS while being in neither `projects` nor
+                // the saved maps — MTR-11806 was exactly that, invisible here while the
+                // reconciler warned about it every five minutes. A project the board is
+                // already entangled with is what the operator most needs to see.
+                state += '<br><span class="text-xs text-muted">' + r.linked_tasks
+                      + ' linked task' + (r.linked_tasks === 1 ? '' : 's') + '</span>';
+            }
             if (!r.in_scope) {
                 // A stored map for a project no longer being synced. The map still
                 // applies the moment the key is added back, so hiding it would be a lie
