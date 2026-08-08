@@ -403,40 +403,52 @@ class JiraSyncService:
     # --- Import: Jira → Swarm ---
 
     def build_jql(self) -> str:
-        """Build the JQL query string for importing issues."""
-        jql = self._config.import_filter
-        if not jql and self._config.project:
-            jql = f"project = {self._config.project}"
-        # Apply lookback window when there's no explicit filter
-        lookback = self._config.lookback_days
-        if not jql and not self._config.import_label:
-            if lookback > 0:
-                jql = f"created >= -{lookback}d"
-        # Strip any ORDER BY from the filter so we can safely append
-        # clauses and re-add it at the very end.
-        order_by = ""
-        if jql:
-            m = _ORDER_BY_RE.search(jql)
-            if m:
-                order_by = m.group(0)
-                jql = jql[: m.start()]
-        # Include label in JQL for server-side filtering; client-side
-        # filter remains as a case-insensitive safety net.
-        if self._config.import_label and "labels" not in (jql or "").lower():
-            # Escape so a label containing a backslash or double-quote can't
-            # break out of the JQL string literal.
-            escaped_label = self._config.import_label.replace("\\", "\\\\").replace('"', '\\"')
-            label_clause = f'labels = "{escaped_label}"'
-            jql = f"{label_clause} AND {jql}" if jql else label_clause
-        # Always exclude completed issues unless the user's custom filter
-        # already handles statusCategory.
-        if "statuscategory" not in (jql or "").lower():
-            done_clause = "statusCategory != Done"
-            jql = f"{jql} AND {done_clause}" if jql else done_clause
-        if not order_by:
-            order_by = " ORDER BY created DESC"
-        jql += order_by
-        return jql
+        """JQL for importing this dev's work. Routed by ASSIGNEE, scoped to projects.
+
+        v2 (docs/specs/jira-integration-v2.md). The previous query routed by
+        ``labels = "swarm"``, which does not survive the integration being enabled for
+        every dev: each swarm would import the SAME tickets, create duplicate tasks for
+        one issue, and race to transition it. ``assignee = currentUser()`` gives one
+        answer to "who owns this" in both systems, uses semantics Jira already has, and
+        needs no per-dev labelling ritual anyone can forget.
+
+        ``statusCategory != Done`` is deliberately the terminal test: statusCategory is
+        a universal three-value field (To Do / In Progress / Done) valid in ANY
+        workflow, so "not finished" needs no per-project discovery. Discovery is still
+        required for the EXPORT transition map — that is where a hardcoded "Done" was
+        refused by 11 real tickets whose workflow only offered "Waiting for support".
+
+        Returns "" when no project is configured, which imports NOTHING. Importing
+        everything by default would put a whole Jira site on one dev's board.
+        """
+        projects = self._config.active_projects()
+        if not projects:
+            return ""
+
+        legacy = self._config.import_filter or self._config.import_label
+        if legacy and not getattr(self, "_warned_legacy_filter", False):
+            self._warned_legacy_filter = True
+            # Loud, once. Silently ignoring configuration the operator can still see in
+            # the UI is how a setting becomes a lie about what the system is doing.
+            _log.warning(
+                "jira: import_filter/import_label are LEGACY and no longer route "
+                "imports — routing is by assignee + project (see "
+                "docs/specs/jira-integration-v2.md). Ignoring: %r",
+                legacy,
+            )
+
+        def _quote(value: str) -> str:
+            return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+        clauses = [
+            f"project IN ({', '.join(_quote(p) for p in projects)})",
+            "assignee = currentUser()",
+            "statusCategory != Done",
+        ]
+        types = [t for t in self._config.issue_types if t]
+        if types:
+            clauses.append(f"issuetype IN ({', '.join(_quote(t) for t in types)})")
+        return " AND ".join(clauses) + " ORDER BY created DESC"
 
     async def import_issues(
         self,
@@ -466,20 +478,19 @@ class JiraSyncService:
         if extra_known_keys:
             known_keys |= set(extra_known_keys)
 
-        # Optional case-insensitive label filter (client-side)
-        label_filter = self._config.import_label.lower() if self._config.import_label else ""
+        # NO CLIENT-SIDE LABEL FILTER (v2). It used to drop any issue lacking
+        # import_label as a "safety net" for the label-routed JQL. Under
+        # assignee-routing that net catches everything: the query returns this dev's
+        # assigned work, almost none of which carries the label, so the filter would
+        # discard nearly every ticket and the integration would import nothing while
+        # appearing to run. `swarm` is now reserved PROVENANCE, applied to tickets
+        # Swarm created — it must never decide what comes in.
 
         new_tasks: list[SwarmTask] = []
         for issue in issues:
             key = issue.get("key", "")
             if not key or key in known_keys:
                 continue
-
-            # Apply label filter case-insensitively
-            if label_filter:
-                issue_labels = [lbl.lower() for lbl in issue.get("fields", {}).get("labels", [])]
-                if label_filter not in issue_labels:
-                    continue
 
             fields = issue.get("fields", {})
             task = _jira_issue_to_task(key, fields)

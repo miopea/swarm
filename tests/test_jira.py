@@ -564,33 +564,36 @@ class TestJiraSyncStats:
 
 
 class TestLabelFiltering:
+    """v2: labels do NOT filter imports, in the query or client-side.
+
+    REPLACED DELIBERATELY 2026-08-08. The removed test asserted that import_label
+    appeared in the JQL and that a client-side filter dropped unlabelled issues. Under
+    assignee routing that "safety net" catches everything: the query returns this dev's
+    assigned work, almost none of which carries the label, so the filter would discard
+    nearly every ticket while the integration appeared to run normally. This test
+    failing is what caught that — the JQL change alone would have shipped an
+    integration that imported nothing.
+
+    `swarm` is now reserved PROVENANCE (applied to tickets Swarm created) and must
+    never decide what comes in. See docs/specs/jira-integration-v2.md.
+    """
+
     def _make_service(self, **kwargs: object) -> JiraSyncService:
-        defaults: dict[str, Any] = {
-            "enabled": True,
-            "project": "PROJ",
-        }
+        defaults: dict[str, Any] = {"enabled": True, "projects": ["PROJ"]}
         defaults.update(kwargs)
         cfg = JiraConfig(**defaults)
         return JiraSyncService(cfg, token_manager=_mock_mgr())
 
     @pytest.mark.asyncio
-    async def test_import_label_in_jql_and_client_side(self) -> None:
-        """Label is included in JQL for server-side filtering, plus client-side safety net."""
+    async def test_an_unlabelled_issue_is_still_imported(self) -> None:
+        """The regression this class now exists to prevent."""
         svc = self._make_service(import_label="swarm")
         svc.client.search_issues = AsyncMock(
             return_value=[
                 {
-                    "key": "PROJ-1",
-                    "fields": {
-                        "summary": "Match",
-                        "issuetype": {"name": "Task"},
-                        "labels": ["swarm"],
-                    },
-                },
-                {
                     "key": "PROJ-2",
                     "fields": {
-                        "summary": "No label",
+                        "summary": "Assigned to me, no swarm label",
                         "issuetype": {"name": "Task"},
                         "labels": [],
                     },
@@ -598,72 +601,29 @@ class TestLabelFiltering:
             ]
         )
         tasks = await svc.import_issues({})
-        assert len(tasks) == 1
-        assert tasks[0].jira_key == "PROJ-1"
-        # JQL should contain label filter
-        jql = svc.client.search_issues.call_args[0][0]
-        assert 'labels = "swarm"' in jql
-
-    @pytest.mark.asyncio
-    async def test_import_label_case_insensitive(self) -> None:
-        """Label filter matches regardless of case (Swarm, swarm, SWARM)."""
-        svc = self._make_service(import_label="swarm")
-        svc.client.search_issues = AsyncMock(
-            return_value=[
-                {
-                    "key": "PROJ-1",
-                    "fields": {
-                        "summary": "Uppercase",
-                        "issuetype": {"name": "Task"},
-                        "labels": ["Swarm"],
-                    },
-                },
-                {
-                    "key": "PROJ-2",
-                    "fields": {
-                        "summary": "Mixed",
-                        "issuetype": {"name": "Task"},
-                        "labels": ["SWARM"],
-                    },
-                },
-                {
-                    "key": "PROJ-3",
-                    "fields": {
-                        "summary": "Wrong",
-                        "issuetype": {"name": "Task"},
-                        "labels": ["other"],
-                    },
-                },
-            ]
+        assert [t.jira_key for t in tasks] == ["PROJ-2"], (
+            "an assigned ticket without the legacy label was dropped; with the "
+            "operator's live config that discards nearly every import"
         )
-        tasks = await svc.import_issues({})
-        assert len(tasks) == 2
-        assert {t.jira_key for t in tasks} == {"PROJ-1", "PROJ-2"}
-
-    @pytest.mark.asyncio
-    async def test_import_label_empty_no_filter(self) -> None:
-        """When import_label is empty, all issues are returned."""
-        svc = self._make_service(import_label="")
-        svc.client.search_issues = AsyncMock(
-            return_value=[
-                {
-                    "key": "PROJ-1",
-                    "fields": {
-                        "summary": "Any",
-                        "issuetype": {"name": "Task"},
-                        "labels": [],
-                    },
-                },
-            ]
-        )
-        tasks = await svc.import_issues({})
-        assert len(tasks) == 1
-
-
-# --- build_jql ---
 
 
 class TestBuildJql:
+    """v2 semantics: routing is by ASSIGNEE and PROJECT, not by label or JQL.
+
+    REPLACED DELIBERATELY 2026-08-08 (docs/specs/jira-integration-v2.md). The previous
+    cases pinned the old model — a custom ``import_filter``, an ``import_label`` folded
+    into the query, a ``lookback_days`` window, and ORDER BY preservation. All of that
+    routed by ``labels = "swarm"``, which does not survive Jira being enabled for every
+    dev: each swarm imports the SAME tickets, creates a duplicate task per dev for one
+    issue, and races to transition it.
+
+    Those tests were removed rather than adapted because the behaviour they described
+    is gone, not changed — keeping them passing would have required keeping the
+    duplication. What replaced them lives in tests/test_jira_assignee_routing.py, which
+    covers routing, scope, the legacy-config warning and JQL injection. Retained here
+    are only the properties that still hold.
+    """
+
     def _make_service(self, **kwargs: object) -> JiraSyncService:
         defaults: dict[str, Any] = {"enabled": True}
         defaults.update(kwargs)
@@ -671,78 +631,19 @@ class TestBuildJql:
         return JiraSyncService(cfg, token_manager=_mock_mgr())
 
     def test_excludes_done_status_category(self) -> None:
-        """JQL must always exclude completed/done issues."""
-        svc = self._make_service(project="PROJ")
-        jql = svc.build_jql()
+        """statusCategory is workflow-agnostic, so this still holds on any project."""
+        jql = self._make_service(projects=["PROJ"]).build_jql()
         assert "statusCategory != Done" in jql
 
-    def test_excludes_done_with_label_no_project(self) -> None:
-        """Label-only config (no project) should still exclude done issues."""
-        svc = self._make_service(import_label="swarm")
-        jql = svc.build_jql()
-        assert "statusCategory != Done" in jql
-        assert 'labels = "swarm"' in jql
+    def test_scopes_to_the_configured_project(self) -> None:
+        jql = self._make_service(projects=["PROJ"]).build_jql()
+        assert 'project IN ("PROJ")' in jql
 
-    def test_label_only_no_30d_fallback(self) -> None:
-        """When a label is set, the 30-day fallback should not apply."""
-        svc = self._make_service(import_label="swarm")
-        jql = svc.build_jql()
-        assert "-30d" not in jql
-
-    def test_no_filters_at_all_has_30d_fallback(self) -> None:
-        """With no project, no label, no filter — 30d fallback is a safety net."""
-        svc = self._make_service()
-        jql = svc.build_jql()
-        assert "-30d" in jql
-
-    def test_custom_filter_not_overridden(self) -> None:
-        """Custom import_filter should be preserved; done exclusion still added."""
-        svc = self._make_service(import_filter="assignee = currentUser()")
-        jql = svc.build_jql()
-        assert "assignee = currentUser()" in jql
-        assert "statusCategory != Done" in jql
-
-    def test_custom_filter_with_status_not_doubled(self) -> None:
-        """If custom filter already mentions statusCategory, don't add it again."""
-        svc = self._make_service(import_filter="statusCategory = 'In Progress'")
-        jql = svc.build_jql()
-        assert jql.lower().count("statuscategory") == 1
-
-    def test_lookback_days_custom(self) -> None:
-        """Custom lookback_days should be used in the fallback JQL."""
-        svc = self._make_service(lookback_days=90)
-        jql = svc.build_jql()
-        assert "-90d" in jql
-        assert "-30d" not in jql
-
-    def test_lookback_days_zero_no_date_filter(self) -> None:
-        """lookback_days=0 means no date restriction in the fallback."""
-        svc = self._make_service(lookback_days=0)
-        jql = svc.build_jql()
-        assert "created >=" not in jql
-
-    def test_order_by_in_filter_stays_last(self) -> None:
-        """ORDER BY embedded in import_filter must remain at the end of the JQL."""
-        svc = self._make_service(
-            import_filter="status NOT IN (Closed, Done) ORDER BY created DESC",
-            import_label="swarm",
-        )
-        jql = svc.build_jql()
-        order_idx = jql.lower().index("order by")
-        # Nothing except the ORDER BY clause should follow it
-        after_order = jql[order_idx:]
-        assert "AND" not in after_order
-
-    def test_label_with_quote_is_escaped(self) -> None:
-        """A label containing a double-quote must be escaped so it can't break
-        out of the JQL string literal."""
-        svc = self._make_service(import_label='foo"bar')
-        jql = svc.build_jql()
-        # The embedded quote is backslash-escaped inside the clause.
-        assert r'labels = "foo\"bar"' in jql
-
-
-# --- OAuth ---
+    def test_orders_by_created_last(self) -> None:
+        """ORDER BY must remain the final clause or Jira rejects the query."""
+        jql = self._make_service(projects=["PROJ"]).build_jql()
+        assert jql.rstrip().endswith("ORDER BY created DESC")
+        assert "AND" not in jql[jql.index("ORDER BY") :]
 
 
 class TestOAuth:

@@ -414,7 +414,13 @@ class JiraConfig:
     """
 
     enabled: bool = False
-    project: str = ""  # e.g. "PROJ"
+    project: str = ""  # LEGACY single project; use `projects`. Migrated by active_projects().
+    # v2 (docs/specs/jira-integration-v2.md): sync whole projects, more than one.
+    projects: list[str] = field(default_factory=list)
+    # Only these issue types become tasks. Epics are containers, not work: a worker
+    # cannot finish one and it would sit open for months, which is the shape that
+    # produced stale-blocker problems. Sub-tasks are genuine work.
+    issue_types: list[str] = field(default_factory=lambda: ["Story", "Task", "Bug", "Sub-task"])
     sync_interval_minutes: float = 5.0
     import_filter: str = ""  # JQL filter for importing tickets
     import_label: str = ""  # Jira label to filter imports (e.g. "swarm"); empty = all
@@ -434,6 +440,17 @@ class JiraConfig:
     client_id: str = ""  # Atlassian OAuth app client ID
     client_secret: str = ""  # Atlassian OAuth app client secret (or $ENV_VAR)
     cloud_id: str = ""  # Auto-discovered Jira Cloud site ID
+
+    def active_projects(self) -> list[str]:
+        """Projects to sync, migrating the legacy single ``project`` field.
+
+        Kept as a method rather than mutating config on load: an install that still
+        has only ``project`` set keeps working, and nothing rewrites the operator's
+        config file behind their back.
+        """
+        if self.projects:
+            return [p for p in self.projects if p]
+        return [self.project] if self.project else []
 
     def resolved_client_secret(self) -> str:
         """Resolve client_secret, expanding $ENV_VAR references."""
