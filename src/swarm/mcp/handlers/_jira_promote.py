@@ -142,11 +142,20 @@ def _select_task(d: SwarmDaemon, worker_name: str, args: RequestJiraTicketArgs) 
     return target
 
 
-async def _handle_request_jira_ticket(
+def _handle_request_jira_ticket(
     d: SwarmDaemon,
     worker_name: str,
     args: RequestJiraTicketArgs,
 ) -> list[TextContent]:
+    """SYNCHRONOUS, like every other MCP handler.
+
+    ``handle_tool_call`` calls handlers WITHOUT awaiting them. Declaring this
+    ``async def`` made the dispatcher store a coroutine, which then failed outside its
+    try/except — a bare 500 with no traceback in the log, for a verb whose unit tests
+    all passed. They passed because they called the handler directly and awaited it;
+    nothing exercised the dispatcher. Requesting a promotion has nothing to await
+    anyway: the proposal is stored in memory and the Jira call happens at APPROVAL.
+    """
     reason = str(args.get("reason", "") or "").strip()
     if not reason:
         return _text("'reason' is required — the operator reads it to decide. Nothing requested.")

@@ -378,3 +378,133 @@ def test_the_target_project_is_visible_before_approving():
     fn = js[js.index("window.showJiraPromotion") :]
     fn = fn[: fn.index("window.showQueenAssignment")]
     assert "p.message" in fn, "the target project is not shown on the approval modal"
+
+
+# --- the dispatcher contract --------------------------------------------------
+
+
+def test_every_mcp_handler_is_synchronous():
+    """FOUND IN PRODUCTION 2026-08-08, after 6092 unit tests passed.
+
+    ``handle_tool_call`` calls handlers WITHOUT awaiting them. An ``async def`` handler
+    therefore returns a coroutine that is never run: the dispatcher's try/except does
+    not catch it (the failure happens on the next line, indexing the "content"), so the
+    caller gets a bare 500 with NO traceback in the log.
+
+    The unit tests for the verb all passed because they called the handler directly and
+    awaited it. Nothing went through the dispatcher — the seam where the contract lives.
+    This checks the contract for EVERY handler rather than just the one that broke it,
+    because the next person to add a verb will reach for `async def` too.
+    """
+    import inspect
+
+    from swarm.mcp.tools import _HANDLERS
+
+    coroutines = sorted(name for name, fn in _HANDLERS.items() if inspect.iscoroutinefunction(fn))
+    assert not coroutines, (
+        f"these MCP handlers are async but the dispatcher never awaits them, so each "
+        f"returns an un-run coroutine and 500s: {coroutines}"
+    )
+
+
+def test_the_verb_dispatches_end_to_end_and_returns_content(board: TaskBoard):
+    """Drives the REAL dispatcher, which is what the 500 came through.
+
+    Asserting on the returned content block rather than on the handler's return value:
+    the bug was invisible at the handler boundary and only appeared one layer out.
+    """
+    from swarm.mcp.tools import handle_tool_call
+
+    daemon = MagicMock()
+    daemon.jira = _jira()
+    daemon.task_board = board
+    _task(board, worker="api", title="promote me")
+
+    result = handle_tool_call(daemon, "api", "swarm_request_jira_ticket", {"reason": "because"})
+
+    assert isinstance(result, list), f"the dispatcher did not get a content list: {type(result)}"
+    assert result and result[0].get("type") == "text", f"malformed content block: {result}"
+
+
+def test_an_unknown_caller_is_refused_not_crashed(board: TaskBoard):
+    """Production sends `worker_name='unknown'` when the MCP identity matches no
+    registered worker. That must be an ordinary refusal, not an exception."""
+    from swarm.mcp.tools import handle_tool_call
+
+    daemon = MagicMock()
+    daemon.jira = _jira()
+    daemon.task_board = board
+
+    result = handle_tool_call(daemon, "unknown", "swarm_request_jira_ticket", {"reason": "x"})
+
+    text = result[0]["text"]
+    assert "Error:" not in text, f"an unknown caller produced an exception: {text}"
+    assert "No eligible task" in text, f"unexpected refusal text: {text}"
+
+
+# --- resolving the account without the read:jira-user scope -------------------
+#
+# FOUND AGAINST REAL JIRA 2026-08-08. /rest/api/3/myself returned
+# 401 "Unauthorized; scope does not match" while create and search succeeded on the
+# same token: the OAuth app requested read:jira-work + write:jira-work only. Every
+# promoted ticket was created UNASSIGNED, so it did not route back to the swarm that
+# raised it — the entire point of assignee routing.
+#
+# The scope is now requested, but existing tokens keep the scopes they were granted.
+# Without a fallback, every dev who authorized earlier would silently keep producing
+# unassigned tickets until they happened to reconnect.
+
+
+@pytest.mark.asyncio
+async def test_the_account_is_derived_when_myself_is_forbidden(board: TaskBoard):
+    jira = _jira()
+    jira.client.get_myself = AsyncMock(side_effect=RuntimeError("401 scope does not match"))
+    jira.client.search_issues = AsyncMock(
+        return_value=[{"fields": {"assignee": {"accountId": "acct-fallback"}}}]
+    )
+
+    await jira.create_jira_issue(_task(board))
+
+    assert jira.client.create_issue.await_args.kwargs["assignee_account_id"] == "acct-fallback", (
+        "an install without read:jira-user produced an unassigned ticket"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_fallback_asks_for_the_assignee_field(board: TaskBoard):
+    """THE TRAP. The default search field set does NOT include `assignee`, so a caller
+    that forgets to ask receives issues without it and reads the absence as "no result"
+    — a fallback that silently never works, indistinguishable from having no assigned
+    issues."""
+    jira = _jira()
+    jira.client.get_myself = AsyncMock(side_effect=RuntimeError("401"))
+    jira.client.search_issues = AsyncMock(return_value=[])
+
+    await jira.create_jira_issue(_task(board))
+
+    assert jira.client.search_issues.await_args.kwargs.get("fields") == "assignee", (
+        "the fallback did not request the assignee field, so it can never resolve one"
+    )
+
+
+@pytest.mark.asyncio
+async def test_myself_is_preferred_when_it_works(board: TaskBoard):
+    """The fallback is a safety net, not the primary path: one extra search per
+    promotion on installs that do not need it."""
+    jira = _jira()
+    jira.client.search_issues = AsyncMock(return_value=[])
+
+    await jira.create_jira_issue(_task(board))
+
+    assert jira.client.create_issue.await_args.kwargs["assignee_account_id"] == "acct-123"
+    jira.client.search_issues.assert_not_called()
+
+
+def test_the_oauth_request_asks_for_the_user_scope():
+    """New authorizations must not need the fallback at all."""
+    from swarm.auth.jira import _SCOPE
+
+    assert "read:jira-user" in _SCOPE, (
+        "the scope /myself requires is still not requested, so every new install "
+        "depends on the fallback"
+    )

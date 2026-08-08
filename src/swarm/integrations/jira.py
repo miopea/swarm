@@ -156,17 +156,23 @@ class JiraClient:
             await self._session.close()
             self._session = None
 
-    async def search_issues(self, jql: str, max_results: int = 50) -> list[dict[str, Any]]:
+    async def search_issues(
+        self, jql: str, max_results: int = 50, fields: str = ""
+    ) -> list[dict[str, Any]]:
         """Search Jira issues using JQL.
 
         Returns a list of issue dicts with key, summary, description, etc.
+
+        ``fields`` overrides the import field set. It exists because the default does
+        NOT include ``assignee``: a caller that needs it would silently receive issues
+        without it and read the absence as "no result" rather than as "I did not ask".
         """
         session = await self._ensure_session()
         url = f"{self._base_url}/rest/api/3/search/jql"
         params: dict[str, Any] = {
             "jql": jql,
             "maxResults": max_results,
-            "fields": _JIRA_ISSUE_FIELDS,
+            "fields": fields or _JIRA_ISSUE_FIELDS,
         }
         async with session.get(url, params=params) as resp:
             if resp.status != 200:
@@ -829,14 +835,51 @@ class JiraSyncService:
         """
         try:
             me = await self.client.get_myself()
+            account = str(me.get("accountId", "") or "")
+            if account:
+                return account
         except Exception:
-            _log.warning(
-                "jira: could not resolve the authenticated account; the created ticket "
-                "will be unassigned and will not route back to this swarm",
-                exc_info=True,
+            # Expected on installs authorized before read:jira-user was requested:
+            # /myself returns 401 "scope does not match" while create and search keep
+            # working on the same token. Fall through rather than give up.
+            _log.debug("jira: /myself unavailable; deriving account from assigned work")
+
+        account = await self._account_id_from_assigned_work()
+        if account:
+            return account
+
+        _log.warning(
+            "jira: could not resolve the authenticated account, so the created ticket "
+            "will be UNASSIGNED and will not route back to this swarm. Reconnect Jira "
+            "in Settings > Integrations to grant the read:jira-user permission.",
+        )
+        return ""
+
+    async def _account_id_from_assigned_work(self) -> str:
+        """The accountId, derived WITHOUT the read:jira-user scope.
+
+        `assignee = currentUser()` is already how imports are routed, so this needs only
+        read:jira-work — which every existing install already granted. One issue the
+        current user is assigned carries their own accountId in its assignee field.
+
+        This exists so adding a scope does not silently break every dev who authorized
+        before it: their tokens keep the old scopes until they reconnect, and until then
+        this keeps promoted tickets routing home. Returns "" when they have no assigned
+        issue to read it from, which is the one case that genuinely needs a reconnect.
+        """
+        try:
+            issues = await self.client.search_issues(
+                "assignee = currentUser()", max_results=1, fields="assignee"
             )
+        except Exception:
+            _log.debug("jira: could not derive account from assigned work", exc_info=True)
             return ""
-        return str(me.get("accountId", "") or "")
+        for issue in issues or []:
+            assignee = (issue.get("fields") or {}).get("assignee") or {}
+            account = str(assignee.get("accountId", "") or "")
+            if account:
+                return account
+        return ""
 
     async def create_jira_issue(self, task: SwarmTask, *, project: str = "") -> str:
         """Create a Jira issue from a Swarm task. Returns the Jira key.

@@ -17,7 +17,16 @@ _TOKEN_PATH = Path.home() / ".swarm" / "jira_tokens.json"
 _AUTH_URL = "https://auth.atlassian.com/authorize"
 _TOKEN_URL = "https://auth.atlassian.com/oauth/token"
 _RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
-_SCOPE = "read:jira-work write:jira-work offline_access"
+# read:jira-user is REQUIRED for /rest/api/3/myself, which resolves the accountId a
+# created ticket is assigned to. Without it that call returns 401 "scope does not match"
+# while create/search keep working — so promoted tickets were created UNASSIGNED and did
+# not route back to the swarm that raised them. Found against real Jira 2026-08-08.
+#
+# Existing tokens keep the scopes they were granted, so adding this here only fixes NEW
+# authorizations. `_my_account_id` carries a fallback for installs that have not
+# reconnected, deliberately — silently degrading every existing dev until they happen to
+# re-consent is not an upgrade path.
+_SCOPE = "read:jira-work write:jira-work read:jira-user offline_access"
 _log = logging.getLogger("swarm.auth.jira")
 
 
