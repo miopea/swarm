@@ -45,8 +45,40 @@ async def _synthesize_then_dispatch(
     return await dispatch
 
 
+async def _dispatch_then_synthesize(
+    d: SwarmDaemon, task_id: str, actor: str, dispatch: Awaitable[Any]
+) -> Any:
+    """Assign FIRST, synthesize after — for the case where nothing is dispatched.
+
+    THE RACE THIS CLOSES, hit 2026-08-08. ``swarm_create_task`` returns as soon as the
+    row exists, and the assignment rides a background coroutine that waits on Outcomes
+    synthesis — an LLM call. So a caller that created a task with ``target_worker`` and
+    then immediately acted on it saw the task as UNASSIGNED for however long synthesis
+    took, and got told "not assigned to you" about a task it had just routed to itself.
+
+    The synthesize-then-dispatch order is deliberate and stays that way when there IS a
+    dispatch: the criteria have to be in the message the target worker receives. With
+    ``start=False`` no message is ever sent, so nothing needs the criteria first, and
+    ownership lands on the next loop tick instead of behind the model.
+    """
+    result = await dispatch
+    task = d.task_board.get(task_id)
+    if task is not None:
+        try:
+            await d.tasks.apply_synthesized_criteria(task, actor=actor)
+        except Exception:
+            _log.warning("criteria synthesis failed for task %s", task_id, exc_info=True)
+    return result
+
+
 def _schedule_synth_dispatch(
-    d: SwarmDaemon, task_id: str, target: str, worker_name: str, dispatch: Awaitable[Any]
+    d: SwarmDaemon,
+    task_id: str,
+    target: str,
+    worker_name: str,
+    dispatch: Awaitable[Any],
+    *,
+    dispatching: bool = True,
 ) -> None:
     """Schedule synthesis+dispatch on the running loop, or fall back to a
     synchronous board-level assign when there's no loop (test/CLI context).
@@ -65,7 +97,8 @@ def _schedule_synth_dispatch(
             pass
         d.task_board.assign(task_id, target)
         return
-    _task = loop.create_task(_synthesize_then_dispatch(d, task_id, worker_name, dispatch))
+    runner = _synthesize_then_dispatch if dispatching else _dispatch_then_synthesize
+    _task = loop.create_task(runner(d, task_id, worker_name, dispatch))
     _task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
 
@@ -302,7 +335,9 @@ def _handle_create_task(
             dispatch = d.assign_and_start_task(task.id, target, actor=worker_name)
         else:
             dispatch = d.assign_task(task.id, target, actor=worker_name)
-        _schedule_synth_dispatch(d, task.id, target, worker_name, dispatch)
+        _schedule_synth_dispatch(
+            d, task.id, target, worker_name, dispatch, dispatching=should_dispatch
+        )
     suffix = " [HOLD — parked, not auto-dispatched]" if (tags and not target) else ""
     return [{"type": "text", "text": f"Task created: #{task.number} {title}{suffix}"}]
 

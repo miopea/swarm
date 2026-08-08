@@ -3548,10 +3548,15 @@
     };
 
     window.showJiraPromotion = function(p) {
-        // States the CONSEQUENCE, not just the request. "Approve" on a shared tracker
-        // is not undoable in the way approving an assignment is: the ticket exists, the
-        // team sees it, and someone triages it. The operator should not have to infer
-        // that from a proposal card.
+        // States the CONSEQUENCE, not just the request. "Approve" on a shared tracker is
+        // not undoable the way approving an assignment is: the ticket exists, the team
+        // sees it, someone triages it. The operator should not have to infer that.
+        //
+        // Uses the EXISTING queen-card vocabulary — queen-text-block for sections,
+        // modal-footer for the button row. The first version invented queen-section /
+        // queen-section-label / queen-section-body / queen-actions, none of which are
+        // defined anywhere, so every section rendered as an unstyled run of lines while
+        // the escalation and completion cards beside it looked right.
         var modal = document.getElementById('queen-modal');
         var result = document.getElementById('queen-result');
         var project = p.message || '(no project)';
@@ -3564,20 +3569,21 @@
              + '</strong> is asking to raise a Jira ticket for <strong>'
              + escapeHtml(p.task_title || '') + '</strong>.</div>';
         if (p.reasoning) {
-            html += '<div class="queen-section"><div class="queen-section-label">Why they asked</div>'
-                 + '<div class="queen-section-body">' + escapeHtml(p.reasoning) + '</div></div>';
+            html += '<div class="queen-text-block mb-sm"><strong class="text-lavender text-base">'
+                 + 'Why they asked</strong><br><span class="ws-pre-wrap">'
+                 + escapeHtml(p.reasoning) + '</span></div>';
         }
-        html += '<div class="queen-section"><div class="queen-section-label">If you approve</div>'
-             + '<div class="queen-section-body">A new ticket is created in <strong>'
+        html += '<div class="queen-text-block mb-sm"><strong class="text-honey text-base">'
+             + 'If you approve</strong><br><span>A new ticket is created in <strong>'
              + escapeHtml(project) + '</strong>, assigned to you, and labelled '
              + '<code>swarm</code> so it is traceable to an agent. Your whole team can '
-             + 'see it. Nothing is created unless you approve.</div></div>';
+             + 'see it. Nothing is created unless you approve.</span></div>';
         html += '</div>';
-        result.innerHTML = html
-            + '<div class="queen-actions">'
-            + '<button class="btn btn-approve" data-approve-proposal="' + escapeHtml(p.id) + '">Create the ticket</button>'
-            + '<button class="btn btn-secondary" data-reject-proposal="' + escapeHtml(p.id) + '">Dismiss</button>'
-            + '</div>';
+        html += '<div class="modal-footer">'
+             + '<button class="btn btn-approve" data-approve-proposal="' + escapeHtml(p.id) + '">Create the ticket</button>'
+             + '<button class="btn btn-reject-ghost" data-reject-proposal="' + escapeHtml(p.id) + '">Dismiss</button>'
+             + '</div>';
+        result.innerHTML = html;
         modal.style.display = 'flex';
     };
 

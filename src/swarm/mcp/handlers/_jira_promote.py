@@ -124,6 +124,17 @@ def _select_task(d: SwarmDaemon, worker_name: str, args: RequestJiraTicketArgs) 
 
     target = next((t for t in owned if t.number == want), None)
     if target is None:
+        # Distinguish "never yours" from "not yours YET". A task created with
+        # target_worker is assigned on a background coroutine, so for a moment after
+        # swarm_create_task returns it exists with no owner. Reporting that as a flat
+        # "not assigned to you" describes a permanent condition for a sub-second window
+        # and sends the caller looking for a routing bug that is not there.
+        exists = next((t for t in board.all_tasks() if t.number == want), None)
+        if exists is not None and not exists.assigned_worker:
+            return (
+                f"Task #{want} exists but has no owner yet — if you just created it, "
+                f"the assignment is still landing. Retry in a moment. Nothing requested."
+            )
         return (
             f"Task #{want} is not assigned to you (or doesn't exist) — you can only "
             f"request promotion for your own task. Nothing requested."

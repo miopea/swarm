@@ -420,3 +420,49 @@ def test_type_cross_has_a_background_not_merely_a_rule():
         f".type-cross defines no background, so canvas-coloured text still sits on a "
         f"transparent row: {m.group(1).strip()!r}"
     )
+
+
+# --- the same defect class, swept rather than pinned --------------------------
+
+
+def _queen_classes_used() -> set[str]:
+    """Every ``queen-*`` class appearing in a class attribute, JS or template."""
+    used: set[str] = set()
+    for src in (_JS, _DASH, _BASE, _CONFIG):
+        for attr in re.findall(r'class=\\?"([a-zA-Z0-9 _{}%|.-]+)\\?"', src):
+            used.update(w for w in attr.split() if w.startswith("queen-"))
+    return used
+
+
+def _defined_classes() -> set[str]:
+    return set(re.findall(r"\.([a-zA-Z][\w-]*)\s*[,{:>\s]", _BASE))
+
+
+def test_the_queen_class_scan_finds_both_sides():
+    """Positive control — an empty set on either side sweeps over nothing."""
+    used, defined = _queen_classes_used(), _defined_classes()
+    assert len(used) > 5, f"only {len(used)} queen-* classes found in markup; scan is broken"
+    assert "queen-card" in defined, "the scan is not reading base.html's stylesheet"
+
+
+def test_every_queen_class_used_is_defined():
+    """SWEPT, not pinned. 2026-08-08: the Jira promotion modal was written with
+    ``queen-section`` / ``queen-section-label`` / ``queen-section-body`` /
+    ``queen-actions`` — four classes that exist nowhere. Every section rendered as an
+    unstyled run of lines while the escalation and completion cards beside it looked
+    right, and nothing failed.
+
+    This file already existed for that defect class but only pinned ``.text-center``,
+    the ONE instance #1291 happened to hit. A point test for one class cannot catch the
+    next one, which is the whole reason the class keeps recurring — so this sweeps the
+    ``queen-*`` namespace instead.
+
+    Scoped to ``queen-*`` deliberately: it is a pure styling namespace. A repo-wide
+    sweep flags JS HOOK classes (``view-proposal-btn``, ``msg-select-cb``) that exist to
+    be queried, not styled, and a test that cries wolf gets suppressed rather than read.
+    """
+    missing = sorted(_queen_classes_used() - _defined_classes())
+    assert not missing, (
+        f"these queen-* classes are used in markup but defined in no stylesheet, so "
+        f"every use silently renders unstyled: {missing}"
+    )
