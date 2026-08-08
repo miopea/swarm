@@ -910,6 +910,73 @@ class JiraSyncService:
                 return account
         return ""
 
+    async def find_reassigned(self, tasks: list[SwarmTask]) -> list[tuple[SwarmTask, str]]:
+        """Tasks whose Jira ticket is NO LONGER assigned to this dev.
+
+        Returns ``(task, new_owner_display_name)``; the new owner is "" when the ticket
+        is now unassigned in Jira.
+
+        WHY THIS IS A POSITIVE CHECK AND NOT "IT FELL OUT OF THE IMPORT QUERY".
+        The import runs ``assignee = currentUser() AND statusCategory != Done``. A ticket
+        disappears from those results for at least four different reasons: it was
+        reassigned, it was closed, it was moved or deleted or permissions changed, or the
+        call simply failed and returned fewer rows. Treating absence as reassignment
+        would unassign EVERY linked task the first time Jira returned an error — an empty
+        result is not a finding. So this asks Jira what the assignee actually is, and
+        acts only on a definite mismatch.
+
+        A key missing from the response is reported as NOTHING rather than as
+        "unassigned": we could not see it, which is different from seeing that it changed.
+        """
+        import re as _re
+
+        my_account = await self._my_account_id()
+        if not my_account:
+            # Cannot establish who "I" am -> cannot judge whose ticket this is. Every
+            # task would look foreign and the whole board would be released. Refusing to
+            # act is the only safe answer.
+            _log.warning(
+                "jira: cannot resolve this account, so ticket ownership cannot be "
+                "checked; no tasks were released"
+            )
+            return []
+
+        # Keys are validated, not escaped: anything that is not PROJ-123 never reaches
+        # the query, so a malformed jira_key cannot alter its meaning.
+        keys = [
+            t.jira_key
+            for t in tasks
+            if t.jira_key and _re.fullmatch(r"[A-Z][A-Z0-9_]*-\d+", t.jira_key)
+        ]
+        if not keys:
+            return []
+
+        try:
+            issues = await self.client.search_issues(
+                f"key IN ({', '.join(keys)})", max_results=len(keys), fields="assignee"
+            )
+        except Exception:
+            _log.warning("jira: ownership check failed; no tasks were released", exc_info=True)
+            return []
+
+        seen: dict[str, dict[str, Any]] = {}
+        for issue in issues or []:
+            key = str(issue.get("key", "") or "")
+            if key:
+                seen[key] = (issue.get("fields") or {}).get("assignee") or {}
+
+        moved: list[tuple[SwarmTask, str]] = []
+        for task in tasks:
+            if task.jira_key not in seen:
+                # Not visible in the response. Could be permissions, a move, a delete —
+                # all of which are "I do not know", not "it is not yours".
+                continue
+            assignee = seen[task.jira_key]
+            if str(assignee.get("accountId", "") or "") == my_account:
+                continue
+            moved.append((task, str(assignee.get("displayName", "") or "")))
+        return moved
+
     async def agrees_already(self, task: SwarmTask, status: TaskStatus) -> bool:
         """True when Jira is ALREADY in the state *status* wants — a pure read.
 

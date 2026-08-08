@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from swarm.logging import get_logger
+from swarm.tasks.task import HOLD_TAG, TaskStatus
 
 if TYPE_CHECKING:
     from swarm.drones.log import SystemLog
@@ -244,6 +245,85 @@ class JiraService:
             return True  # pre-v2 config: do not gate an install that has no concept of it
         return bool(cfg.is_confirmed(project_key))
 
+    async def reconcile_ownership(self) -> int:
+        """Release tasks whose Jira ticket was reassigned away from this dev.
+
+        THE FAILURE THIS PREVENTS. Routing is by ``assignee = currentUser()`` — that is
+        the whole reason Jira can be enabled for every dev without them colliding. But
+        nothing re-checked it after import, so handing a ticket over in Jira left BOTH
+        swarms holding the task: the new owner's imports it, the old owner's keeps
+        working it, and they race to transition the same ticket. That is precisely the
+        duplication assignee routing exists to prevent, arriving through the back door.
+
+        Only OPEN tasks are checked. A finished task's ownership is history, and
+        re-litigating it would churn the board for no one's benefit.
+
+        The task is RELEASED and put on HOLD rather than deleted or completed: the work
+        is not done and the link is still true, so it stays visible and traceable while
+        no longer being anyone's active work. HOLD matters — a bare release returns it to
+        UNASSIGNED, where the auto-assign drone would hand it to another worker in THIS
+        swarm, which is the same wrong answer with a different name.
+        """
+        jira = self._get_jira()
+        if not jira or not jira.enabled:
+            return 0
+        open_linked = [
+            t
+            for t in self._task_board.all_tasks
+            if t.jira_key and t.status not in (TaskStatus.DONE, TaskStatus.FAILED)
+        ]
+        if not open_linked:
+            return 0
+
+        moved = await jira.find_reassigned(open_linked)
+        released = 0
+        for task, new_owner in moved:
+            owner = task.assigned_worker or "nobody"
+            # Captured BEFORE the release. Reading it afterwards made every message say
+            # "It was unassigned" — the release had already made that true, so the line
+            # reported its own effect instead of what the operator needed to know.
+            was_status = task.status.value
+            if not self._task_board.release(task.id):
+                continue
+            # HOLD via update(tags=...) — the board has no add-tag verb, and replacing
+            # the list wholesale would drop the task's existing tags.
+            current = list(getattr(self._task_board.get(task.id), "tags", []) or [])
+            if HOLD_TAG not in current:
+                self._task_board.update(task.id, tags=[*current, HOLD_TAG])
+            released += 1
+            _log.warning(
+                "jira: %s is no longer assigned to you in Jira (now: %s) — #%s released "
+                "from %s and put on hold. It was %s. Nothing was written to Jira.",
+                task.jira_key,
+                new_owner or "unassigned",
+                task.number,
+                owner,
+                was_status,
+            )
+            self._audit_reassignment(task, owner, new_owner)
+        if released:
+            self._broadcast_ws({"type": "task_update"})
+        return released
+
+    def _audit_reassignment(self, task: Any, owner: str, new_owner: str) -> None:
+        """Record a release in the drone log and task history — best effort.
+
+        Separate from the mutation so an audit failure cannot undo a correct release,
+        and so ``reconcile_ownership`` stays under the complexity gate.
+        """
+        from swarm.drones.log import LogCategory, SystemAction
+
+        detail = (
+            f"{task.jira_key} reassigned in Jira to {new_owner or 'nobody'} — released from {owner}"
+        )
+        try:
+            if self._drone_log is not None:
+                self._drone_log.add(
+                    SystemAction.OPERATOR, "system", detail, category=LogCategory.TASK
+                )
+        except Exception:
+            _log.debug("drone log write failed for %s", task.jira_key, exc_info=True)
+
     async def _record_existing_agreement(self, jira: Any, tasks: list[Any]) -> int:
         """Record tasks whose Jira ticket is ALREADY in the desired state. Returns count.
 
@@ -404,5 +484,8 @@ class JiraService:
                 # Import alone leaves the OUTBOUND direction unchecked, which is where
                 # the two systems actually drifted.
                 await self.reconcile_exports()
+                # ...and neither direction notices a ticket changing HANDS, which leaves
+                # two devs' swarms holding one ticket.
+                await self.reconcile_ownership()
         except asyncio.CancelledError:
             return

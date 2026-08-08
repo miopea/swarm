@@ -51,6 +51,17 @@ real workflow rather than assume `Done`.
 
 ### 1. Routing — the Jira assignee decides
 
+**Ownership is now RE-CHECKED, not just read at import (`2026.8.8.15`).** The original
+build read the assignee once and never looked again, so a handover in Jira left BOTH
+swarms holding the task — the exact duplication this decision exists to prevent,
+arriving through the back door. `reconcile_ownership` runs each sync cycle and releases
+tasks whose ticket is no longer assigned to this dev.
+
+Detection is a POSITIVE check, never inference from absence: a ticket drops out of
+`assignee = currentUser() AND statusCategory != Done` when it is reassigned, closed,
+moved, deleted, permission-changed, *or* when the call simply fails — so treating
+absence as reassignment would release every linked task the first time Jira errored.
+
 A swarm imports only tickets **assigned to its owner**. No label, no JQL, no per-dev
 label convention.
 
