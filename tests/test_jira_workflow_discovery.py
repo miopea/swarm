@@ -204,3 +204,94 @@ async def test_export_resolves_the_map_from_the_tickets_own_project():
     assert "task.jira_key.split" in code, (
         "the project is not derived from the ticket, so the per-project map cannot be selected"
     )
+
+
+# --- the operator's REAL IS workflow, which broke the first heuristic ---------
+
+# Captured from a live discover against his instance, 2026-08-08. Kept verbatim
+# because a synthetic workflow would not have contained "Reopened" next to "ToDo",
+# and that pairing is what exposed the bug.
+_IS_REAL = [
+    _status("Canceled", "done"),
+    _status("Done", "done"),
+    _status("In Progress", "indeterminate"),
+    _status("Reopened", "new"),
+    _status("Resolved", "done"),
+    _status("ToDo", "new"),
+    _status("Waiting for customer", "indeterminate"),
+    _status("Waiting for support", "indeterminate"),
+    _status("Waiting On", "indeterminate"),
+    _status("Work in progress", "indeterminate"),
+]
+
+
+def test_the_open_hint_does_not_match_reopened():
+    """THE BUG THE OPERATOR'S SCREENSHOT EXPOSED. A plain substring search sent
+    backlog, assigned AND unassigned to "Reopened", because the hint "open" appears
+    inside "Re-open-ed". Whole-word matching rejects that."""
+    proposal = propose_status_map(_IS_REAL)
+    for swarm_status in ("backlog", "assigned", "unassigned"):
+        assert proposal[swarm_status] != "Reopened", (
+            f"{swarm_status} still maps to Reopened — 'open' is matching inside a "
+            f"longer word, which puts new work into a reopened state"
+        )
+
+
+def test_todo_matches_the_to_do_hint_despite_the_missing_space():
+    """The other half: the hint "to do" failed against a status literally named
+    "ToDo" purely because of spacing, so the mapping fell through to a worse
+    candidate."""
+    proposal = propose_status_map(_IS_REAL)
+    assert proposal["backlog"] == "ToDo", f"backlog did not find ToDo: {proposal}"
+    assert proposal["unassigned"] == "ToDo"
+    assert proposal["assigned"] == "ToDo"
+
+
+def test_the_rest_of_the_real_workflow_maps_sensibly():
+    proposal = propose_status_map(_IS_REAL)
+    assert proposal["active"] == "In Progress"
+    assert proposal["done"] == "Done"
+    assert proposal["failed"] == "Canceled"
+    # Three "Waiting" statuses are genuinely ambiguous; a whole-word hint match picks
+    # one and the dropdown lets the operator correct it. What matters is that it
+    # chooses a Waiting status rather than something unrelated.
+    assert proposal["blocked"].lower().startswith("waiting")
+
+
+def test_a_whole_word_hint_still_matches_inside_a_phrase():
+    """Rejecting substrings must not break multi-word names: "waiting" has to keep
+    matching "Waiting for customer", or the fix trades one wrong mapping for another."""
+    assert propose_status_map(_IS_REAL)["blocked"] in (
+        "Waiting for customer",
+        "Waiting for support",
+        "Waiting On",
+    )
+
+
+def test_whole_word_matching_is_load_bearing_on_its_own():
+    """ISOLATES the whole-word rule from the normalisation rule.
+
+    On the operator's real IS workflow both fixes point the same way — normalisation
+    finds "ToDo" before whole-word matching is ever consulted — so a control that
+    restored substring matching left every test green. That made the earlier cases
+    evidence for normalisation only.
+
+    Here there is NO exact match to short-circuit on: the project has "Reopened" and no
+    To Do status at all. Substring matching sends new work to "Reopened" because "open"
+    sits inside it; whole-word matching declines and leaves it unmapped, which the
+    operator can then fix from the dropdown.
+    """
+    workflow = [
+        _status("Reopened", "new"),
+        _status("Escalated", "new"),
+        _status("In Progress", "indeterminate"),
+        _status("Done", "done"),
+    ]
+    proposal = propose_status_map(workflow)
+    assert proposal.get("backlog") != "Reopened", (
+        "'open' matched inside 'Reopened' — new work would be filed as reopened"
+    )
+    assert "backlog" not in proposal, (
+        f"an ambiguous To Do category should stay unmapped rather than guess: {proposal}"
+    )
+    assert proposal["active"] == "In Progress", "the unambiguous mappings must still work"

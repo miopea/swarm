@@ -2393,37 +2393,85 @@
             });
     }
 
+    // Human labels for the Swarm side. "unassigned -> Reopened" tells an operator
+    // nothing about what they are agreeing to; "waiting for an owner" does.
+    var _JIRA_STATUS_LABELS = {
+        backlog: 'Parked (backlog)',
+        unassigned: 'Waiting for an owner',
+        assigned: 'Queued for a worker',
+        active: 'A worker is working on it',
+        blocked: 'Blocked',
+        done: 'Completed',
+        failed: 'Failed or abandoned',
+    };
+
+    var _JIRA_CATEGORY_LABELS = {
+        'new': 'To Do',
+        indeterminate: 'In Progress',
+        done: 'Done',
+    };
+
+    function _jiraStatusOptions(statuses, selected) {
+        // A DROPDOWN of what the project actually has, not a free-text box. Typing a
+        // status name that does not exist produces an export Jira refuses, which is
+        // the failure this whole phase exists to prevent — and the operator would have
+        // no way to know which names are legal without reading the row above.
+        // Grouped by category so the choice is meaningful: picking a To Do status to
+        // mean "completed" is visibly wrong rather than merely a typo.
+        var html = '<option value="">\u2014 not mapped \u2014</option>';
+        var groups = { 'new': [], indeterminate: [], done: [], '': [] };
+        (statuses || []).forEach(function(st) {
+            (groups[st.category] !== undefined ? groups[st.category] : groups['']).push(st.name);
+        });
+        ['new', 'indeterminate', 'done', ''].forEach(function(cat) {
+            if (!groups[cat].length) return;
+            var label = _JIRA_CATEGORY_LABELS[cat] || 'Other';
+            html += '<optgroup label="' + _jiraEsc(label) + '">';
+            groups[cat].forEach(function(name) {
+                html += '<option value="' + _jiraEsc(name) + '"'
+                     + (name === selected ? ' selected' : '') + '>' + _jiraEsc(name) + '</option>';
+            });
+            html += '</optgroup>';
+        });
+        return html;
+    }
+
     function _jiraRenderDiscovery(d) {
         var map = d.proposed_status_map || {};
+        var statuses = d.statuses || [];
         var html = '<div class="jira-discovery">';
-        html += '<p class="text-xs text-muted">Statuses found in <strong>' + _jiraEsc(d.project)
-             + '</strong>: ' + (d.statuses || []).map(function(s) {
-                   return '<code>' + _jiraEsc(s.name) + '</code>';
-               }).join(', ') + '</p>';
+        html += '<p class="text-xs text-muted">Found <strong>' + statuses.length
+             + '</strong> statuses in <strong>' + _jiraEsc(d.project)
+             + '</strong>. Pick the Jira status each Swarm state should map to \u2014 '
+             + 'a blank mapping means Swarm will refuse that export rather than guess.</p>';
 
         html += '<table class="jira-map-table"><tbody>';
-        var keys = Object.keys(map).sort();
-        for (var i = 0; i < keys.length; i++) {
-            var k = keys[i];
-            html += '<tr><td class="text-muted">' + _jiraEsc(k) + '</td><td>&rarr;</td>'
-                 + '<td><input class="config-input jira-map-input" data-swarm-status="' + _jiraEsc(k)
-                 + '" value="' + _jiraEsc(map[k]) + '"></td></tr>';
+        // Every Swarm status gets a row, including ones discovery could not map:
+        // leaving them out would hide exactly the case that failed silently before.
+        var order = ['backlog', 'unassigned', 'assigned', 'active', 'blocked', 'done', 'failed'];
+        for (var i = 0; i < order.length; i++) {
+            var k = order[i];
+            var chosen = map[k] || '';
+            html += '<tr><td class="jira-map-label">' + _jiraEsc(_JIRA_STATUS_LABELS[k] || k)
+                 + '<span class="text-xs text-muted"> (' + _jiraEsc(k) + ')</span></td>'
+                 + '<td>&rarr;</td><td><select class="config-input jira-map-input" '
+                 + 'data-swarm-status="' + _jiraEsc(k) + '">'
+                 + _jiraStatusOptions(statuses, chosen)
+                 + '</select></td>'
+                 + '<td>' + (chosen ? '' : '<span class="text-xs" style="color:var(--amber)">no match found</span>')
+                 + '</td></tr>';
         }
         html += '</tbody></table>';
 
-        // Named explicitly, not left as an absence: a Swarm status with no target is
-        // exactly the case that failed silently before, and it must be visible BEFORE
-        // anything is confirmed rather than discovered when an export is refused.
-        if ((d.unmapped || []).length) {
-            html += '<p class="text-xs" style="color:var(--amber)">No status in this project matches: '
-                 + (d.unmapped || []).map(function(u) { return '<code>' + _jiraEsc(u) + '</code>'; }).join(', ')
-                 + '. Exports for those will be refused rather than guessed.</p>';
-        }
         html += '<button class="btn btn-sm" data-action="jiraConfirm" data-project="' + _jiraEsc(d.project)
              + '">Confirm mapping for ' + _jiraEsc(d.project) + '</button>';
         html += '</div>';
         return html;
     }
+
+    // Exposed for the browser test: rendering is the part that must be asserted in a
+    // real DOM, and the alternative is a live Atlassian call inside a test.
+    window._jiraRenderDiscoveryForTest = _jiraRenderDiscovery;
 
     function jiraConfirm(project) {
         var out = document.getElementById('jira-discover-result');

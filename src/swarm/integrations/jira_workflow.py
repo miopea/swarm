@@ -86,22 +86,48 @@ def propose_status_map(statuses: list[dict[str, str]]) -> dict[str, str]:
     return proposal
 
 
+def _normalise(value: str) -> str:
+    """Lowercase and strip non-alphanumerics, so "ToDo" and "To Do" compare equal.
+
+    Found against the operator's real IS project: the hint "to do" failed to match a
+    status literally named "ToDo" purely because of the space, and the mapping fell
+    through to a much worse candidate.
+    """
+    return "".join(ch for ch in value.lower() if ch.isalnum())
+
+
 def _best_match(candidates: list[dict[str, str]], hints: tuple[str, ...]) -> str:
     """Pick a status name from one category, preferring the earliest hint.
 
-    Falls back to the single candidate when a category has exactly one status — that
-    is not a guess, it is the only option. With several candidates and no hint match,
-    returns "" so the caller leaves the mapping unset rather than picking arbitrarily.
+    THREE TIERS, in order, and the middle one is why this is not a plain substring
+    search. Against the operator's real IS workflow — Canceled, Done, In Progress,
+    Reopened, Resolved, ToDo, Waiting for customer, Waiting for support, Waiting On,
+    Work in progress — a substring match sent backlog, assigned and unassigned all to
+    "Reopened", because the hint "open" appears inside "Re-open-ed". Whole-word
+    matching rejects that and lets "ToDo" win instead.
+
+    Falls back to the single candidate when a category has exactly one status: that is
+    not a guess, it is the only option. With several candidates and no match, returns
+    "" so the caller leaves the mapping unset rather than picking arbitrarily.
     """
-    lowered = {c["name"].lower(): c["name"] for c in candidates}
+    normalised = [(c["name"], _normalise(c["name"])) for c in candidates]
+
+    # 1. exact, ignoring spacing and punctuation ("ToDo" == "to do")
     for hint in hints:
-        for name_lower, original in lowered.items():
-            if name_lower == hint:
+        target = _normalise(hint)
+        for original, norm in normalised:
+            if norm == target:
                 return original
+
+    # 2. the hint appears as a WHOLE WORD in the status name. "waiting" matches
+    #    "Waiting for customer"; "open" does NOT match "Reopened".
     for hint in hints:
-        for name_lower, original in lowered.items():
-            if hint in name_lower:
+        hint_words = hint.lower().split()
+        for original, _norm in normalised:
+            words = [w.strip("-_/") for w in original.lower().split()]
+            if all(hw in words for hw in hint_words):
                 return original
+
     if len(candidates) == 1:
         return candidates[0]["name"]
     return ""

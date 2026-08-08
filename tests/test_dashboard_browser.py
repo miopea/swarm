@@ -363,3 +363,63 @@ def test_clicking_discover_without_a_project_does_not_call_the_api(playwright_pa
     assert "project key" in result.inner_text().lower(), (
         f"the message does not say what to do: {result.inner_text()!r}"
     )
+
+
+def test_the_mapping_rows_are_dropdowns_of_real_statuses(playwright_page):
+    """OPERATOR-REPORTED 2026-08-08: "This needs to be a drop down of jira transitions".
+
+    Free-text let you type a status the project does not have, which produces an export
+    Jira refuses — the exact failure this phase exists to prevent — and gave no way to
+    know which names were legal. Rendered here from a stubbed discovery response so the
+    DOM is asserted, not the template source; every UI bug in this project so far was
+    found in a browser, not a scan.
+    """
+    page, daemon, base = playwright_page
+    page.goto(f"{base}/config", wait_until="domcontentloaded")
+    page.wait_for_selector("#jira-setup-block", state="attached", timeout=15000)
+    page.click("[data-action='switchConfigTab'][data-tab='integrations']")
+    page.wait_for_selector("#jira-setup-block", state="visible", timeout=10000)
+
+    # Feed the renderer the operator's real IS vocabulary.
+    page.evaluate(
+        """() => {
+            const d = {
+                project: 'IS',
+                statuses: [
+                    {name: 'ToDo', category: 'new'},
+                    {name: 'Reopened', category: 'new'},
+                    {name: 'In Progress', category: 'indeterminate'},
+                    {name: 'Waiting for support', category: 'indeterminate'},
+                    {name: 'Done', category: 'done'},
+                    {name: 'Canceled', category: 'done'},
+                ],
+                proposed_status_map: {backlog: 'ToDo', active: 'In Progress', done: 'Done'},
+                unmapped: [],
+            };
+            const out = document.getElementById('jira-discover-result');
+            out.style.display = '';
+            out.innerHTML = window._jiraRenderDiscoveryForTest
+                ? window._jiraRenderDiscoveryForTest(d)
+                : '';
+        }"""
+    )
+    page.wait_for_timeout(200)
+
+    selects = page.locator("#jira-discover-result select.jira-map-input")
+    assert selects.count() >= 7, (
+        f"expected a dropdown per Swarm status, found {selects.count()} — free-text "
+        f"inputs let the operator type a status the project does not have"
+    )
+
+    first = selects.first
+    options = first.locator("option").all_inner_texts()
+    assert "ToDo" in options and "Done" in options, (
+        f"the dropdown is not populated from the project's real statuses: {options}"
+    )
+    assert any("not mapped" in o for o in options), (
+        "there is no way to choose 'no mapping', so an unmappable status cannot be "
+        "left deliberately blank"
+    )
+    # Grouped, so choosing a To Do status to mean 'completed' is visibly wrong rather
+    # than merely a typo.
+    assert first.locator("optgroup").count() >= 2, "options are not grouped by category"
