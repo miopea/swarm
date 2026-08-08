@@ -341,6 +341,19 @@ def test_the_jira_setup_block_renders_on_the_config_page(playwright_page):
     # the workflow does not offer got saved in the first place.
     assert page.locator("#cfg-jira-status_map").count() == 0, "the raw status_map textarea remains"
 
+    # The saved-mappings panel is the one part of this section rendered by JINJA from
+    # stored config. Every other test for it reads config.html as TEXT, so a template
+    # syntax error in the {% for %} over project_status_maps would pass all of them and
+    # only surface when someone opened the page. This is the assertion that requires the
+    # template to actually render.
+    assert page.locator("#jira-confirmed-maps").count() == 1, (
+        "the saved-mappings panel did not render — a Jinja error here takes the whole "
+        "config page with it, and the source scans cannot see it"
+    )
+    assert "Saved mappings" in page.locator("#jira-confirmed-maps").inner_text(), (
+        "the panel rendered empty"
+    )
+
 
 def test_clicking_discover_without_a_project_does_not_call_the_api(playwright_page):
     """The cheapest possible guard on a button that talks to someone's Jira: it must
