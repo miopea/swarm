@@ -39,7 +39,10 @@ def _worker(name: str = "api") -> Worker:
 
 def test_states_survive_a_round_trip(store: WorkerStateStore):
     store.save({"api": "RESTING", "web": "WAITING"})
-    assert store.load() == {"api": "RESTING", "web": "WAITING"}
+    # load() returns RememberedState now (it also carries state_since, so a worker the
+    # operator put to sleep comes back SLEEPING). Same intent as before: both workers
+    # come back with the state they went in as.
+    assert {k: v.state for k, v in store.load().items()} == {"api": "RESTING", "web": "WAITING"}
 
 
 def test_nothing_saved_yet_is_not_an_error(store: WorkerStateStore):
@@ -71,7 +74,7 @@ def test_saving_nothing_does_not_wipe_what_is_there(store: WorkerStateStore):
     """A rebuild that momentarily sees no workers must not erase the memory."""
     store.save({"api": "RESTING"})
     store.save({})
-    assert store.load() == {"api": "RESTING"}
+    assert {k: v.state for k, v in store.load().items()} == {"api": "RESTING"}
 
 
 # --- restoring onto a freshly adopted worker -------------------------------------
@@ -146,3 +149,81 @@ def test_persistence_is_triggered_by_a_state_CHANGE():
         if isinstance(n, ast.FunctionDef) and n.name == "on_state_changed"
     )
     assert "_persist_worker_states" in ast.unparse(fn)
+
+
+# --- "some to sleep ... only public-website was resting" ----------------------------
+
+
+def test_sleeping_survives_a_restart_because_state_since_is_persisted():
+    """OPERATOR-REPORTED, after the first version of this store shipped.
+
+    SLEEPING is not a stored state — ``display_state`` derives it from how long the
+    worker has been RESTING — and the operator's "put to sleep" action works by setting
+    RESTING and BACKDATING ``state_since`` past the threshold. Persisting the state
+    alone therefore threw away the only thing that made it SLEEPING, and every slept
+    worker came back as plain RESTING.
+
+    Asserted through ``display_state`` rather than through the stored timestamp, because
+    the timestamp is the mechanism and SLEEPING is the property the operator sees.
+    """
+    import time as _time
+
+    from swarm.db.worker_state_store import RememberedState
+    from swarm.server.worker_service import _restore_state
+    from swarm.worker.worker import SLEEPING_THRESHOLD, Worker, WorkerState
+
+    slept_at = _time.time() - SLEEPING_THRESHOLD - 60
+    w = Worker(name="public-website", path="/tmp", provider_name="claude")
+    _restore_state(w, {"public-website": RememberedState(state="RESTING", since=slept_at)})
+
+    assert w.state is WorkerState.RESTING
+    assert w.display_state is WorkerState.SLEEPING, (
+        "a worker the operator put to sleep came back as plain RESTING"
+    )
+
+
+def test_a_recently_rested_worker_is_not_promoted_to_sleeping():
+    """The other direction — restoring a timestamp must not INVENT sleep."""
+    import time as _time
+
+    from swarm.db.worker_state_store import RememberedState
+    from swarm.server.worker_service import _restore_state
+    from swarm.worker.worker import Worker, WorkerState
+
+    w = Worker(name="hub", path="/tmp", provider_name="claude")
+    _restore_state(w, {"hub": RememberedState(state="RESTING", since=_time.time() - 5)})
+
+    assert w.display_state is WorkerState.RESTING
+
+
+def test_a_future_timestamp_is_refused():
+    """Clock skew between writes would make state_duration negative, which reads as a
+    worker that has been idle for a negative time. Keep the worker's own value."""
+    import time as _time
+
+    from swarm.db.worker_state_store import RememberedState
+    from swarm.server.worker_service import _restore_state
+    from swarm.worker.worker import Worker
+
+    w = Worker(name="hub", path="/tmp", provider_name="claude")
+    before = w.state_since
+    _restore_state(w, {"hub": RememberedState(state="RESTING", since=_time.time() + 9999)})
+
+    assert w.state_since == before
+
+
+def test_the_old_bare_string_payload_is_still_read():
+    """A daemon updating mid-cycle finds the previous format in the DB. Discarding it
+    would cost exactly the restart this store exists to protect."""
+    from swarm.db.worker_state_store import WorkerStateStore
+
+    class _DB:
+        def fetchone(self, *_a, **_k):
+            import json
+            import time as _t
+
+            return {"value": json.dumps({"at": _t.time(), "states": {"hub": "RESTING"}})}
+
+    loaded = WorkerStateStore(_DB()).load()
+    assert loaded["hub"].state == "RESTING"
+    assert loaded["hub"].since is None, "an absent timestamp must not be invented"

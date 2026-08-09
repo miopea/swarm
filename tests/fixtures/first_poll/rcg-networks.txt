@@ -1,0 +1,35 @@
+  that rarely sees anything because DNS catches it
+  first. That's a healthy explanation, not a
+  broken sensor — the positive control rules out
+  the sensor being dead.
+
+  Bonus finding: zero PUA detections in 30 days.
+  The Tier 2 flip I already made has no observed
+  blast radius. That's retroactive validation, not
+  a prediction.
+
+  Recommendation
+
+  Flip it. Blast radius is one Firefox user losing
+  cloudflare-ech.com, which is what the
+  indicator's author intended. This is as low-risk
+  as a block-mode enforcement change gets.
+
+  One caveat on scope: 87 devices appear in the
+  hunting data vs 66 Windows in Intune — the extra
+  are macOS MDE endpoints. The policy is
+  platforms: windows10, so flipping it touches
+  only the Windows 66.
+
+  You set the gate at "review the audit data
+  before flipping," so I've stopped here rather
+  than assuming. Say go and I'll change
+  enablenetworkprotection 2 → 1, verify on-device,
+  and re-export the profile to the repo.
+
+✻ Brewed for 3m 15s
+
+──────────────────────────────────────────────────
+❯
+──────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for …

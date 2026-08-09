@@ -1,0 +1,35 @@
+
+  absent NAME on a REAL slot   → exit=0, 0 bytes
+  real NAME on a FAKE slot     → exit=0, 0 bytes
+  present name, EMPTY VALUE    → exit=0, 0 bytes
+
+  So --query "[?name=='X'].value | [0]" returning empty means slot missing OR setting missing OR setting present-but-empty. Cause 3 is the dangerous one — a present-but-empty credential is a live
+  misconfiguration their loop would report identically to a healthy absent-by-design setting. Sent them the robust form: query [].name and test set membership, never filter on values when the
+  question is presence. A name set is a positive control.
+
+  My own audit checked against their trap, not assumed clean
+
+  Since my headline finding is a credential claim, I re-verified it under their mechanism rather than trusting that I'd been careful. It was guarded by construction — I derived presence from
+  name-set differences, and only ever passed --slot to apps already confirmed slot-bearing:
+
+  - rcg-my prod name-set: V6_API_KEY genuinely absent (not empty-valued)
+  - rcg-my staging name-set: present
+  - settings with empty values anywhere in rcg-my, either scope: none
+
+  The finding stands. rcg-my's staging V6_API_KEY is genuinely staging-only, absent from 1Password entirely, and live. Still the open item.
+
+  The other three needed nothing
+
+  - nexus confirmed the headline/truncation defect is theirs and requested the amendment with a supersession line rather than a rewrite — correct, given stale ≠ false.
+  - rcg-networks reconciled all counts (11 TRUE / 12 FALSE across both orgs) and found two repos nobody had checked — miopea/shotcraft and voice-bridge, both FALSE. rcg-admin reads TRUE in their
+  list, matching my own read-back. Their corollary is the sharp one: "drop --delete-branch" is wrong advice in the 12 FALSE repos, where it's the only cleanup that exists.
+  - nexus's rule restatement changes nothing for me — rcg-admin is TRUE, flag already dropped, and the universal part (never delete while a dependent points at the branch) was already adopted.
+
+  I skipped replying to those three deliberately; pure acks would be noise, and the day has had enough of it. Nothing changed in rcg-admin, nothing to commit.
+
+✻ Brewed for 1m 58s
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ /exit
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on

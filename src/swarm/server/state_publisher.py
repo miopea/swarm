@@ -68,7 +68,7 @@ class StatePublisher:
         # #1357. A CALLABLE, not the store: the publisher is constructed before the
         # daemon finishes wiring, and defaulted because several test fixtures build one
         # for flows that never persist anything.
-        save_worker_states: Callable[[dict[str, str]], None] | None = None,
+        save_worker_states: Callable[[dict[str, Any]], None] | None = None,
         debounce_delay: float = 0.3,
     ) -> None:
         self._broadcast_ws = broadcast_ws
@@ -103,7 +103,14 @@ class StatePublisher:
         if self._save_worker_states is None:
             return
         try:
-            self._save_worker_states({w.name: w.state.value for w in self._get_workers()})
+            from swarm.db.worker_state_store import RememberedState
+
+            self._save_worker_states(
+                {
+                    w.name: RememberedState(state=w.state.value, since=w.state_since)
+                    for w in self._get_workers()
+                }
+            )
         except Exception:
             _log.debug("worker state persist failed", exc_info=True)
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from swarm.logging import get_logger
@@ -40,13 +41,53 @@ _KEY = "worker_states"
 _MAX_AGE_SECONDS = 30 * 60
 
 
+@dataclass(frozen=True)
+class RememberedState:
+    """One worker's last-known state, and when it entered it.
+
+    ``since`` is not decoration. SLEEPING is not a stored state — ``display_state``
+    derives it from how long the worker has been RESTING — and the operator's "put to
+    sleep" action works by setting RESTING and BACKDATING ``state_since`` past the
+    threshold. Persisting the state alone therefore loses exactly that: a slept worker
+    comes back as plain RESTING, which is what the operator reported after the first
+    version of this store shipped.
+
+    None means "not recorded" (an old payload). The caller keeps the worker's own
+    freshly-initialised timestamp in that case rather than inventing one.
+    """
+
+    state: str
+    since: float | None = None
+
+    @classmethod
+    def coerce(cls, value: object) -> RememberedState | None:
+        """Accept either shape, so one format lives in one place.
+
+        ``load`` already has to read the bare-string payload written by the first
+        version. Letting ``save`` and the restore accept it too means a caller that has
+        not been updated degrades to "state without a timestamp" rather than raising
+        into a state transition or silently writing nothing.
+        """
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, str) and value:
+            return cls(state=value, since=None)
+        if isinstance(value, dict) and value.get("state"):
+            since = value.get("since")
+            return cls(
+                state=str(value["state"]),
+                since=float(since) if isinstance(since, int | float) else None,
+            )
+        return None
+
+
 class WorkerStateStore:
     """Last-known worker states, keyed by worker name."""
 
     def __init__(self, db: SwarmDB) -> None:
         self._db = db
 
-    def save(self, states: dict[str, str]) -> None:
+    def save(self, states: dict[str, RememberedState | str]) -> None:
         """Persist the whole map. Best effort — never raises into a state transition.
 
         Called on CHANGE rather than on a timer, so the write happens once per real
@@ -54,7 +95,15 @@ class WorkerStateStore:
         """
         if not states:
             return
-        payload = json.dumps({"at": time.time(), "states": states})
+        coerced = {k: RememberedState.coerce(v) for k, v in states.items()}
+        payload = json.dumps(
+            {
+                "at": time.time(),
+                "states": {
+                    k: {"state": v.state, "since": v.since} for k, v in coerced.items() if v
+                },
+            }
+        )
         try:
             self._db.execute(
                 "INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, ?)",
@@ -66,7 +115,7 @@ class WorkerStateStore:
             # must not propagate into the state machine that called it.
             _log.debug("could not persist worker states", exc_info=True)
 
-    def load(self) -> dict[str, str]:
+    def load(self) -> dict[str, RememberedState]:
         """Last-known states, or {} when there are none or they are too old."""
         try:
             row = self._db.fetchone("SELECT value FROM config WHERE key = ?", (_KEY,))
@@ -89,4 +138,14 @@ class WorkerStateStore:
             )
             return {}
         states = data.get("states")
-        return {str(k): str(v) for k, v in states.items()} if isinstance(states, dict) else {}
+        if not isinstance(states, dict):
+            return {}
+        out: dict[str, RememberedState] = {}
+        for name, value in states.items():
+            # The first version of this store wrote a bare state string. Read it rather
+            # than discard it: a daemon updating mid-cycle would otherwise throw away a
+            # perfectly good map and come up all-BUZZING once, which is the bug.
+            entry = RememberedState.coerce(value)
+            if entry is not None:
+                out[str(name)] = entry
+        return out

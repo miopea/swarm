@@ -66,6 +66,35 @@ _RE_SUBAGENT_ACTIVE = re.compile(
     r"|[·✢✳✶✻✽*⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+\w+(?:…|\.\.\.|\s+for\s+\d)",
     re.IGNORECASE,
 )
+
+# The SAME glyph+verb+elapsed shape means two opposite things depending on what
+# else is on screen, and conflating them is #1357.
+#
+#   mid-turn:   "✻ Sautéed for 16m 13s"   — still working (captured from the
+#               platform worker on a 16-minute background task; the stuck-BUZZING
+#               safety net wrongly flipped it to RESTING, hence the elapsed-time
+#               branch above)
+#   turn over:  "✻ Brewed for 1m 58s"     — Claude Code's COMPLETION summary,
+#               which stays on screen above the returned input box
+#
+# Textually identical. What separates them is the idle prompt: once "❯" is back in
+# the narrow tail with no "esc to interrupt", the turn has ended and an elapsed-time
+# line above it is history. Live progress still shows an ellipsis ("✻ Verifying…")
+# or the subagent token counter, so those remain evidence of work; a past-tense
+# elapsed summary does not.
+#
+# MEASURED, not reasoned: all sixteen workers' first-poll buffers were captured to
+# ~/.swarm/first-classification and replayed offline. With _RE_SUBAGENT_ACTIVE they
+# classified 16/16 BUZZING — every worker showed "Brewed/Cooked/Sautéed for …" above
+# a bare prompt. With this pattern they classify 14 RESTING / 2 BUZZING, matching the
+# persisted state map exactly (project-root and swarm were genuinely working).
+#
+# Used ONLY where a prompt is already visible. The safety nets keep the broad pattern:
+# there a false positive merely keeps a busy worker BUZZING, which is the safe error.
+_RE_SUBAGENT_IN_PROGRESS = re.compile(
+    r"↓\s*[\d.]+k?\s*tokens" r"|[·✢✳✶✻✽*⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s+\w+(?:…|\.\.\.)",
+    re.IGNORECASE,
+)
 # Claude Code's interruptible-turn footer is "… · esc to interrupt", but at
 # narrow PTY widths it TRUNCATES to "… · esc to…" (verified live on workers
 # my-rcg / budgetbug, Claude Code v2.1.158). Idle footers instead show
@@ -289,7 +318,7 @@ class ClaudeProvider(LLMProvider):
         if _RE_PROMPT.search(tail_last) or "? for shortcuts" in tail_last:
             if self._has_actionable_prompt(content, include_empty=True):
                 return WorkerState.WAITING
-            if _RE_SUBAGENT_ACTIVE.search(self._get_tail(content, TAIL_WIDE)):
+            if _RE_SUBAGENT_IN_PROGRESS.search(self._get_tail(content, TAIL_WIDE)):
                 return None  # not stale — still buzzing
             return WorkerState.RESTING
         if self._has_actionable_prompt(content):
@@ -321,8 +350,9 @@ class ClaudeProvider(LLMProvider):
             return WorkerState.BUZZING
 
         if _RE_PROMPT.search(tail_narrow) or "? for shortcuts" in tail_narrow:
-            # Subagent progress (token counters, thinking indicators) → BUZZING
-            if _RE_SUBAGENT_ACTIVE.search(tail_wide):
+            # Subagent progress (token counters, live spinner) → BUZZING. NOT the
+            # completed-turn elapsed summary — see _RE_SUBAGENT_IN_PROGRESS.
+            if _RE_SUBAGENT_IN_PROGRESS.search(tail_wide):
                 return WorkerState.BUZZING
             if self._has_actionable_prompt(content, include_empty=True):
                 return WorkerState.WAITING
@@ -609,7 +639,7 @@ class ClaudeProvider(LLMProvider):
         if self._has_styled_prompt(styled):
             if self._has_actionable_prompt(text, include_empty=True):
                 return WorkerState.WAITING
-            if _RE_SUBAGENT_ACTIVE.search(tail_wide):
+            if _RE_SUBAGENT_IN_PROGRESS.search(tail_wide):
                 return WorkerState.BUZZING
             # Active-turn footer hint (possibly truncated to "esc to…") — the
             # turn is still running even when the animated spinner glyph isn't
@@ -675,7 +705,7 @@ class ClaudeProvider(LLMProvider):
                     or self.has_accept_edits_prompt(text)
                 ):
                     return WorkerState.WAITING
-                if _RE_SUBAGENT_ACTIVE.search(tail_wide):
+                if _RE_SUBAGENT_IN_PROGRESS.search(tail_wide):
                     return WorkerState.BUZZING
                 return WorkerState.RESTING
             if (

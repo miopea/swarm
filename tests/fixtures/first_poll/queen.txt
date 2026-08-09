@@ -1,0 +1,35 @@
+  that way — #1310's acceptance criteria are
+  the template ("a decision is recorded," not
+  "the code is changed"). Hub gets a question,
+  not a file.
+
+  One thing I'll keep pushing on without
+  needing to ask again: folding in duplication
+  without fixing the contract lets it regrow.
+  /api/auth/me publishing an empty response
+  schema while actually returning roles is the
+  mechanism that created the duplicate client
+  in the first place. So platform's swagger
+  audit stays a live thread rather than
+  closing with #1309 — otherwise we
+  consolidate today and rediscover the same
+  shape in three months.
+
+  Nothing dispatched. Both workers stay on
+  what they have.
+
+✻ Brewed for 1m 11s
+
+※ recap: Goal is removing hub duplication from
+  platform; platform is fixing the double
+  web-push config and consolidating BullMQ.
+  Next action is yours: decide whether
+  loxley@rcg.org drops to MEMBER or gets
+  granted Hub Admin in D365. (disable recaps
+  in /config)
+
+──────────────────────────────────────────────
+❯
+──────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← …
+      new task? /clear to save 393.1k tokens

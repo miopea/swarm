@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import re
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
@@ -224,7 +223,11 @@ class WorkerStateTracker:
         "❯" prompt, or "⏸ manual mode on · ? for shortcuts". Classification is stateless
         per poll, so a 160-character tail cannot explain that; the whole content it
         judged is needed to replay it through the classifier offline. So the full text
-        is dumped once per worker alongside the log line.
+        is dumped once per worker alongside the log line. That dump did its job — the
+        buffers replayed offline showed 16/16 classifying BUZZING on a completed-turn
+        "Brewed for 1m 58s" summary above a bare prompt — so it has been removed and
+        four representative buffers kept as fixtures instead. The one log line stays for
+        one more restart, to confirm the fix reads was=RESTING decided=RESTING.
 
         WARNING level because operators run at the default, and bounded to ONE line per
         worker per daemon start — sixteen lines once, not a stream.
@@ -232,7 +235,6 @@ class WorkerStateTracker:
         if worker.name in self._first_classification_logged:
             return
         self._first_classification_logged.add(worker.name)
-        self._dump_first_content(worker.name, content or "")
         tail = (content or "")[-160:].replace("\n", "⏎")
         _log.warning(
             "[#1357] first classification of %s: was=%s decided=%s | content=%dch tail=%r",
@@ -242,22 +244,6 @@ class WorkerStateTracker:
             len(content or ""),
             tail,
         )
-
-    _FIRST_CONTENT_DIR = Path.home() / ".swarm" / "first-classification"
-
-    def _dump_first_content(self, name: str, content: str) -> None:
-        """Write one worker's first-poll content verbatim, for offline replay.
-
-        Best effort and never raised into the poll loop: this is a diagnostic, and a
-        full disk must not stop the fleet being classified. Files are overwritten each
-        start, so the directory holds one restart's worth, not a growing pile.
-        """
-        try:
-            self._FIRST_CONTENT_DIR.mkdir(parents=True, exist_ok=True)
-            safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
-            (self._FIRST_CONTENT_DIR / f"{safe}.txt").write_text(content, encoding="utf-8")
-        except OSError:
-            _log.debug("could not dump first-classification content for %s", name, exc_info=True)
 
     def _classify_worker_state(
         self,

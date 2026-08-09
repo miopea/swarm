@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -31,7 +32,7 @@ _KILL_POLL_INTERVAL = 0.1  # how often to check whether it has gone
 _KILL_SHELL_EXIT_DELAY = 0.5  # after `exit`, before signalling the process
 
 
-def _remembered_states(loader: Callable[[], dict[str, str]] | None) -> dict[str, str]:
+def _remembered_states(loader: Callable[[], dict[str, Any]] | None) -> dict[str, Any]:
     """Last-known worker states, or {} when unavailable.
 
     Defensive because worker adoption runs on paths where no loader is wired (several
@@ -47,7 +48,7 @@ def _remembered_states(loader: Callable[[], dict[str, str]] | None) -> dict[str,
         return {}
 
 
-def _restore_state(worker: Worker, remembered: dict[str, str]) -> None:
+def _restore_state(worker: Worker, remembered: dict[str, Any]) -> None:
     """Apply a remembered state to a freshly adopted worker.
 
     STUNG is never restored. A worker that had crashed before the restart may well have
@@ -56,11 +57,23 @@ def _restore_state(worker: Worker, remembered: dict[str, str]) -> None:
     direction. The pilot settles it within one poll either way.
     """
     name = getattr(worker, "name", "")
-    saved = remembered.get(name, "")
+    from swarm.db.worker_state_store import RememberedState
+
+    entry = RememberedState.coerce(remembered.get(name))
+    saved = entry.state if entry is not None else ""
     if not saved or saved == WorkerState.STUNG.value:
         return
     try:
         worker.state = WorkerState(saved)
+        # SLEEPING is derived from how long the worker has been RESTING, and the
+        # operator's "put to sleep" works by backdating this very field. Restoring the
+        # state without it silently downgrades every slept worker to plain RESTING —
+        # reported after the first version shipped ("some to sleep ... only
+        # public-website was resting"). Guarded against a future timestamp, which would
+        # make state_duration negative.
+        since = entry.since
+        if isinstance(since, int | float) and 0 < since <= time.time():
+            worker.state_since = float(since)
     except ValueError:
         # An unknown value means the enum changed under a stored map. Leave the default.
         _log.debug("ignoring unrecognised remembered state %r for %s", saved, name)
@@ -93,7 +106,7 @@ class WorkerService:
         write_identity: Callable[[WorkerConfig, str], None],
         # #1357. A CALLABLE like every other dependency here, and defaulted because
         # several fixtures build a WorkerService for flows that never restore state.
-        load_worker_states: Callable[[], dict[str, str]] | None = None,
+        load_worker_states: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self._broadcast_ws = broadcast_ws
         self._drone_log = drone_log
@@ -429,7 +442,10 @@ class WorkerService:
                     "[#1357] rebuild: %d remembered (%s), adopted %d existing / %d new, "
                     "%d left non-BUZZING after restore",
                     len(remembered),
-                    ", ".join(f"{k}={v}" for k, v in sorted(remembered.items())[:4]) or "-",
+                    ", ".join(
+                        f"{k}={getattr(v, 'state', v)}" for k, v in sorted(remembered.items())[:4]
+                    )
+                    or "-",
                     _adopted_existing,
                     _adopted_new,
                     _restored,

@@ -1,0 +1,35 @@
+  Where the work stands
+
+  In the repo — the full audit on main at docs/cross-service/: five browsing passes across public, member and host; the admin comparison; the write-pass corrections; the human test plan; launch
+  sequencing; and the intake plan with its outcome recorded.
+
+  In Jira — 109 tickets across 5 epics in WWD, all unassigned, filterable with labels = "v4v6-audit".
+
+  For the team — the shareable index at ⧉ https://claude.ai/code/artifact/87230ffe-dbcf-4461-af33-4978efcd6a81
+
+  Three things waiting on a person
+
+  Assign WWD-6726 first and alone. Nothing moves until a ticket is assigned — that's the mechanism, not an oversight — and the entitlement fix has to land before any "content is missing" finding
+  on a Hub surface can be trusted.
+
+  Answer D1. The translation decision gates roughly a quarter of the remaining work, and option C (defer, keep v4's localised tree alive) is only available while v4 is still running.
+
+  Two credentials still need rotating — the Postgres rcgadmin password on rcg-postgres-v6, exposed in a session transcript during the write pass, and the swarm MCP bearer token from earlier in
+  this session. Neither is in any committed file, but both are in logs, and deletion doesn't recall what's in logs.
+
+✻ Worked for 34s
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ assign WWD-6726
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+  ⧉  v6-backlog-board
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
+  ⧉  v6-backlog-board
+
+
+──────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · esc to…
+  ⧉  v6-backlog-board

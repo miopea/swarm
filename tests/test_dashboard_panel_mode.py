@@ -244,3 +244,29 @@ def test_the_pop_out_icon_sits_with_the_collapse_caret():
     assert "<button" not in between, (
         f"something was inserted between the pop-out icon and the caret: {between!r}"
     )
+
+
+def test_popping_out_collapses_the_panel_in_the_main_window():
+    """Operator: "if I Popout the task/decision panel the one in the main window should
+    minimize." The whole point is to move the panel off this window, so leaving a second
+    live copy behind means two renderers competing for the same screen space.
+
+    Persisted (the `true` second argument) so it stays collapsed across a reload exactly
+    as the caret would — the operator MOVED the panel, they did not hide it once.
+    """
+    js = Path("src/swarm/web/static/dashboard.js").read_text(encoding="utf-8")
+    i = js.index("window.popOutTasks = function")
+    body = js[i : js.index("\n    };", i)]
+    assert "setBottomCollapsed(true, true)" in body, body
+
+
+def test_a_blocked_popup_leaves_the_main_panel_alone():
+    """If window.open returns null the panel was never moved anywhere — collapsing it
+    then would hide the only copy the operator has."""
+    js = Path("src/swarm/web/static/dashboard.js").read_text(encoding="utf-8")
+    i = js.index("window.popOutTasks = function")
+    body = js[i : js.index("\n    };", i)]
+    guard = body.index("if (!w) return")
+    assert guard < body.index("setBottomCollapsed"), (
+        "the collapse runs even when the popup was blocked"
+    )

@@ -12943,7 +12943,12 @@
         // A named window, so pressing the button twice focuses the existing one rather
         // than opening a second copy that would hold its own socket.
         var w = window.open('/?panel=tasks', 'swarm-tasks', 'width=1100,height=800');
-        if (w) { try { w.focus(); } catch (_) {} }
+        if (!w) return;   // popup blocked — leave the main panel alone, it is all there is
+        try { w.focus(); } catch (_) {}
+        // The point of popping out is to get the panel OFF this window, so collapse it
+        // here. Persisted (the `true`), so it stays collapsed across a reload the same
+        // way the caret would — the operator moved the panel, they did not hide it once.
+        setBottomCollapsed(true, true);
     };
 
     if (document.readyState === 'loading') {
