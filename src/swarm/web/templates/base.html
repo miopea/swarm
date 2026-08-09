@@ -2144,14 +2144,38 @@
         .badge-builtin { background: var(--leaf); color: #1a1a0e; font-size: 0.75rem; padding: 1px 6px; border-radius: 3px; }
         .badge-tuned { background: var(--honey); color: #1a1a0e; font-size: 0.75rem; padding: 1px 6px; border-radius: 3px; }
 
-        /* Config page — unsaved banner */
+        /* Config page — save status.
+           WAS a full-width band in normal flow, FIRST child of <body>, toggled between
+           display:none and block. So every save inserted ~30px above the header and
+           shoved the entire page down mid-edit: "when you save the page jumps because
+           the save toast appears inline" (operator, email #1359). Config AUTOSAVES 1.5s
+           after the last keystroke, so it fired unprompted, while the eye was on a field.
+           Now floated, matching .toast-container on the dashboard so the two pages
+           behave the same way — it cannot participate in layout, so nothing below it
+           can move. Offset to clear the header rather than cover its controls. */
         .unsaved-banner {
-            background: rgba(216,160,61,0.15);
-            border-bottom: 2px solid var(--honey);
-            padding: 0.4rem 1.5rem;
-            text-align: center;
+            position: fixed;
+            top: calc(60px + env(safe-area-inset-top, 0px));
+            right: 1rem;
+            z-index: 1000;
+            background: var(--panel);
+            border: 1px solid var(--honey);
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
             font-size: 0.85rem;
             color: var(--honey);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            max-width: calc(100vw - 2rem);
+        }
+        /* Narrow screens: along the bottom, clear of the fields being edited rather
+           than on top of them. */
+        @media (max-width: 600px) {
+            .unsaved-banner {
+                top: auto;
+                bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+                left: 1rem;
+                text-align: center;
+            }
         }
         /* Config page — vertical field layout */
         .config-field-col {
@@ -2717,24 +2741,7 @@
                 background: var(--surface);
                 color: var(--text);
             }
-            .worker-switcher-active {
-                flex: 0 0 auto;
-                display: inline-flex;
-                align-items: center;
-                gap: 0.25rem;
-                max-width: 45%;
-                font-size: 0.8rem;
-                font-weight: bold;
-                padding: 0.25rem 0.5rem;
-                border-radius: 16px;
-                border: 1px solid var(--lavender);
-                background: rgba(168,143,217,0.18);
-            }
-            .worker-switcher-active-name {
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-            }
+
             /* The pills and their scroll-fade are what the dropdown replaces. The
                ::after fade exists only because the row scrolled (#543); with no
                scroller there is nothing to fade, and leaving it would paint a

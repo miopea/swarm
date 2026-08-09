@@ -165,7 +165,15 @@ def test_the_mobile_switcher_is_rendered_by_the_partial():
     workers_changed swap, so the dropdown stays in sync with worker state without a
     separate JS sync path that could drift."""
     assert "worker-switcher-select" in _PARTIAL, "no mobile switcher in the worker partial"
-    assert "worker-switcher-active" in _PARTIAL, "the pinned active-worker chip is missing"
+    # The pinned active chip that used to be asserted here is gone — #1359, operator:
+    # "it was showing the worker to the right of the drop-down menu which was odd cuz it
+    # didn't reflect anything". A native <select> always renders its selected option, so
+    # the chip repeated it. Asserted as ABSENT rather than deleted, so re-adding it is a
+    # deliberate decision and not an accident.
+    assert "worker-switcher-active" not in _PARTIAL, (
+        "the redundant pinned chip is back — it duplicates the <select>'s own selected "
+        "option; see #1359 before re-adding it"
+    )
 
 
 def test_the_switcher_order_matches_the_pill_order():
@@ -271,8 +279,9 @@ def test_the_switcher_renders_every_worker_in_the_intended_order():
     assert opts == ["swarm", "sculpt-studio", "api", "zz"], (
         f"the switcher must preserve the pill order for muscle memory, got {opts}"
     )
+    # Preselection is what makes the chip unnecessary: the <select> itself shows which
+    # worker you are on, which is why #1359 removed the chip beside it.
     assert 'value="swarm" selected' in html, "the current worker is not preselected"
-    assert "worker-switcher-active" in html, "no pinned active chip"
     assert html.count('class="worker-item') >= 4, "desktop pills were lost"
 
 

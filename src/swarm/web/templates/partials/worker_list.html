@@ -68,16 +68,14 @@
         <option value="{{ w.name }}" {% if w.name == selected_worker %}selected{% endif %}>{{ w.state }} · {{ w.name }} ({{ w.provider }})</option>
         {% endfor %}
     </select>
-    {# The pinned active chip: the operator chose "dropdown PLUS the active worker
-       always visible", so switching never loses sight of who you are looking at. #}
-    {% if selected_worker %}
-    {% for w in workers if w.name == selected_worker %}
-    <span class="worker-switcher-active {{ state_color(w.state) }}" data-state="{{ w.state }}"
-          title="{{ w.name }} — {{ w.state }} for {{ w.state_duration }}">
-        {{ worker_bee(w.state) }}<span class="worker-switcher-active-name">{{ w.name }}</span>
-    </span>
-    {% endfor %}
-    {% endif %}
+    {# The pinned active chip is GONE (#1359, operator: "it was showing the worker to
+       the right of the drop-down menu which was odd cuz it didn't reflect anything").
+       It was added when the operator asked for "dropdown PLUS the active worker always
+       visible" — this reverses that, at his request, having seen it in use.
+       Why it read as noise: a native <select> ALWAYS renders its selected option, so
+       the chip repeated the text six pixels to its left. The only thing it added was
+       the bee icon and state colour, which is exactly what a formatted selector should
+       carry inside the row instead of bolted alongside it. #}
 </div>
 {% for w in workers %}
 {{ worker_row(w, selected_worker, worker_tasks) }}
