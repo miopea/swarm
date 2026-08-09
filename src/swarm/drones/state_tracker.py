@@ -135,6 +135,9 @@ class WorkerStateTracker:
         self._last_full_poll: dict[str, float] = {}
         # Terminal-approval detection: track who continued a WAITING worker
         self._waiting_content: dict[str, str] = {}
+        # #1357 diagnostic: workers whose FIRST post-restart classification has been
+        # logged. Bounded to one line per worker per daemon start.
+        self._first_classification_logged: set[str] = set()
         self._drone_continued: set[str] = set()
         self._operator_continued: set[str] = set()
         # Track whether any worker transitioned TO BUZZING this tick.
@@ -196,6 +199,39 @@ class WorkerStateTracker:
         self._suspended.add(worker.name)
         self._suspended_at[worker.name] = time.time()
         _log.info("suspended sleeping worker: %s", worker.name)
+
+    def _log_first_classification(
+        self, worker: Worker, new_state: WorkerState, content: str
+    ) -> None:
+        """Record what the FIRST classification after a restart decided, and from what.
+
+        DIAGNOSTIC for #1357, and deliberately temporary. Persisting worker state
+        (2026.8.9.21) did not stop every worker showing BUZZING after a reload: the
+        restore demonstrably runs and the saved map was fresh, yet the fleet still came
+        up all-BUZZING and the store then recorded that. The leading hypothesis is that
+        re-attaching to a PTY replays a SNAPSHOT of recent output, and an activity
+        indicator inside that replay is classified as live work.
+
+        I was already wrong once here by reasoning from code instead of measuring, so
+        this logs the evidence needed to settle it rather than shipping a second guess:
+        what the worker's state was going in, what the classifier decided, and enough of
+        the content it decided from to see which signal matched.
+
+        WARNING level because operators run at the default, and bounded to ONE line per
+        worker per daemon start — sixteen lines once, not a stream.
+        """
+        if worker.name in self._first_classification_logged:
+            return
+        self._first_classification_logged.add(worker.name)
+        tail = (content or "")[-160:].replace("\n", "⏎")
+        _log.warning(
+            "[#1357] first classification of %s: was=%s decided=%s | content=%dch tail=%r",
+            worker.name,
+            worker.state.value,
+            new_state.value,
+            len(content or ""),
+            tail,
+        )
 
     def _classify_worker_state(
         self,
@@ -660,6 +696,7 @@ class WorkerStateTracker:
             )
             new_state = WorkerState.RESTING
         prev = self._prev_states.get(worker.name, worker.state)
+        self._log_first_classification(worker, new_state, content)
         changed = worker.update_state(new_state)
 
         # Cache content while worker is WAITING (for terminal-approval detection)
