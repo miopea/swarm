@@ -2749,6 +2749,26 @@
                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
             }
             .wsel-caret { flex-shrink: 0; color: var(--muted); font-size: 0.7rem; }
+            /* THE DROPDOWN WAS BEING CLIPPED (operator: "the selector doesnt show all
+               the workers"). Two ancestors cut it off, and neither is obvious from the
+               selector's own CSS:
+                 .panel            { overflow: hidden }        — and .worker-list IS a .panel
+                 .worker-list > .panel-body { overflow-y: hidden } — the pill scroller
+               On mobile that body is ONE SHORT ROW, so an absolutely-positioned list
+               inside it was cropped to about a row and a half. The workers were all in
+               the DOM and none were reachable — which is worse than a short list,
+               because nothing indicates the rest exist.
+               Un-clipped only WHILE OPEN, using the body class the control already
+               toggles, so the pill scroller keeps its own clipping the rest of the time.
+               Raised above sibling panels too: un-clipping alone would let it paint
+               outside and then be covered by the terminal panel below it. */
+            body.wsel-open .worker-list {
+                overflow: visible;
+                position: relative;
+                z-index: 1200;
+            }
+            body.wsel-open .worker-list > .panel-body { overflow: visible; }
+
             .wsel-list {
                 position: absolute; z-index: 1200;
                 top: calc(100% + 2px); left: 0; right: 0;

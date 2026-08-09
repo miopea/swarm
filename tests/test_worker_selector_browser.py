@@ -1,0 +1,263 @@
+"""The worker selector must actually show every worker, in a real browser (#1359).
+
+THE REPORT: "the selector doesnt show all the workers."
+
+THE CAUSE, and why no source-scan test could have found it. Two ANCESTORS clipped the
+dropdown, neither of them mentioned anywhere in the selector's own markup or CSS:
+
+    .panel                      { overflow: hidden }        — and .worker-list IS a .panel
+    .worker-list > .panel-body  { overflow-y: hidden }      — the pill scroller
+
+On mobile that panel body is one short row, so an absolutely-positioned list inside it
+was cropped to roughly a row and a half. Every worker was present in the DOM and all but
+a couple were unreachable — worse than a short list, because nothing on screen indicates
+the rest exist. ``test_the_switcher_renders_every_worker_in_the_intended_order`` passed
+throughout: it renders the template and counts ``data-worker`` attributes, and the
+attributes were all there.
+
+This is the second defect in this control that only a browser caught (the first hid the
+entire dashboard behind an unclosed div). Clipping, stacking and layout are exactly the
+class of bug that string-matching cannot see, so this file drives a real Chromium at a
+phone viewport and asks the browser where things actually are.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import socket
+import threading
+
+import pytest
+from aiohttp.test_utils import TestServer
+
+from swarm.auth.session import create_session_cookie
+from swarm.server.api import create_app
+from swarm.worker.worker import Worker, WorkerState
+
+from .conftest import make_daemon
+
+_PASSWORD = "browser-test-password"
+
+# Enough workers that the list cannot fit uncropped — the operator runs sixteen, and the
+# bug only shows once the list is taller than its clipping ancestor.
+_NAMES = [
+    "project-root",
+    "platform",
+    "admin",
+    "nexus",
+    "public-website",
+    "hub",
+    "realtruth",
+    "my-rcg",
+    "root",
+    "rcg-dev-install",
+    "d365-solutions",
+    "rcg-networks",
+    "swarm",
+    "budgetbug",
+    "queen",
+    "sculpt-studio",
+]
+_STATES = [WorkerState.BUZZING, WorkerState.RESTING, WorkerState.WAITING, WorkerState.STUNG]
+
+# iPhone-ish. The switcher only exists below the mobile breakpoint; at desktop width the
+# pill list is shown instead and this whole control is display:none.
+_PHONE = {"width": 390, "height": 844}
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+@pytest.fixture
+def phone_page(monkeypatch):
+    """A real Chromium at phone width, with a full roster of workers."""
+    pw = pytest.importorskip("playwright.sync_api")
+
+    monkeypatch.setenv("SWARM_API_PASSWORD", _PASSWORD)
+    workers = [
+        Worker(
+            name=name,
+            path="/tmp",
+            provider_name="claude",
+            state=_STATES[i % len(_STATES)],
+        )
+        for i, name in enumerate(_NAMES)
+    ]
+    daemon = make_daemon(monkeypatch=monkeypatch, workers=workers)
+    daemon._wire_task_board()
+
+    port = _free_port()
+    ready = threading.Event()
+    state: dict[str, object] = {}
+
+    def _serve() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        app = create_app(daemon, enable_web=True)
+        server = TestServer(app, port=port)
+        loop.run_until_complete(server.start_server())
+        state["loop"] = loop
+        ready.set()
+        loop.run_forever()
+
+    thread = threading.Thread(target=_serve, daemon=True)
+    thread.start()
+    assert ready.wait(timeout=20), "the test server never came up"
+
+    cookie_value, _ = create_session_cookie(_PASSWORD)
+    with pw.sync_playwright() as p:
+        browser = p.chromium.launch()
+        context = browser.new_context(viewport=_PHONE)
+        context.add_cookies(
+            [{"name": "swarm_session", "value": cookie_value, "domain": "127.0.0.1", "path": "/"}]
+        )
+        page = context.new_page()
+        try:
+            yield page, daemon, f"http://127.0.0.1:{port}"
+        finally:
+            with contextlib.suppress(Exception):
+                browser.close()
+            loop = state.get("loop")
+            if loop is not None:
+                loop.call_soon_threadsafe(loop.stop)
+            thread.join(timeout=5)
+
+
+def _open_selector(page, base):
+    page.goto(f"{base}/", wait_until="domcontentloaded")
+    page.wait_for_selector("#wsel-trigger", timeout=15000)
+    page.click("#wsel-trigger")
+    page.wait_for_selector("#wsel-list:not([hidden])", timeout=5000)
+
+
+@pytest.mark.browser
+def test_the_selector_is_the_control_shown_at_phone_width(phone_page):
+    """POSITIVE CONTROL. Everything below is meaningless if the page is rendering the
+    desktop pill list instead — the assertions would pass against the wrong control, or
+    fail for a reason that has nothing to do with clipping."""
+    page, _daemon, base = phone_page
+    page.goto(f"{base}/", wait_until="domcontentloaded")
+    page.wait_for_selector("#wsel-trigger", timeout=15000)
+
+    assert page.locator("#wsel-trigger").is_visible(), "the mobile switcher is not shown"
+    assert page.locator("#wsel-list").count() == 1
+    assert not page.locator("#wsel-list").is_visible(), "the list starts open"
+
+
+_PAINTED_JS = """() => {
+    // Scroll the list through its OWN range and collect every worker the browser
+    // actually paints. elementFromPoint is the only honest measure here: an element
+    // clipped by an ancestor keeps its full layout box, so getBoundingClientRect and
+    // Playwright's is_visible() both report a cropped row as present and correct.
+    const list = document.querySelector('#wsel-list');
+    const opts = [...list.querySelectorAll('.wsel-opt')];
+    const seen = new Set();
+    const step = Math.max(1, list.clientHeight - 20);
+    for (let top = 0; top <= list.scrollHeight; top += step) {
+        list.scrollTop = top;
+        for (const o of opts) {
+            const r = o.getBoundingClientRect();
+            const el = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+            if (el && el.closest('#wsel-list') === list) seen.add(o.dataset.worker);
+        }
+    }
+    list.scrollTop = 0;
+    return {painted: [...seen], total: opts.length};
+}"""
+
+
+@pytest.mark.browser
+def test_every_worker_can_actually_be_seen_in_the_open_list(phone_page):
+    """THE REPORTED BUG: "the selector doesnt show all the workers."
+
+    MEASURED, after two weaker versions of this test failed to detect the defect at all.
+    Ancestor clipping does not change an element's layout box, so ``bounding_box()`` and
+    ``is_visible()`` both report a cropped row as fine — the first drafts passed with the
+    fix REMOVED, which is the only reason the mistake surfaced. Asking the browser what
+    it paints at a point is what distinguishes the two.
+
+    Numbers from the run that settled it: with the fix, every worker is reachable across
+    the list's own scroll range; without it, exactly ONE of sixteen is ever painted.
+    """
+    page, _daemon, base = phone_page
+    _open_selector(page, base)
+
+    out = page.evaluate(_PAINTED_JS)
+    assert out["total"] == len(_NAMES), f"only {out['total']} rows rendered"
+    missing = sorted(set(_NAMES) - set(out["painted"]))
+    assert not missing, (
+        f"{len(missing)} of {len(_NAMES)} workers are never painted, so they cannot be "
+        f"reached at any scroll position: {missing}"
+    )
+
+
+@pytest.mark.browser
+def test_the_list_is_not_cropped_to_the_row_it_lives_in(phone_page):
+    """States the defect in its own terms, as a second signal on the same fix.
+
+    The switcher sits in .worker-list > .panel-body, a single ~45px row on mobile, and
+    .worker-list is clipped by .panel { overflow: hidden }. Compares how much of the
+    list is PAINTED against that row, rather than asserting a pixel count that would
+    need revisiting whenever padding changes.
+    """
+    page, _daemon, base = phone_page
+    _open_selector(page, base)
+
+    painted = page.evaluate(_PAINTED_JS)["painted"]
+    row_h = page.locator(".worker-list > .panel-body").bounding_box()["height"]
+    # A ~45px row can show at most one 44px option. Anything more proves the list has
+    # escaped it.
+    assert len(painted) > 2, (
+        f"only {len(painted)} workers are painted — about what fits in the {row_h}px row "
+        "containing the switcher, i.e. the list is still clipped to it"
+    )
+
+
+@pytest.mark.browser
+def test_the_open_list_is_not_painted_over_by_the_panel_below(phone_page):
+    """Un-clipping alone is not enough: escaping the overflow lets it paint outside and
+    then be covered by the terminal panel, which looks identical to still being clipped.
+
+    Asked as a hit test — what does the browser say is actually on top at that point —
+    because a z-index in the stylesheet proves nothing about stacking contexts.
+    """
+    page, _daemon, base = phone_page
+    _open_selector(page, base)
+
+    # Scroll it into the list's own viewport FIRST. The list scrolls internally
+    # (max-height: 60vh), so the last option's box is otherwise below the visible area
+    # and the hit test samples a point over the panel behind it — measuring my own test
+    # bug rather than the app's stacking.
+    last = page.locator("#wsel-list .wsel-opt").last
+    last.scroll_into_view_if_needed()
+    box = last.bounding_box()
+    top = page.evaluate(
+        "([x, y]) => { const el = document.elementFromPoint(x, y);"
+        " return el ? (el.closest('#wsel-list') ? 'list' : el.className) : 'none'; }",
+        [box["x"] + box["width"] / 2, box["y"] + box["height"] / 2],
+    )
+    assert top == "list", f"something else is on top of the last option: {top}"
+
+
+@pytest.mark.browser
+def test_choosing_a_worker_from_the_bottom_of_the_list_selects_it(phone_page):
+    """End to end, on the row that was unreachable before the fix. Proves the control
+    still WORKS after being un-clipped, not merely that it is visible."""
+    page, _daemon, base = phone_page
+    _open_selector(page, base)
+
+    last = page.locator("#wsel-list .wsel-opt").last
+    name = last.get_attribute("data-worker")
+    last.scroll_into_view_if_needed()
+    last.click()
+
+    # state="hidden" — wait_for_selector waits for VISIBLE by default, so waiting on a
+    # hidden element can never succeed and times out regardless of the app's behaviour.
+    page.wait_for_selector("#wsel-list", state="hidden", timeout=5000)
+    assert name in page.locator("#wsel-trigger").inner_text(), (
+        f"selecting {name} did not update the trigger"
+    )

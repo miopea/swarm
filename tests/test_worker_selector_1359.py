@@ -39,6 +39,18 @@ _BASE = (_WEB / "templates" / "base.html").read_text(encoding="utf-8")
 _JS = (_WEB / "static" / "dashboard.js").read_text(encoding="utf-8")
 
 
+def _js_function(name: str) -> str:
+    """A whole JS function body, bounded by its closing brace.
+
+    NOT a fixed character window. Two assertions in this file went red the moment
+    wselChoose grew, because each sliced a guessed number of characters and the code it
+    was looking for fell off the end — a false failure that reads exactly like a real
+    regression. Same mistake, twice, in the same session.
+    """
+    i = _JS.index("function " + name)
+    return _JS[i : _JS.index("\n    }\n", i)]
+
+
 def _option_block() -> str:
     """The listbox markup only — comments stripped.
 
@@ -171,8 +183,7 @@ def test_the_tap_targets_are_big_enough():
 def test_selection_goes_through_the_same_entry_point_as_the_desktop_pills():
     """Two selection paths drift. The pills and the selector must agree on what
     choosing a worker means."""
-    i = _JS.index("function wselChoose")
-    assert "window.selectWorker" in _JS[i : i + 600], (
+    assert "window.selectWorker" in _js_function("wselChoose"), (
         "the selector does not route through window.selectWorker"
     )
 
@@ -212,3 +223,23 @@ def test_the_whole_partial_is_balanced():
         opens = len(re.findall(rf"<{tag}[\s>]", code))
         closes = len(re.findall(rf"</{tag}>", code))
         assert opens == closes, f"<{tag}>: {opens} opened, {closes} closed in the partial"
+
+
+def test_the_trigger_updates_immediately_on_selection():
+    """A REGRESSION THE NATIVE CONTROL DID NOT HAVE, caught in a real browser.
+
+    A <select> repaints its selected option the instant you pick one — the browser does
+    it. A custom control gets nothing for free, and this trigger's label is
+    server-rendered from ``selected_worker``, so after a tap it kept reading "Select a
+    worker" until the next partial refresh. The control looked like it had ignored the
+    input, which is the one thing a selector must never do.
+
+    Pinned inside wselChoose specifically: doing it only on the server render is the
+    behaviour that was wrong, and it looks perfectly correct in the template.
+    """
+    body = _js_function("wselChoose")
+    assert "wsel-trigger-name" in body, (
+        "wselChoose does not update the trigger label, so the control appears to ignore "
+        "the tap until the next server render"
+    )
+    assert "aria-label" in body, "the accessible name still names the previous worker"

@@ -391,6 +391,27 @@
         if (!el) return;
         var name = el.getAttribute('data-worker');
         wselOpen(false);
+        // Update the trigger NOW, from the row that was chosen. A native <select> did
+        // this for free — the browser repaints the selected option the instant you pick
+        // it. A custom control gets no such thing, and the label is otherwise
+        // server-rendered from `selected_worker`, so it kept reading "Select a worker"
+        // until the next partial refresh: the control looked like it had ignored the tap.
+        // The next render confirms this; it is a head start, not a second source of truth.
+        var trig = wselTrigger();
+        if (trig && name) {
+            var icon = el.querySelector('img, .state-dot');
+            var label = el.querySelector('.wsel-opt-name');
+            var into = trig.querySelector('.wsel-trigger-name');
+            if (into && label) {
+                into.textContent = name;
+                into.className = 'wsel-trigger-name ' + (label.className || '')
+                    .replace('wsel-opt-name', '').trim();
+            }
+            var old = trig.querySelector('img, .state-dot');
+            if (icon && old && old.parentNode === trig) trig.replaceChild(icon.cloneNode(true), old);
+            else if (icon && !old) trig.insertBefore(icon.cloneNode(true), trig.firstChild);
+            trig.setAttribute('aria-label', 'Switch worker — currently ' + name);
+        }
         // Same entry point the desktop pills use — one selection path, so the two views
         // cannot diverge on what selecting a worker means.
         if (name && typeof window.selectWorker === 'function') window.selectWorker(name);
