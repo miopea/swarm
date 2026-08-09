@@ -165,10 +165,12 @@ def test_the_duration_comes_from_history_not_from_started_at():
 
     src = Path("src/swarm/server/jira_service.py").read_text()
     tree = ast.parse(src)
+    # FOLLOWS THE CALL. The history lookup moved into _worked_seconds when the backfill
+    # started sharing it; asserting against fire_worklog's own body would now check the
+    # wrong function, and loosening the assertion would quietly stop testing anything.
     fn = next(
-        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "fire_worklog"
+        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_worked_seconds"
     )
-    # Drop the docstring node, then unparse: comments are already gone from the AST.
     if fn.body and isinstance(fn.body[0], ast.Expr) and isinstance(fn.body[0].value, ast.Constant):
         fn.body = fn.body[1:]
     code = ast.unparse(fn)
@@ -177,6 +179,11 @@ def test_the_duration_comes_from_history_not_from_started_at():
         "the worklog duration is not reconstructed from task history"
     )
     assert "started_at" not in code, "still subtracting started_at, which activate() resets"
+
+    fire = next(
+        n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "fire_worklog"
+    )
+    assert "_worked_seconds" in ast.unparse(fire), "fire_worklog no longer uses the helper"
 
 
 @pytest.mark.asyncio
@@ -268,3 +275,141 @@ def test_the_writer_sweep_can_see_the_functions_it_checks():
     }
     for expected in ("log_work", "transition_issue", "create_issue", "add_worklog"):
         assert expected in names, f"{expected} is not in the module; the sweep checks nothing"
+
+
+# --- follow-up 1: EVERY completion path logs time -----------------------------
+
+
+def test_every_completion_entry_point_goes_through_complete_task():
+    """I recorded a follow-up in #1339 claiming the dashboard's force-complete path
+    logged no worklog. THAT WAS WRONG, and this pins why.
+
+    queen_force_complete_task and the dashboard route both call d.complete_task(...),
+    and `force` is a PARAMETER of that same function — the side-effects block containing
+    fire_completion runs either way. Rather than delete the claim quietly, the guarantee
+    it doubted is now asserted, so a future path that bypasses complete_task is caught.
+    """
+    coord = Path("src/swarm/server/task_coordinator.py").read_text()
+    body = coord[coord.index("def complete_task") :]
+    body = body[: body.index("\n    def ", 10)]
+    assert "fire_completion" in body, "the shared completion path no longer logs work"
+
+    queen = Path("src/swarm/mcp/queen_handlers/_tasks.py").read_text()
+    force = queen[queen.index("def _handle_force_complete_task") :][:3000]
+    assert "complete_task(" in force, "force-complete bypasses the shared path again"
+
+    dash = Path("src/swarm/web/routes/tasks.py").read_text()
+    route = dash[dash.index("async def handle_action_complete_task") :][:1200]
+    assert "complete_task(" in route, "the dashboard bypasses the shared path"
+
+
+# --- follow-up 2: time refused while unconfirmed is retried, not lost ----------
+
+
+def _svc_backfill(board: TaskBoard, jira: Any, history: Any = None):
+    from swarm.server.jira_service import JiraService
+
+    svc = JiraService.__new__(JiraService)
+    svc._task_board = board
+    svc._get_jira = lambda: jira
+    svc._drone_log = MagicMock()
+    svc._broadcast_ws = lambda _p: None
+    svc._track_task = lambda _t: None
+    svc._task_history = history if history is not None else MagicMock()
+    return svc
+
+
+def _done_linked(board: TaskBoard, key: str, *, age_s: float = 0) -> SwarmTask:
+    import time as _t
+
+    t = board.add(SwarmTask(title="t", description=""))
+    board.set_jira_key(t.id, key)
+    board.assign(t.id, "api")
+    board.activate(t.id)
+    board.complete(t.id, "done")
+    task = board.get(t.id)
+    task.completed_at = _t.time() - age_s
+    return task
+
+
+@pytest.mark.asyncio
+async def test_a_task_closed_while_unconfirmed_is_retried_later(board: TaskBoard):
+    """THE GAP. log_work correctly refuses for an unconfirmed project, but nothing tried
+    again — so confirming a workflow silently forfeited the work already done under it."""
+    _done_linked(board, "WWD-1")
+    jira = MagicMock()
+    jira.enabled = True
+    jira.log_work = AsyncMock(return_value=True)
+    history = MagicMock()
+    history.get_events.return_value = []
+    svc = _svc_backfill(board, jira, history)
+    svc._worked_seconds = lambda _t: 1800.0
+
+    assert await svc.backfill_worklogs() == 1
+    jira.log_work.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_an_already_billed_task_writes_nothing(board: TaskBoard):
+    """Idempotent by REUSE: log_work reads the ticket's worklogs and skips its own
+    marker, so re-offering a billed task is a no-op and needs no extra bookkeeping."""
+    _done_linked(board, "WWD-2")
+    jira = MagicMock()
+    jira.enabled = True
+    jira.log_work = AsyncMock(return_value=False)  # marker already present
+    svc = _svc_backfill(board, jira)
+    svc._worked_seconds = lambda _t: 1800.0
+
+    assert await svc.backfill_worklogs() == 0
+
+
+@pytest.mark.asyncio
+async def test_old_closures_age_out_of_the_window(board: TaskBoard):
+    """Bounded, or a board with hundreds of closed linked tasks re-reads all of them
+    every five minutes forever."""
+    _done_linked(board, "WWD-OLD", age_s=30 * 24 * 3600)
+    jira = MagicMock()
+    jira.enabled = True
+    jira.log_work = AsyncMock(return_value=True)
+    svc = _svc_backfill(board, jira)
+    svc._worked_seconds = lambda _t: 1800.0
+
+    assert await svc.backfill_worklogs() == 0
+    jira.log_work.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_the_per_cycle_cap_holds(board: TaskBoard):
+    for i in range(25):
+        _done_linked(board, f"WWD-{i}")
+    jira = MagicMock()
+    jira.enabled = True
+    jira.log_work = AsyncMock(return_value=True)
+    svc = _svc_backfill(board, jira)
+    svc._worked_seconds = lambda _t: 1800.0
+
+    await svc.backfill_worklogs()
+    assert jira.log_work.await_count <= 10, (
+        f"the backfill read {jira.log_work.await_count} tickets in one cycle"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_task_with_no_substantiated_time_is_skipped(board: TaskBoard):
+    """Never invent a timesheet entry to fill a gap."""
+    _done_linked(board, "WWD-3")
+    jira = MagicMock()
+    jira.enabled = True
+    jira.log_work = AsyncMock(return_value=True)
+    svc = _svc_backfill(board, jira)
+    svc._worked_seconds = lambda _t: None
+
+    assert await svc.backfill_worklogs() == 0
+    jira.log_work.assert_not_called()
+
+
+def test_the_backfill_is_wired_into_the_sync_loop():
+    src = Path("src/swarm/server/jira_service.py").read_text()
+    loop = src[src.index("async def sync_loop") :]
+    loop = loop[: loop.index("except asyncio.CancelledError")]
+    assert "backfill_worklogs()" in loop, "nothing ever retries a refused worklog"

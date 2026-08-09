@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -245,16 +246,72 @@ class JiraService:
         """
 
         async def _work(jira: Any, task: Any) -> bool:
-            history = getattr(self, "_task_history", None)
-            if history is None:
-                return False
-            seconds = active_seconds(history.get_events(task.id, limit=500))
+            seconds = self._worked_seconds(task)
             if not seconds:
                 _log.debug("no substantiated active time for #%s; nothing logged", task.number)
                 return False
             return await jira.log_work(task, seconds)
 
         self.fire_jira(task_id, "worklog", _work)
+
+    def _worked_seconds(self, task: Any) -> float | None:
+        """Reconstructed ACTIVE time for a task, or None when it cannot be substantiated."""
+        history = getattr(self, "_task_history", None)
+        if history is None:
+            return None
+        return active_seconds(history.get_events(task.id, limit=500))
+
+    # A task closed while its project was unconfirmed has its time refused, and nothing
+    # retried once the operator confirmed — the work was simply never billed. Bounded so
+    # the backfill cannot become a per-cycle scan of the whole board.
+    _WORKLOG_BACKFILL_WINDOW = 7 * 24 * 3600
+    _WORKLOG_BACKFILL_PER_CYCLE = 10
+
+    async def backfill_worklogs(self) -> int:
+        """Log time for recently-closed tasks whose worklog never made it. Returns count.
+
+        THE GAP: log_work refuses when the ticket's project is unconfirmed, which is
+        correct — a worklog is a write to a shared tracker. But nothing ever tried again,
+        so every task closed before the operator confirmed that project lost its time
+        permanently. Confirming a workflow should not silently forfeit the work already
+        done under it.
+
+        IDEMPOTENT BY REUSE, not by new bookkeeping: log_work already reads the ticket's
+        existing worklogs and skips its own marker, so re-offering a task that was
+        already billed writes nothing. That also means this needs no "already backfilled"
+        flag, and it survives a restart.
+
+        BOUNDED TWICE — a seven-day window and a per-cycle cap — because the check costs
+        one worklog read per candidate. Unbounded, a board with hundreds of closed linked
+        tasks would re-read all of them every five minutes forever.
+        """
+        jira = self._get_jira()
+        if not jira or not jira.enabled:
+            return 0
+        cutoff = time.time() - self._WORKLOG_BACKFILL_WINDOW
+        candidates = [
+            t
+            for t in self._task_board.all_tasks
+            if t.jira_key and t.status is TaskStatus.DONE and (t.completed_at or 0) >= cutoff
+        ]
+        candidates.sort(key=lambda t: t.completed_at or 0, reverse=True)
+
+        written = 0
+        for task in candidates[: self._WORKLOG_BACKFILL_PER_CYCLE]:
+            seconds = self._worked_seconds(task)
+            if not seconds:
+                continue
+            try:
+                if await jira.log_work(task, seconds):
+                    written += 1
+                    _log.warning(
+                        "jira: backfilled a missing worklog on %s for #%s",
+                        task.jira_key,
+                        task.number,
+                    )
+            except Exception:
+                _log.warning("jira: worklog backfill for %s raised", task.jira_key, exc_info=True)
+        return written
 
     def plan_exports(self) -> list[dict[str, Any]]:
         """What a reconcile WOULD change, without touching Jira. The dry run.
@@ -661,5 +718,8 @@ class JiraService:
                 # ...and a blocked task says nothing to anyone outside Swarm unless the
                 # ticket itself is told.
                 await self.reconcile_blockers()
+                # ...and time refused while a project was unconfirmed is otherwise lost
+                # for good, since nothing retried after the operator confirmed it.
+                await self.backfill_worklogs()
         except asyncio.CancelledError:
             return
