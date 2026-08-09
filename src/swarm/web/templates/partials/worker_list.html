@@ -63,19 +63,60 @@
    fallback loop to cover: with no filtering, no worker can be dropped from the only
    mobile way to reach one. #}
 <div class="worker-switcher">
-    <select id="worker-switcher-select" aria-label="Switch worker">
-        {% for w in workers %}
-        <option value="{{ w.name }}" {% if w.name == selected_worker %}selected{% endif %}>{{ w.state }} · {{ w.name }} ({{ w.provider }})</option>
-        {% endfor %}
-    </select>
-    {# The pinned active chip is GONE (#1359, operator: "it was showing the worker to
-       the right of the drop-down menu which was odd cuz it didn't reflect anything").
-       It was added when the operator asked for "dropdown PLUS the active worker always
-       visible" — this reverses that, at his request, having seen it in use.
-       Why it read as noise: a native <select> ALWAYS renders its selected option, so
-       the chip repeated the text six pixels to its left. The only thing it added was
-       the bee icon and state colour, which is exactly what a formatted selector should
-       carry inside the row instead of bolted alongside it. #}
+    {# CUSTOM SELECTOR, replacing the native <select> (#1359, email 3: "hard to scan
+       because it all looks the same" / "we're using the drop down default for HTML,
+       there's no formatting. I think maybe a custom selector will give a lot more
+       freedom on design").
+       A native <option> can hold TEXT ONLY — no icon, no colour, no second line — so
+       every worker rendered as "BUZZING · name (claude)" in one uniform grey. That is
+       the whole complaint, and no amount of CSS fixes it; the control has to change.
+       Still rendered HERE, in the partial, for the same reason the <select> was: it
+       re-renders on every workers_changed swap, so the rows stay in sync with worker
+       state for free rather than needing a JS sync path that can drift. #}
+    <div class="wsel" id="worker-switcher">
+        <button type="button" class="wsel-trigger" id="wsel-trigger"
+                role="combobox" aria-haspopup="listbox" aria-expanded="false"
+                aria-controls="wsel-list"
+                aria-label="Switch worker{% if selected_worker %} — currently {{ selected_worker }}{% endif %}">
+            {# Deliberately a loop rather than selectattr: the OPTION LIST below must
+               provably never be filtered (a filtered list can drop a worker and make it
+               unreachable on mobile), and a test enforces that by rejecting filter
+               helpers in this file. Keeping the trigger free of them keeps that guard
+               blunt-but-honest instead of needing an exception. #}
+            {% for w in workers if w.name == selected_worker %}
+            {{ worker_bee(w.state) }}<span class="wsel-trigger-name {{ state_color(w.state) }}">{{ w.name }}</span>
+            {% endfor %}
+            {% if not selected_worker %}
+            <span class="wsel-trigger-name text-muted">Select a worker</span>
+            {% endif %}
+            <span class="wsel-caret" aria-hidden="true">&#x25BE;</span>
+        </button>
+        {# hidden, not display:none in CSS alone — `hidden` keeps it out of the
+           accessibility tree too, so a screen reader does not read sixteen workers
+           that are not on screen. #}
+        <ul class="wsel-list" id="wsel-list" role="listbox" tabindex="-1" hidden
+            aria-label="Workers">
+            {% for w in workers %}
+            <li class="wsel-opt{% if w.name == selected_worker %} wsel-opt-selected{% endif %}"
+                role="option" id="wsel-opt-{{ loop.index }}" data-worker="{{ w.name }}"
+                aria-selected="{{ 'true' if w.name == selected_worker else 'false' }}">
+                <span class="wsel-state-bar state-bg-{{ w.state }}" aria-hidden="true"></span>
+                {{ worker_bee(w.state) }}
+                <span class="wsel-opt-body">
+                    <span class="wsel-opt-line1">
+                        <span class="wsel-opt-name {{ state_color(w.state) }}">{{ w.name }}</span>
+                        <span class="wsel-opt-provider">{{ w.provider }}</span>
+                    </span>
+                    <span class="wsel-opt-line2">
+                        <span class="{{ state_color(w.state) }}">{{ w.state }}</span>
+                        {% if w.needs_operator_input %}<span class="wsel-opt-needs">needs you</span>{% endif %}
+                        {% if worker_tasks and worker_tasks.get(w.name) %}<span class="wsel-opt-task" title="{{ worker_tasks[w.name] }}">{{ worker_tasks[w.name] }}</span>{% endif %}
+                    </span>
+                </span>
+            </li>
+            {% endfor %}
+        </ul>
+    </div>
 </div>
 {% for w in workers %}
 {{ worker_row(w, selected_worker, worker_tasks) }}

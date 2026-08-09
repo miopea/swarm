@@ -164,7 +164,8 @@ def test_the_mobile_switcher_is_rendered_by_the_partial():
     """Item 1. Rendered INSIDE the partial on purpose: it re-renders on every
     workers_changed swap, so the dropdown stays in sync with worker state without a
     separate JS sync path that could drift."""
-    assert "worker-switcher-select" in _PARTIAL, "no mobile switcher in the worker partial"
+    assert "wsel-trigger" in _PARTIAL, "no mobile switcher trigger in the worker partial"
+    assert 'role="listbox"' in _PARTIAL, "the switcher's option list is missing"
     # The pinned active chip that used to be asserted here is gone — #1359, operator:
     # "it was showing the worker to the right of the drop-down menu which was odd cuz it
     # didn't reflect anything". A native <select> always renders its selected option, so
@@ -190,23 +191,37 @@ def test_the_switcher_order_matches_the_pill_order():
     fallback loop to cover: with no filtering, no worker can be dropped from what is the
     only way to reach one on mobile.
     """
+    # Scoped to the OPTION LIST, which is what the guarantee is about — the trigger
+    # legitimately shows one worker. Comments stripped first: they discuss filtering,
+    # and matching my own prose instead of the code is a mistake this file has made
+    # before.
     code = re.sub(r"\{#.*?#\}", "", _PARTIAL, flags=re.S)
-    assert "sort(attribute=" not in code, (
+    ul = code[code.index('role="listbox"') : code.index("</ul>")]
+    assert "sort(attribute=" not in ul, (
         "the switcher re-sorts the workers; it must preserve the pill order"
     )
-    assert "selectattr(" not in code, (
+    assert "selectattr(" not in ul and "|selectattr" not in ul, (
         "the switcher filters the workers; every worker must appear, in the given order"
+    )
+    assert re.search(r"\{%\s*for\s+w\s+in\s+workers\s*%\}", ul), (
+        f"the option list no longer iterates `workers` untouched: {ul[:200]}"
     )
 
 
 def test_the_switcher_change_handler_is_delegated():
     """A directly-bound listener would die on the first htmx swap of the worker list,
     which presents as an intermittently dead dropdown rather than a broken one."""
-    assert "worker-switcher-select" in _JS
-    m = re.search(
-        r"document\.addEventListener\('change'[^)]*\)[^{]*\{[^}]*worker-switcher-select", _JS, re.S
+    assert "wsel-trigger" in _JS
+    for event in ("click", "keydown"):
+        assert re.search(r"document\.addEventListener\('" + event + r"'", _JS), (
+            f"the switcher's {event} handling is not delegated on document"
+        )
+    # The control is now a listbox, so its OPEN STATE must also survive a swap. Keeping
+    # it on <body> is the mechanism: the partial cannot replace that node.
+    assert "document.body.classList.toggle('wsel-open'" in _JS, (
+        "open state is stored on the control itself, so an htmx swap mid-interaction "
+        "slams the list shut while the operator is reading it"
     )
-    assert m, "the switcher handler is not delegated on document"
 
 
 def test_the_pills_and_their_scroll_fade_are_hidden_on_mobile_not_deleted():
@@ -271,7 +286,10 @@ def test_the_switcher_renders_every_worker_in_the_intended_order():
         _w("zz", "WEIRD_STATE"),
     ]
     html = _render_worker_partial(workers)
-    opts = re.findall(r'<option value="([^"]+)"', html)
+    # data-worker on the listbox options — the custom selector replaced <option>,
+    # which could only ever hold flat text (#1359).
+    ul = html[html.index('role="listbox"') : html.index("</ul>")]
+    opts = re.findall(r'data-worker="([^"]+)"', ul)
 
     assert sorted(opts) == sorted(["swarm", "sculpt-studio", "api", "zz"]), (
         f"a worker is missing from the switcher and is unreachable on mobile: {opts}"
@@ -281,7 +299,9 @@ def test_the_switcher_renders_every_worker_in_the_intended_order():
     )
     # Preselection is what makes the chip unnecessary: the <select> itself shows which
     # worker you are on, which is why #1359 removed the chip beside it.
-    assert 'value="swarm" selected' in html, "the current worker is not preselected"
+    assert 'data-worker="swarm"' in html and 'aria-selected="true"' in html, (
+        "the current worker is not marked selected in the listbox"
+    )
     assert html.count('class="worker-item') >= 4, "desktop pills were lost"
 
 

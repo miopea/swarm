@@ -2730,16 +2730,77 @@
                 min-width: 0;
                 padding: 0;
             }
-            .worker-switcher > select {
-                flex: 1 1 auto;
-                min-width: 0;
-                font-family: inherit;
-                font-size: 0.8rem;
+            /* CUSTOM WORKER SELECTOR (#1359). The native <select> it replaces could
+               only ever render one line of uniform grey text per worker — "BUZZING ·
+               name (claude)" — which is precisely the "it all looks the same" report.
+               State is carried by COLOUR AND ICON here, so it reads without being read. */
+            .wsel { position: relative; flex: 1 1 auto; min-width: 0; }
+            .wsel-trigger {
+                display: flex; align-items: center; gap: 0.35rem;
+                width: 100%; min-width: 0;
+                font-family: inherit; font-size: 0.8rem;
                 padding: 0.35rem 0.5rem;
-                border-radius: 6px;
-                border: 1px solid var(--border);
-                background: var(--surface);
-                color: var(--text);
+                border-radius: 6px; border: 1px solid var(--border);
+                background: var(--surface); color: var(--text);
+                cursor: pointer; text-align: left;
+            }
+            .wsel-trigger-name {
+                flex: 1 1 auto; min-width: 0;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            }
+            .wsel-caret { flex-shrink: 0; color: var(--muted); font-size: 0.7rem; }
+            .wsel-list {
+                position: absolute; z-index: 1200;
+                top: calc(100% + 2px); left: 0; right: 0;
+                margin: 0; padding: 0.25rem; list-style: none;
+                background: var(--panel);
+                border: 1px solid var(--honey); border-radius: 8px;
+                box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+                /* Sixteen workers do not fit a phone. Scroll the LIST rather than the
+                   page, so opening it never moves the content behind it. */
+                max-height: 60vh; overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            .wsel-opt {
+                display: flex; align-items: flex-start; gap: 0.4rem;
+                padding: 0.4rem 0.35rem;
+                border-radius: 6px; cursor: pointer;
+                /* 44px is the WCAG 2.1 AA target size; a 16-row list on a phone is
+                   exactly where a too-small target costs a mis-tap. */
+                min-height: 44px; box-sizing: border-box;
+            }
+            .wsel-opt + .wsel-opt { border-top: 1px solid var(--border); }
+            .wsel-opt:hover, .wsel-opt.wsel-active { background: var(--surface-raised); }
+            .wsel-opt-selected { outline: 1px solid var(--honey); outline-offset: -1px; }
+            /* The state as a colour stripe: scannable down the left edge without
+               reading a single word. */
+            .wsel-state-bar {
+                flex: 0 0 3px; align-self: stretch;
+                border-radius: 2px; background: var(--muted);
+            }
+            .state-bg-BUZZING { background: var(--leaf); }
+            .state-bg-WAITING { background: var(--honey); }
+            .state-bg-STUNG   { background: var(--poppy); }
+            .state-bg-RESTING { background: var(--lavender); }
+            .state-bg-SLEEPING { background: var(--muted); }
+            .wsel-opt-body { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 0.1rem; }
+            .wsel-opt-line1 { display: flex; align-items: baseline; gap: 0.3rem; min-width: 0; }
+            .wsel-opt-name {
+                font-size: 0.82rem; font-weight: 600;
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            }
+            /* Demoted, not removed — it is the least useful part of the row but still
+               tells two same-named providers apart. */
+            .wsel-opt-provider { font-size: 0.65rem; color: var(--muted); flex-shrink: 0; }
+            .wsel-opt-line2 {
+                display: flex; align-items: baseline; gap: 0.3rem;
+                font-size: 0.68rem; color: var(--muted); min-width: 0;
+            }
+            .wsel-opt-needs {
+                color: var(--honey); font-weight: 600; flex-shrink: 0;
+            }
+            .wsel-opt-task {
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
             }
 
             /* The pills and their scroll-fade are what the dropdown replaces. The

@@ -327,16 +327,119 @@
         else if (el.dataset.inputAction === 'msgFilterChanged') msgFilterChanged();
     });
 
-    // #1291 item 1: the mobile worker switcher.
-    // DELEGATED on document, deliberately: partials/worker_list.html is re-rendered on
-    // every workers_changed swap, so a listener bound directly to the <select> would be
-    // dropped on the first worker state change and the dropdown would go dead — the
-    // kind of failure that looks intermittent rather than broken.
-    // Calls window.selectWorker, the same entry point the desktop pills use.
-    document.addEventListener('change', function(e) {
-        if (!e.target || e.target.id !== 'worker-switcher-select') return;
-        var name = e.target.value;
+    // #1291 item 1 / #1359: the mobile worker switcher, now a custom listbox.
+    //
+    // EVERY handler here is DELEGATED on document, deliberately and non-negotiably:
+    // partials/worker_list.html is re-rendered wholesale on every workers_changed swap,
+    // so anything bound directly to the trigger or the list is dropped on the first
+    // worker state change and the control goes dead — a failure that reads as
+    // intermittent rather than broken, which is the worst kind to diagnose.
+    //
+    // OPEN STATE LIVES ON <body>, not on the control. Same reason: a swap mid-interaction
+    // would otherwise slam the list shut while the operator is reading it, and worker
+    // states change every few seconds. The class is on a node the partial cannot replace.
+    function wselList() { return document.getElementById('wsel-list'); }
+    function wselTrigger() { return document.getElementById('wsel-trigger'); }
+    function wselOpts() {
+        var l = wselList();
+        return l ? Array.prototype.slice.call(l.querySelectorAll('.wsel-opt')) : [];
+    }
+
+    function wselOpen(open) {
+        var list = wselList(), trig = wselTrigger();
+        document.body.classList.toggle('wsel-open', !!open);
+        if (list) list.hidden = !open;
+        if (trig) trig.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) {
+            // Start from the CURRENT worker rather than the top, so arrowing moves
+            // relative to where you are instead of somewhere you have to find first.
+            var opts = wselOpts();
+            var i = 0;
+            for (var k = 0; k < opts.length; k++) {
+                if (opts[k].getAttribute('aria-selected') === 'true') { i = k; break; }
+            }
+            wselActivate(i);
+            if (list) list.focus();
+        } else if (trig) {
+            trig.focus();
+        }
+    }
+
+    function wselActivate(index) {
+        var opts = wselOpts(), list = wselList();
+        if (!opts.length || !list) return;
+        if (index < 0) index = opts.length - 1;
+        if (index >= opts.length) index = 0;
+        opts.forEach(function (o) { o.classList.remove('wsel-active'); });
+        var el = opts[index];
+        el.classList.add('wsel-active');
+        // aria-activedescendant, NOT focus per option: focus stays on the listbox, which
+        // is what a screen reader expects of a listbox and what keeps Escape working.
+        list.setAttribute('aria-activedescendant', el.id || '');
+        if (el.scrollIntoView) el.scrollIntoView({ block: 'nearest' });
+    }
+
+    function wselActiveIndex() {
+        var opts = wselOpts();
+        for (var i = 0; i < opts.length; i++) {
+            if (opts[i].classList.contains('wsel-active')) return i;
+        }
+        return -1;
+    }
+
+    function wselChoose(el) {
+        if (!el) return;
+        var name = el.getAttribute('data-worker');
+        wselOpen(false);
+        // Same entry point the desktop pills use — one selection path, so the two views
+        // cannot diverge on what selecting a worker means.
         if (name && typeof window.selectWorker === 'function') window.selectWorker(name);
+    }
+
+    document.addEventListener('click', function (e) {
+        var trig = e.target && e.target.closest && e.target.closest('#wsel-trigger');
+        if (trig) {
+            e.preventDefault();
+            wselOpen(!document.body.classList.contains('wsel-open'));
+            return;
+        }
+        var opt = e.target && e.target.closest && e.target.closest('.wsel-opt');
+        if (opt) { e.preventDefault(); wselChoose(opt); return; }
+        // Anywhere else closes it. Without this the list survives a tap on the
+        // transcript behind it and sits over the content the operator just reached for.
+        if (document.body.classList.contains('wsel-open')) wselOpen(false);
+    });
+
+    document.addEventListener('keydown', function (e) {
+        var onTrigger = e.target && e.target.id === 'wsel-trigger';
+        var open = document.body.classList.contains('wsel-open');
+        if (onTrigger && !open && (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown')) {
+            e.preventDefault(); wselOpen(true); return;
+        }
+        if (!open) return;
+        var inList = e.target && (e.target.id === 'wsel-list' || onTrigger);
+        if (!inList) return;
+        if (e.key === 'Escape') { e.preventDefault(); wselOpen(false); return; }
+        if (e.key === 'ArrowDown') { e.preventDefault(); wselActivate(wselActiveIndex() + 1); return; }
+        if (e.key === 'ArrowUp') { e.preventDefault(); wselActivate(wselActiveIndex() - 1); return; }
+        if (e.key === 'Home') { e.preventDefault(); wselActivate(0); return; }
+        if (e.key === 'End') { e.preventDefault(); wselActivate(wselOpts().length - 1); return; }
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            var i = wselActiveIndex();
+            if (i >= 0) wselChoose(wselOpts()[i]);
+            return;
+        }
+    });
+
+    // A swap while the list is open replaces the <ul> with a fresh, hidden one. The
+    // body class survives (that is why it lives there), so re-apply it to the new node.
+    document.addEventListener('swarm:workers-rendered', function () {
+        if (document.body.classList.contains('wsel-open')) {
+            var list = wselList(), trig = wselTrigger();
+            if (list) list.hidden = false;
+            if (trig) trig.setAttribute('aria-expanded', 'true');
+        }
     });
 
     // Mobile email file upload (visible button for touch devices)
@@ -11446,6 +11549,11 @@
     // Re-select worker after HTMX swaps the worker list
     document.body.addEventListener('htmx:afterSwap', function(e) {
         if (e.detail.target.id === 'worker-list') {
+            // The mobile selector's <ul> was just replaced by a fresh, hidden one. Its
+            // open state lives on <body> precisely so it survives this, but the new node
+            // still has to be told. Dispatched rather than called directly to keep the
+            // selector's logic in one place instead of half of it living in this hook.
+            document.dispatchEvent(new CustomEvent('swarm:workers-rendered'));
             if (selectedWorker) {
                 var taskText = '';
                 var foundWorker = false;
