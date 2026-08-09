@@ -445,6 +445,7 @@ class SwarmDaemon(EventEmitter):
             track_task=self._track_task,
             get_sync_interval=lambda: self.config.jira.sync_interval_minutes * 60,
             message_store=self.message_store,
+            task_history=self.task_history,
         )
         # --- TestRunner: test mode lifecycle ---
         self.test_runner = TestRunner(

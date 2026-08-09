@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from swarm.logging import get_logger
 from swarm.tasks.task import HOLD_TAG, TaskStatus
+from swarm.tasks.worklog import active_seconds
 
 if TYPE_CHECKING:
     from swarm.drones.log import SystemLog
@@ -45,6 +46,7 @@ class JiraService:
         track_task: Callable[[asyncio.Task[object]], None],
         get_sync_interval: Callable[[], int],
         message_store: Any = None,
+        task_history: Any = None,
     ) -> None:
         self._get_jira = get_jira
         self._task_board = task_board
@@ -56,6 +58,7 @@ class JiraService:
         # messaging, and a missing store only costs the notification — the refresh
         # itself still happens and still logs.
         self._message_store = message_store
+        self._task_history = task_history
 
     async def run_import(self) -> int:
         """Execute a single Jira import cycle. Returns count of new tasks."""
@@ -226,6 +229,32 @@ class JiraService:
             "comment",
             lambda jira, task: jira.post_completion_comment(task),
         )
+        self.fire_worklog(task_id)
+
+    def fire_worklog(self, task_id: str) -> None:
+        """Log the time this task was actually worked against its ticket.
+
+        Fired alongside the completion comment, but as its own background task: a
+        worklog failure must not swallow the comment, nor the reverse.
+
+        The duration is reconstructed from task HISTORY rather than from
+        ``completed_at - started_at`` — ``activate`` resets ``started_at``, so that
+        subtraction reports only the final stretch and would under-bill any task that
+        was parked and resumed. Where the history cannot substantiate a duration,
+        nothing is logged: an invented timesheet entry is worse than an absent one.
+        """
+
+        async def _work(jira: Any, task: Any) -> bool:
+            history = getattr(self, "_task_history", None)
+            if history is None:
+                return False
+            seconds = active_seconds(history.get_events(task.id, limit=500))
+            if not seconds:
+                _log.debug("no substantiated active time for #%s; nothing logged", task.number)
+                return False
+            return await jira.log_work(task, seconds)
+
+        self.fire_jira(task_id, "worklog", _work)
 
     def plan_exports(self) -> list[dict[str, Any]]:
         """What a reconcile WOULD change, without touching Jira. The dry run.

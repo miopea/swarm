@@ -19,6 +19,7 @@ from swarm.tasks.task import (
     TaskStatus,
     TaskType,
 )
+from swarm.tasks.worklog import worklog_marker
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -351,6 +352,49 @@ class JiraClient:
             return await retry_transient(_do, what=f"jira assign {issue_key}")
         except (aiohttp.ClientError, TimeoutError):
             _log.warning("assign %s failed after retries", issue_key, exc_info=True)
+            return False
+
+    async def get_worklogs(self, issue_key: str) -> list[dict[str, Any]]:
+        """Existing worklogs on an issue. Used to avoid double-logging."""
+        session = await self._ensure_session()
+        url = f"{self._base_url}/rest/api/3/issue/{issue_key}/worklog"
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                _log.warning("worklog read for %s failed: %d", issue_key, resp.status)
+                return []
+            body = await resp.json()
+        worklogs = body.get("worklogs")
+        return worklogs if isinstance(worklogs, list) else []
+
+    async def add_worklog(self, issue_key: str, seconds: int, comment: str) -> bool:
+        """Log time against an issue. Returns True when Jira accepted it."""
+        session = await self._ensure_session()
+        url = f"{self._base_url}/rest/api/3/issue/{issue_key}/worklog"
+        payload: dict[str, Any] = {
+            "timeSpentSeconds": int(seconds),
+            "comment": {
+                "type": "doc",
+                "version": 1,
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}],
+            },
+        }
+
+        async def _do() -> bool:
+            async with session.post(url, json=payload) as resp:
+                if resp.status not in (200, 201):
+                    _log.warning(
+                        "worklog on %s failed: %d %s",
+                        issue_key,
+                        resp.status,
+                        (await resp.text())[:200],
+                    )
+                    return False
+                return True
+
+        try:
+            return await retry_transient(_do, what=f"jira worklog {issue_key}")
+        except (aiohttp.ClientError, TimeoutError):
+            _log.warning("worklog on %s failed after retries", issue_key, exc_info=True)
             return False
 
     async def create_issue(
@@ -873,6 +917,61 @@ class JiraSyncService:
                 task.jira_key,
                 target_name,
             )
+        return ok
+
+    # Jira rounds sub-minute worklogs to zero, so anything shorter is not loggable.
+    # Rounding UP to a minute is the honest choice for a task that genuinely took
+    # forty seconds; inventing more than that would overstate.
+    _MIN_WORKLOG_SECONDS = 60
+
+    async def log_work(self, task: SwarmTask, seconds: float) -> bool:
+        """Log *seconds* of work against the task's ticket. Returns True if written.
+
+        Refuses — and says why — rather than writing when it should not:
+
+        * an unconfirmed project. A worklog is a WRITE to a shared tracker, and the same
+          reasoning gates the export sweep: enabling an integration must not start
+          filling in other people's timesheets.
+        * a duration this swarm cannot substantiate. Callers pass None-safe values;
+          zero or negative means "we could not tell", and a guessed timesheet entry is
+          worse than none.
+        * a completion this swarm has already logged. Checked by READING Jira's existing
+          worklogs for our marker rather than by remembering locally, so it holds across
+          a daemon restart or a rebuilt database.
+        """
+        if not self.enabled or not task.jira_key or seconds <= 0:
+            return False
+
+        project_key = task.jira_key.split("-")[0] if "-" in task.jira_key else ""
+        if not self._config.is_confirmed(project_key):
+            _log.warning(
+                "jira: NOT logging work on %s — %s's workflow is unconfirmed. Confirm it "
+                "in Settings > Integrations to let Swarm write time.",
+                task.jira_key,
+                project_key or "(unknown project)",
+            )
+            return False
+
+        marker = worklog_marker(task.number, task.completed_at or time.time())
+        try:
+            existing = await self.client.get_worklogs(task.jira_key)
+        except Exception:
+            # Cannot tell whether we already logged -> do not risk double-billing.
+            _log.warning(
+                "jira: could not read worklogs for %s; skipping to avoid double-logging",
+                task.jira_key,
+                exc_info=True,
+            )
+            return False
+        if any(marker in _extract_text(w.get("comment", "")) for w in existing):
+            _log.debug("worklog for %s already present (%s)", task.jira_key, marker)
+            return False
+
+        billable = max(round(seconds), self._MIN_WORKLOG_SECONDS)
+        comment = f"Worked via Swarm on task #{task.number}. {marker}"
+        ok = await self.client.add_worklog(task.jira_key, billable, comment)
+        if ok:
+            _log.info("logged %ds against %s for task #%s", billable, task.jira_key, task.number)
         return ok
 
     async def post_completion_comment(self, task: SwarmTask) -> bool:
