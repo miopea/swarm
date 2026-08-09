@@ -1214,13 +1214,19 @@ class JiraSyncService:
         if not self.enabled or not task.jira_key:
             return False
 
-        parts = ["*Task completed in Swarm.*"]
-        if task.title:
-            parts.append(f"*Summary:* {task.title} — done.")
-        if task.assigned_worker:
-            parts.append(f"*Worker:* {task.assigned_worker}")
-        if task.resolution:
-            parts.append(f"\n----\n*Technical Resolution:*\n{task.resolution}")
+        parts: list[str] = []
+        reporter = _reporter_from_description(task.description)
+        if reporter:
+            parts.append(f"Hello {reporter},")
+            parts.append("")
+        parts.append(f"This has been resolved: {_outcome_sentence(task)}")
+        detail = _resolution_summary(task.resolution)
+        if detail:
+            parts.append("")
+            parts.append(f"What was done: {detail}")
+        parts.append("")
+        parts.append("Thank you,")
+        parts.append("Swarm (automated) on behalf of the RCG team")
 
         # Marked as Swarm's own, so the comment sync does not report it back to the
         # worker as "new activity" — see _latest_comment. The blocker note and the
@@ -1613,6 +1619,59 @@ def in_active_sprint(sprint_value: object) -> bool:
         elif isinstance(entry, str) and "state=active" in entry.lower():
             return True
     return False
+
+
+# How much of a resolution a ticket reader gets. Resolutions are written FOR FUTURE
+# WORKERS — they become learnings — and run to 3,800 characters of implementation
+# detail on real linked tasks. Posting that verbatim to a service-desk ticket is wrong
+# in kind, not merely in length: the reporter wanted to know their problem is fixed.
+_MAX_RESOLUTION_CHARS = 400
+
+
+def _reporter_from_description(description: str) -> str:
+    """The reporter's display name, read back from the synced block, or "".
+
+    Parsed from text Swarm itself rendered rather than re-fetched: the line is our own
+    deterministic format, and a completion comment should not need an extra API call to
+    address someone by name. Absent (an unsynced or unlinked task) simply means no
+    greeting.
+    """
+    for line in description.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("Reported by:"):
+            return stripped.removeprefix("Reported by:").strip()
+    return ""
+
+
+def _outcome_sentence(task: SwarmTask) -> str:
+    """One plain-language sentence naming what was addressed.
+
+    The TITLE, not the resolution: on this team's tickets a title reads like
+    "Computer locks after inactivity", which is exactly what the reporter recognises as
+    their problem.
+    """
+    title = (task.title or "").strip().rstrip(".")
+    return title if title else "the issue reported here"
+
+
+def _resolution_summary(resolution: str) -> str:
+    """The first paragraph of a resolution, capped, or "".
+
+    MEASURED HOUSE STYLE on this team's resolved service-desk tickets:
+        "The issue has been resolved. Removed Power automate from the pc."
+        "The site is now accessible. Mr. Schleifer did a workaround..."
+    One or two plain sentences. The first paragraph of a Swarm resolution is normally
+    its summary line; everything after it is implementation detail written for the next
+    worker, not for the person who raised the ticket.
+    """
+    text = (resolution or "").strip()
+    if not text:
+        return ""
+    first = text.split("\n\n", 1)[0].strip().replace("\n", " ")
+    if len(first) <= _MAX_RESOLUTION_CHARS:
+        return first
+    cut = first[:_MAX_RESOLUTION_CHARS].rsplit(" ", 1)[0]
+    return f"{cut}…"
 
 
 def _latest_comment(comment_field: object) -> str:

@@ -536,11 +536,20 @@ class TestJiraSyncService:
         ok = await svc.post_completion_comment(task)
         assert ok is True
         call_body = svc.client.add_comment.call_args[0][1]
-        assert "w1" in call_body
+        # CHANGED DELIBERATELY 2026-08-09. This used to assert the internal worker name
+        # appeared in the comment. It should not: "rcg-networks" means nothing to the
+        # person who raised the ticket and exposes internal routing on a customer-visible
+        # thread. The house style, measured from this team's own resolved service-desk
+        # tickets, is a short plain sentence addressed to the reporter.
+        # See tests/test_jira_closing_comment.py.
+        assert "w1" not in call_body, "the internal worker name is on a customer-visible ticket"
         assert "Fixed the issue" in call_body
         assert "Fix login page" in call_body
-        assert "Summary" in call_body
-        assert "Technical Resolution" in call_body
+        # The "*Summary:*" / "*Technical Resolution:*" headings are gone too. They were
+        # markup for a developer audience on a thread the reporter reads; the replacement
+        # says "This has been resolved: <title>" and "What was done: <first paragraph>".
+        assert "This has been resolved" in call_body
+        assert "Technical Resolution" not in call_body
 
     @pytest.mark.asyncio
     async def test_post_completion_comment_logs_success(
