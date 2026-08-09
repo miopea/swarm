@@ -1438,14 +1438,22 @@
            renderers for one panel drift, with the server-rendered one winning on load.
            That already happened once with the Jira mappings panel. Reusing the page
            means one renderer, one reconciler, and every action handler works unchanged. */
+        /* .bottom-tabbed is a CHILD of .detail-area, so hiding the detail area hides the
+           panel this mode exists to show. Hide the detail area's OTHER children — the
+           terminal panel and its resize handle — and let it carry the tabbed panel at
+           full height. Found by opening the page: the first version hid everything and
+           rendered blank, and the browser tests missed it because they asserted what
+           should be ABSENT and never that the panel was PRESENT. */
         body.panel-mode .worker-list,
-        body.panel-mode .detail-area,
+        body.panel-mode .detail-area > .panel:not(.bottom-tabbed),
+        body.panel-mode #resize-handle,
         body.panel-mode #status-bar .status-actions,
         body.panel-mode #bottom-panel-fab,
         body.panel-mode #cc-queen-strip { display: none !important; }
-        body.panel-mode .dashboard { grid-template-columns: 1fr; grid-template-rows: 1fr; padding: 0; }
-        body.panel-mode .bottom-tabbed { grid-column: 1; grid-row: 1; height: 100vh; max-height: 100vh; }
-        body.panel-mode .bottom-tabbed > .tab-content.active { max-height: none; }
+        body.panel-mode .dashboard { grid-template-columns: 1fr; padding: 0; }
+        body.panel-mode .detail-area { flex-direction: column; }
+        body.panel-mode .bottom-tabbed { flex: 1 1 auto; height: auto; max-height: none; }
+        body.panel-mode .bottom-tabbed > .tab-content.active { max-height: none; flex: 1 1 auto; }
         /* The pop-out control is meaningless inside the popped window itself. */
         body.panel-mode [data-action="popOutTasks"] { display: none !important; }
 

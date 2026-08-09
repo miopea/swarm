@@ -105,17 +105,31 @@ def test_panel_mode_is_detected_from_the_query_string():
 
 @pytest.mark.parametrize(
     "hidden",
-    [".worker-list", ".detail-area", "#bottom-panel-fab", "#cc-queen-strip"],
+    [".worker-list", ".detail-area > .panel:not(.bottom-tabbed)", "#bottom-panel-fab"],
 )
 def test_panel_mode_hides_everything_but_the_panel(hidden: str):
     assert f"body.panel-mode {hidden}" in _BASE, f"{hidden} is still shown in the popped window"
+
+
+def test_it_does_not_hide_the_container_the_panel_lives_in():
+    """FOUND BY OPENING THE PAGE — it rendered completely blank.
+
+    .bottom-tabbed is a CHILD of .detail-area, so hiding the detail area hides the panel
+    this mode exists to show. Every source scan and browser test passed anyway, because
+    they all asserted what should be ABSENT and none asserted the panel was PRESENT.
+    """
+    rules = _BASE[_BASE.index("body.panel-mode") : _BASE.index("body.panel-mode") + 1400]
+    assert "body.panel-mode .detail-area," not in rules, (
+        "the detail area is hidden wholesale, which hides the tasks panel inside it"
+    )
 
 
 def test_the_panel_itself_is_given_the_whole_window():
     """Otherwise it keeps the height it had as a bottom strip and the popped window is
     mostly empty."""
     assert "body.panel-mode .bottom-tabbed" in _BASE
-    assert "100vh" in _BASE[_BASE.index("body.panel-mode .bottom-tabbed") :][:200]
+    rule = _BASE[_BASE.index("body.panel-mode .bottom-tabbed") :][:220]
+    assert "flex: 1" in rule, "the panel does not expand to fill the window"
 
 
 def test_the_tasks_and_decisions_panels_are_the_ones_kept():

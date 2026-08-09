@@ -487,10 +487,18 @@ def test_panel_mode_renders_only_the_tasks_and_decisions_panel(playwright_page):
     page.goto(f"{base}/?panel=tasks", wait_until="domcontentloaded")
     page.wait_for_selector("body.panel-mode", timeout=10000)
 
-    assert page.locator("#tab-tasks").count() == 1, "the tasks panel is missing"
+    # THE ASSERTION THIS TEST WAS MISSING. The first version checked only that things
+    # were absent, so it passed while the page rendered completely BLANK — .bottom-tabbed
+    # is a child of .detail-area, which was being hidden wholesale. Presence first.
+    panel = page.locator(".bottom-tabbed")
+    assert panel.is_visible(), "the tasks panel is not visible; the popped window is blank"
+    assert panel.bounding_box()["height"] > 200, (
+        f"the panel collapsed to {panel.bounding_box()['height']}px — it is not filling the window"
+    )
+    assert page.locator("#tab-tasks").is_visible(), "the tasks tab content is not shown"
     assert page.locator("#tab-decisions").count() == 1, "the decisions panel is missing"
     assert not page.locator(".worker-list").is_visible(), "the worker sidebar is still shown"
-    assert not page.locator(".detail-area").is_visible(), "the terminal area is still shown"
+    assert not page.locator("#resize-handle").is_visible(), "the terminal resize handle is shown"
     # The pop-out control must not offer to pop out the popped window.
     assert not page.locator("#pop-out-tasks-btn").is_visible()
 
