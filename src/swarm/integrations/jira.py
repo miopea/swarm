@@ -1219,9 +1219,22 @@ class JiraSyncService:
         if not self.enabled or not task.jira_key:
             return False
 
-        account_id = self._token_manager.account_id if self._token_manager else ""
+        # The token manager discovers this at connect time via /myself, which returns
+        # 401 "scope does not match" on any install authorised before read:jira-user was
+        # requested — so on those installs it is permanently empty and this path has
+        # never once worked. Observed in the log 2026-08-09:
+        #   swarm.auth.jira: account_id discovery failed: 401
+        # _my_account_id already solves this: /myself first, then deriving the account
+        # from `assignee = currentUser()`, which needs only read:jira-work.
+        account_id = (self._token_manager.account_id if self._token_manager else "") or (
+            await self._my_account_id()
+        )
         if not account_id:
-            _log.warning("cannot assign %s — no account_id available", task.jira_key)
+            _log.warning(
+                "cannot assign %s — this account could not be resolved. Reconnect Jira "
+                "in Settings > Integrations to grant read:jira-user.",
+                task.jira_key,
+            )
             return False
 
         try:

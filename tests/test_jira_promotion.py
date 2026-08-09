@@ -620,3 +620,29 @@ def test_the_MANAGER_keeps_a_promotion_for_an_owned_task(board: TaskBoard):
         "the manager expired a promotion for a task its own worker owns — the request "
         "disappears from the operator's surface before it can be approved"
     )
+
+
+@pytest.mark.asyncio
+async def test_assign_to_me_falls_back_when_the_token_manager_has_no_account(board: TaskBoard):
+    """FOUND IN THE LOG 2026-08-09: `account_id discovery failed: 401`.
+
+    The token manager resolves the account once at connect time via /myself, which 401s
+    on any install authorised before read:jira-user was requested — so it stays empty
+    forever and assign_to_me refused every time. It had never worked on this install.
+
+    _my_account_id already handles that case (/myself, then deriving the account from
+    `assignee = currentUser()`, which needs only read:jira-work), so this reuses it
+    rather than adding a second fallback that could rot separately.
+    """
+    jira = _jira()
+    jira._token_manager.account_id = ""  # the real state on a pre-scope install
+    jira.client.get_myself = AsyncMock(side_effect=RuntimeError("401 scope does not match"))
+    jira.client.search_issues = AsyncMock(
+        return_value=[{"fields": {"assignee": {"accountId": "acct-derived"}}}]
+    )
+    jira.client.assign_issue = AsyncMock(return_value=True)
+    task = _task(board)
+    board.set_jira_key(task.id, "WWD-1")
+
+    assert await jira.assign_to_me(board.get(task.id)) is True
+    assert jira.client.assign_issue.await_args.args[1] == "acct-derived"

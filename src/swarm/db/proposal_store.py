@@ -142,7 +142,23 @@ class SqliteProposalStore(BaseStore):
         self,
         valid_task_ids: set[str],
         valid_worker_names: set[str],
+        assignable_task_ids: set[str] | None = None,
     ) -> int:
+        """Expire pending proposals whose task or worker is no longer valid.
+
+        THE SQLITE HALF OF 2026.8.8.16, and it was missing. That release taught the
+        in-memory ProposalStore to stop expiring a proposal merely because its task is
+        not ASSIGNABLE — a promotion, completion or park always references a task the
+        worker already OWNS, so checking it against the assignable set expired it within
+        seconds of being raised.
+
+        The daemon uses THIS store, not that one. So the fix never took effect in
+        production, and once the caller started passing the new argument every sweep
+        raised TypeError instead — which expired nothing at all and left stale proposals
+        lingering. Found by reading the log after a real sync cycle, not by any test:
+        every test built the in-memory store.
+        """
+        assignable = valid_task_ids if assignable_task_ids is None else assignable_task_ids
         with self._lock:
             now = time.time()
             expired = 0
@@ -160,7 +176,7 @@ class SqliteProposalStore(BaseStore):
                     " WHERE status = 'pending'",
                     (now,),
                 ).rowcount
-            # Expire proposals for tasks that no longer exist
+            # Expire proposals whose task no longer exists at all.
             if valid_task_ids:
                 t_ph = ",".join("?" for _ in valid_task_ids)
                 expired += self._db.execute(
@@ -168,6 +184,29 @@ class SqliteProposalStore(BaseStore):
                     " WHERE status = 'pending' AND task_id IS NOT NULL"
                     f" AND task_id != '' AND task_id NOT IN ({t_ph})",
                     (now, *valid_task_ids),
+                ).rowcount
+            # ...and ASSIGNMENT proposals only, whose task has since been taken. Every
+            # other type references a task its worker already owns and can never be
+            # assignable, so applying this to them expires them the moment they are made.
+            if assignable:
+                a_ph = ",".join("?" for _ in assignable)
+                expired += self._db.execute(
+                    "UPDATE proposals SET status = 'expired', resolved_at = ?"
+                    " WHERE status = 'pending' AND proposal_type = 'assignment'"
+                    " AND task_id IS NOT NULL AND task_id != ''"
+                    f" AND task_id NOT IN ({a_ph})",
+                    (now, *assignable),
+                ).rowcount
+            else:
+                # NOTHING is assignable, so every assignment proposal is moot. Without
+                # this branch the empty set skipped the check entirely and stale
+                # assignment proposals lingered — the in-memory store had no such gap,
+                # which is exactly the kind of divergence the parity tests exist to catch.
+                expired += self._db.execute(
+                    "UPDATE proposals SET status = 'expired', resolved_at = ?"
+                    " WHERE status = 'pending' AND proposal_type = 'assignment'"
+                    " AND task_id IS NOT NULL AND task_id != ''",
+                    (now,),
                 ).rowcount
             self._db.commit()
             expired += self.expire_old()
