@@ -355,6 +355,37 @@ class JiraClient:
             resp.raise_for_status()
             return await resp.json()
 
+    async def update_comment(self, issue_key: str, comment_id: str, body: str) -> bool:
+        """Rewrite an existing comment. Returns True when Jira accepted it."""
+        if self._refuse_write("update a comment", issue_key):
+            return False
+        session = await self._ensure_session()
+        url = f"{self._base_url}/rest/api/3/issue/{issue_key}/comment/{comment_id}"
+        payload = {
+            "body": {
+                "type": "doc",
+                "version": 1,
+                "content": [{"type": "paragraph", "content": [{"type": "text", "text": body}]}],
+            }
+        }
+        async with session.put(url, json=payload) as resp:
+            if resp.status not in (200, 201):
+                _log.warning("comment update on %s failed: %d", issue_key, resp.status)
+                return False
+        return True
+
+    async def get_comments(self, issue_key: str) -> list[dict[str, Any]]:
+        """Existing comments on an issue, oldest first."""
+        session = await self._ensure_session()
+        url = f"{self._base_url}/rest/api/3/issue/{issue_key}/comment"
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                _log.warning("comment read for %s failed: %d", issue_key, resp.status)
+                return []
+            body = await resp.json()
+        comments = body.get("comments")
+        return comments if isinstance(comments, list) else []
+
     async def assign_issue(self, issue_key: str, account_id: str) -> bool:
         """Assign a Jira issue to a user by accountId."""
         if self._refuse_write("assign", issue_key):
@@ -967,6 +998,50 @@ class JiraSyncService:
     #     nearest minute ourselves. Rounding 163s up to 180s would bill 17 seconds
     #     nobody worked. Under-reporting is the safe direction for a timesheet.
     _MIN_WORKLOG_SECONDS = 60
+
+    async def sync_blocker_note(self, task: SwarmTask, reason: str) -> bool:
+        """Make the ticket state whether this task is blocked, and why.
+
+        ``reason`` empty means "no longer blocked".
+
+        WHY A COMMENT AND NOT AN ISSUE LINK. A Jira `blocks` link can only express a
+        dependency between two TICKETS, and most Swarm blockers are on things that have
+        no ticket at all — another Swarm task, an operator decision, a deploy. A comment
+        covers every case; the link covers a minority. Recorded as a decision, not an
+        oversight: see the task resolution for the follow-up.
+
+        WHY ONE COMMENT, UPDATED IN PLACE. Posting on every block and unblock turns a
+        ticket into a changelog nobody reads, and this runs on a five-minute loop. The
+        note carries a marker, is found by reading the thread, and is REWRITTEN — so the
+        ticket always shows the current state and never a stale claim.
+        """
+        if not self.enabled or not task.jira_key:
+            return False
+
+        marker = f"[swarm:blocker:{task.number}]"
+        body = (
+            f"{marker} Swarm is BLOCKED on this: {reason}"
+            if reason
+            else f"{marker} No longer blocked in Swarm; work has resumed."
+        )
+        try:
+            comments = await self.client.get_comments(task.jira_key)
+        except Exception:
+            _log.debug("could not read comments on %s", task.jira_key, exc_info=True)
+            return False
+
+        existing = next((c for c in comments if marker in _extract_text(c.get("body", ""))), None)
+        if existing is not None:
+            if _extract_text(existing.get("body", "")).strip() == body:
+                return False  # already says exactly this; saying it again is noise
+            return await self.client.update_comment(
+                task.jira_key, str(existing.get("id", "")), body
+            )
+        if not reason:
+            # Nothing to clear and nothing to say. Do not announce the absence of a
+            # blocker that was never posted.
+            return False
+        return await self.client.add_comment(task.jira_key, body)
 
     async def log_work(self, task: SwarmTask, seconds: float) -> bool:
         """Log *seconds* of work against the task's ticket. Returns True if written.

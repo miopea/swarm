@@ -293,6 +293,48 @@ class JiraService:
             return True  # pre-v2 config: do not gate an install that has no concept of it
         return bool(cfg.is_confirmed(project_key))
 
+    async def reconcile_blockers(self) -> int:
+        """Make each linked ticket state whether Swarm is blocked on it. Returns count.
+
+        THE GAP: when a worker blocks, the ticket said nothing. A PM looking at the
+        board saw idle work with no explanation, and the reason lived only inside Swarm.
+        This is what makes Swarm legible to people who never open it.
+
+        RECONCILED, not hooked onto the block/unblock call sites. There are four of
+        those (two MCP verbs, the coordinator, the board) and hooking each means the
+        fifth one added later silently does not report. Comparing state each cycle also
+        self-heals a note that failed to post, which a fire-and-forget hook cannot.
+
+        Only tasks whose blocked-ness has something to say: a task that is not blocked
+        and never had a note posted produces no comment at all.
+        """
+        jira = self._get_jira()
+        if not jira or not jira.enabled:
+            return 0
+        updated = 0
+        for task in self._task_board.all_tasks:
+            if not task.jira_key or task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+                continue
+            reason = ""
+            if task.status is TaskStatus.BLOCKED:
+                reason = (
+                    getattr(task, "block_reason", "")
+                    or getattr(task, "external_blocker_ref", "")
+                    or "blocked; no reason recorded"
+                )
+            try:
+                if await jira.sync_blocker_note(task, reason):
+                    updated += 1
+                    _log.warning(
+                        "jira: %s blocker note %s — #%s",
+                        task.jira_key,
+                        "posted" if reason else "cleared",
+                        task.number,
+                    )
+            except Exception:
+                _log.warning("jira: blocker note for %s raised", task.jira_key, exc_info=True)
+        return updated
+
     async def refresh_linked_tasks(self) -> int:
         """Pull new comments and attachments onto OPEN linked tasks. Returns count.
 
@@ -616,5 +658,8 @@ class JiraService:
                 # Import creates a task once and never looks again; this is what keeps a
                 # live ticket's comments reaching the worker working it.
                 await self.refresh_linked_tasks()
+                # ...and a blocked task says nothing to anyone outside Swarm unless the
+                # ticket itself is told.
+                await self.reconcile_blockers()
         except asyncio.CancelledError:
             return
