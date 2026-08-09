@@ -444,6 +444,7 @@ class SwarmDaemon(EventEmitter):
             drone_log=self.drone_log,
             track_task=self._track_task,
             get_sync_interval=lambda: self.config.jira.sync_interval_minutes * 60,
+            message_store=self.message_store,
         )
         # --- TestRunner: test mode lifecycle ---
         self.test_runner = TestRunner(
@@ -1157,31 +1158,33 @@ class SwarmDaemon(EventEmitter):
             except Exception:
                 _log.debug("drone_log drift entry failed", exc_info=True)
             try:
-                from swarm.messages.store import Message
-
+                # send() takes KEYWORDS, not a Message. This passed a Message object as
+                # the `sender` positional with the other required arguments missing, so
+                # every call raised TypeError into the except below and logged at DEBUG
+                # — invisible at the operator's default level. The Queen had never once
+                # received this notification. Found 2026-08-09 while copying the pattern
+                # into the Jira refresh.
                 self.message_store.send(
-                    Message(
-                        sender="daemon",
-                        recipient="queen",
-                        msg_type="finding",
-                        content=(
-                            "CLAUDE.md drift detected: the shipped "
-                            "QUEEN_SYSTEM_PROMPT has changed and your on-disk "
-                            "file has local edits. Reference copies written "
-                            "as CLAUDE.md.shipped-latest and "
-                            "CLAUDE.md.shipped-last alongside your live "
-                            "CLAUDE.md in ~/.swarm/queen/workdir/. Operator "
-                            "can reconcile via `swarm queen sync-claude-md "
-                            "--accept-shipped` (take the new ship) or "
-                            "`--keep-local` (acknowledge drift; keep local). "
-                            "If your local edits look promotable upstream, "
-                            "run `swarm queen contribute-claude-md` for the "
-                            "status diff, then `--emit-patch <file>` or "
-                            "`--open-pr` to land them in the shipped constant "
-                            "(task #258 contribution flow). "
-                            "See task #254 spec for the full reconcile mechanism."
-                        ),
-                    )
+                    sender="daemon",
+                    recipient="queen",
+                    msg_type="warning",
+                    content=(
+                        "CLAUDE.md drift detected: the shipped "
+                        "QUEEN_SYSTEM_PROMPT has changed and your on-disk "
+                        "file has local edits. Reference copies written "
+                        "as CLAUDE.md.shipped-latest and "
+                        "CLAUDE.md.shipped-last alongside your live "
+                        "CLAUDE.md in ~/.swarm/queen/workdir/. Operator "
+                        "can reconcile via `swarm queen sync-claude-md "
+                        "--accept-shipped` (take the new ship) or "
+                        "`--keep-local` (acknowledge drift; keep local). "
+                        "If your local edits look promotable upstream, "
+                        "run `swarm queen contribute-claude-md` for the "
+                        "status diff, then `--emit-patch <file>` or "
+                        "`--open-pr` to land them in the shipped constant "
+                        "(task #258 contribution flow). "
+                        "See task #254 spec for the full reconcile mechanism."
+                    ),
                 )
             except Exception:
                 _log.debug("queen inbox drift notification failed", exc_info=True)

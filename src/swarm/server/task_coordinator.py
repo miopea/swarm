@@ -1011,7 +1011,6 @@ class TaskCoordinator:
             has_check_evidence,
             safe_git_diff,
         )
-        from swarm.messages.store import Message
         from swarm.queen.verifier import VerifierClient
 
         worker = d.get_worker(task.assigned_worker) if task.assigned_worker else None
@@ -1025,9 +1024,11 @@ class TaskCoordinator:
 
         async def _warn(*, to: str, msg_type: str, content: str, from_: str) -> None:
             try:
-                d.message_store.send(
-                    Message(sender=from_, recipient=to, msg_type=msg_type, content=content)
-                )
+                # KEYWORDS, not a Message. Passing a Message object raises TypeError
+                # into the except below; this path had simply never fired, so the bug
+                # was latent rather than observed. Third instance of the same mistake —
+                # see tests/test_jira_refresh.py for the sweep that found it.
+                d.message_store.send(sender=from_, recipient=to, msg_type=msg_type, content=content)
             except Exception:
                 _log.warning(
                     "verifier warning send failed for task #%d", task.number, exc_info=True

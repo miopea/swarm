@@ -44,6 +44,7 @@ class JiraService:
         drone_log: SystemLog,
         track_task: Callable[[asyncio.Task[object]], None],
         get_sync_interval: Callable[[], int],
+        message_store: Any = None,
     ) -> None:
         self._get_jira = get_jira
         self._task_board = task_board
@@ -51,6 +52,10 @@ class JiraService:
         self._drone_log = drone_log
         self._track_task = track_task
         self._get_sync_interval = get_sync_interval
+        # Defaulted: three test fixtures build a JiraService for flows that never touch
+        # messaging, and a missing store only costs the notification — the refresh
+        # itself still happens and still logs.
+        self._message_store = message_store
 
     async def run_import(self) -> int:
         """Execute a single Jira import cycle. Returns count of new tasks."""
@@ -258,6 +263,81 @@ class JiraService:
         if cfg is None or not hasattr(cfg, "is_confirmed"):
             return True  # pre-v2 config: do not gate an install that has no concept of it
         return bool(cfg.is_confirmed(project_key))
+
+    async def refresh_linked_tasks(self) -> int:
+        """Pull new comments and attachments onto OPEN linked tasks. Returns count.
+
+        THE GAP THIS CLOSES. ``import_issues`` dedupes on ``jira_key`` and SKIPS tasks
+        that already exist, so comments and attachments were mirrored exactly once, at
+        creation, and never again. On a service desk the comment thread IS the
+        requirement: a stakeholder writes "actually the customer needs X" on the ticket
+        and the worker never saw it, because nothing ever looked again.
+
+        Only OPEN tasks, and only tasks this swarm still owns — a released task is
+        somebody else's problem now, and a finished one cannot act on new information.
+
+        The refresh itself is additive (see ``refresh_synced_content``); this layer adds
+        the SIGNAL, because mirroring a comment into a description nobody re-reads is
+        only half an answer. The assigned worker gets a message rather than a PTY
+        interrupt: it lands in their inbox instead of cutting across whatever they are
+        mid-way through saying.
+        """
+        jira = self._get_jira()
+        if not jira or not jira.enabled:
+            return 0
+        candidates = [
+            t
+            for t in self._task_board.all_tasks
+            if t.jira_key
+            and t.status not in (TaskStatus.DONE, TaskStatus.FAILED)
+            and not _is_disowned(t)
+        ]
+        updated = 0
+        for task in candidates:
+            try:
+                latest = await jira.refresh_synced_content(task)
+            except Exception:
+                _log.warning("jira: refresh of %s raised", task.jira_key, exc_info=True)
+                continue
+            if not latest:
+                continue
+            updated += 1
+            self._task_board.update(task.id, description=task.description)
+            self._notify_of_jira_update(task, latest)
+        if updated:
+            self._broadcast_ws({"type": "task_update"})
+        return updated
+
+    def _notify_of_jira_update(self, task: Any, latest: str) -> None:
+        """Tell the assigned worker their ticket changed. Best effort."""
+        snippet = latest if len(latest) <= 400 else latest[:400] + "…"
+        _log.warning(
+            "jira: %s has new activity — #%s updated. Latest: %s",
+            task.jira_key,
+            task.number,
+            snippet.replace("\n", " ")[:160],
+        )
+        worker = getattr(task, "assigned_worker", "") or ""
+        if not worker or self._message_store is None:
+            return
+        try:
+            # send() takes KEYWORDS, not a Message. Passing a Message object raises
+            # TypeError, which a surrounding try/except then swallows — see the
+            # daemon's queen-drift notification, which had never once fired.
+            self._message_store.send(
+                sender="jira",
+                recipient=worker,
+                msg_type="finding",
+                content=(
+                    f"{task.jira_key} (your task #{task.number}) has new activity in "
+                    f"Jira. Latest comment — {snippet}\n\n"
+                    f"The full thread is mirrored under '--- Jira sync ---' in the "
+                    f"task description. If this changes what the task needs, say so "
+                    f"before continuing rather than finishing the old scope."
+                ),
+            )
+        except Exception:
+            _log.debug("could not message %s about %s", worker, task.jira_key, exc_info=True)
 
     async def reconcile_ownership(self) -> int:
         """Release tasks whose Jira ticket was reassigned away from this dev.
@@ -504,5 +584,8 @@ class JiraService:
                 # Import alone leaves the OUTBOUND direction unchecked, which is where
                 # the two systems actually drifted.
                 await self.reconcile_exports()
+                # Import creates a task once and never looks again; this is what keeps a
+                # live ticket's comments reaching the worker working it.
+                await self.refresh_linked_tasks()
         except asyncio.CancelledError:
             return

@@ -663,6 +663,91 @@ class JiraSyncService:
         task.attachments = downloaded
         task.description = _build_synced_description(base_desc, fields, downloaded)
 
+    @staticmethod
+    def _sync_tail(description: str) -> str:
+        return description.partition(_JIRA_SYNC_MARKER)[2]
+
+    async def refresh_synced_content(self, task: SwarmTask) -> str:
+        """Re-mirror a linked ticket's comments and attachments. ADDITIVE ONLY.
+
+        Returns the newest comment's text when the synced content CHANGED, else "".
+
+        WHY THIS IS NOT ``refresh_task``. That one re-derives the description from the
+        Jira body and REPLACES ``task.attachments`` wholesale. It is correct for a button
+        a person just pressed — they asked for a full re-sync and can see the result.
+        Running it on a timer would silently delete, every five minutes:
+
+        * everything a worker wrote into the description (the #1289 truncation, but
+          automated and repeating), and
+        * every attachment Swarm added itself, such as a debugging screenshot.
+
+        So this keeps whatever sits ABOVE the sync marker exactly as it is — the marker
+        already separates the regenerated tail from the user-authored portion — and
+        MERGES attachments instead of replacing them. It can add information; it has no
+        path by which it can remove any.
+
+        CHANGE IS DETECTED BY COMPARING THE DERIVED TAIL, not by counting comments. The
+        tail is truncated at a size cap, so counting what is rendered undercounts; and
+        an edited comment changes no count at all. Comparing what we would write against
+        what is there answers "did anything change" for every case at once.
+        """
+        if not self.enabled or not task.jira_key:
+            return ""
+        try:
+            issue = await self.client.get_issue(task.jira_key)
+        except Exception:
+            # A refresh that cannot read is a no-op, never a truncation.
+            _log.debug("could not refresh %s", task.jira_key, exc_info=True)
+            return ""
+
+        fields = issue.get("fields", {}) or {}
+        # NOT re-derived from the Jira body: that would drop worker-authored text.
+        base_desc = _strip_sync_tail(task.description).rstrip()
+        existing = list(task.attachments or [])
+        before = self._sync_tail(task.description)
+
+        new_paths = await self._download_attachments(task, fields)
+        merged = existing + [p for p in new_paths if p not in existing]
+        rebuilt = _build_synced_description(base_desc, fields, merged)
+        if self._sync_tail(rebuilt) == before:
+            return ""
+
+        task.attachments = merged
+        task.description = rebuilt
+        return _latest_comment(fields.get("comment"))
+
+    async def _download_attachments(self, task: SwarmTask, fields: dict[str, Any]) -> list[str]:
+        """Download a ticket's attachments to the uploads dir. Returns local paths."""
+        downloaded: list[str] = []
+        attachments_field = fields.get("attachment")
+        if not isinstance(attachments_field, list):
+            return downloaded
+        for att in attachments_field:
+            if not isinstance(att, dict):
+                continue
+            att_id = str(att.get("id", "")).strip()
+            filename = str(att.get("filename", "")).strip() or f"attachment-{att_id}"
+            if not att_id:
+                continue
+            try:
+                data = await self.client.download_attachment(att_id)
+            except (aiohttp.ClientError, TimeoutError) as e:
+                _log.warning(
+                    "failed to download attachment %s (%s) for %s: %s",
+                    att_id,
+                    filename,
+                    task.jira_key,
+                    e,
+                )
+                continue
+            if not data:
+                continue
+            try:
+                downloaded.append(_save_attachment_bytes(filename, data, self._uploads_dir))
+            except OSError as e:
+                _log.warning("failed to save attachment %s for %s: %s", filename, task.jira_key, e)
+        return downloaded
+
     async def refresh_task(self, task: SwarmTask) -> bool:
         """Re-fetch a Jira issue and rewrite the task's description + attachments.
 
@@ -1119,6 +1204,29 @@ def _format_comments(comment_field: object) -> str:
         lines.append(body)
         lines.append("")  # blank line between comments
     return "\n".join(lines).rstrip()
+
+
+def _latest_comment(comment_field: object) -> str:
+    """The most recent comment rendered as one line, or "".
+
+    Used to tell a worker WHAT changed rather than merely that something did. "The
+    ticket was updated" sends them to read it; "Larissa: do X instead" is the thing
+    they actually needed.
+    """
+    if not isinstance(comment_field, dict):
+        return ""
+    comments = comment_field.get("comments")
+    if not isinstance(comments, list) or not comments:
+        return ""
+    for c in reversed(comments):
+        if not isinstance(c, dict):
+            continue
+        body = _extract_text(c.get("body", "")).strip()
+        if not body:
+            continue
+        author = _format_comment_author(c.get("author"))
+        return f"{author}: {body}"
+    return ""
 
 
 def _format_attachment_list(attachment_field: object) -> str:
