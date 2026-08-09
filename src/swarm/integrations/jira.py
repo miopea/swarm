@@ -1025,8 +1025,13 @@ class JiraSyncService:
 
         if ok:
             self.stats.total_exported += 1
-            _log.info(
-                "transitioned %s to '%s'",
+            # WARNING for every WRITE to the shared tracker. Operators run at the default
+            # level, so an INFO line is invisible — and "Swarm changed someone's ticket"
+            # is precisely what they need to be able to see afterwards. Verifying #1339
+            # I could not confirm from the log that a worklog had been written and had to
+            # read Jira instead, which is the gap this closes.
+            _log.warning(
+                "jira: transitioned %s to '%s'",
                 task.jira_key,
                 target_name,
             )
@@ -1135,7 +1140,9 @@ class JiraSyncService:
         comment = f"Worked via Swarm on task #{task.number}. {marker}"
         ok = await self.client.add_worklog(task.jira_key, billable, comment)
         if ok:
-            _log.info("logged %ds against %s for task #%s", billable, task.jira_key, task.number)
+            _log.warning(
+                "jira: logged %ds against %s for task #%s", billable, task.jira_key, task.number
+            )
         return ok
 
     async def post_completion_comment(self, task: SwarmTask) -> bool:
@@ -1160,7 +1167,7 @@ class JiraSyncService:
         try:
             ok = await self.client.add_comment(task.jira_key, body)
             if ok:
-                _log.info("posted completion comment on %s", task.jira_key)
+                _log.warning("jira: posted completion comment on %s", task.jira_key)
             return ok
         except (aiohttp.ClientError, TimeoutError) as e:
             self._record_error(f"comment on {task.jira_key}", e)
@@ -1179,7 +1186,7 @@ class JiraSyncService:
         try:
             ok = await self.client.assign_issue(task.jira_key, account_id)
             if ok:
-                _log.info("assigned %s to current user", task.jira_key)
+                _log.warning("jira: assigned %s to current user", task.jira_key)
             return ok
         except (aiohttp.ClientError, TimeoutError) as e:
             self._record_error(f"assign {task.jira_key}", e)
@@ -1397,7 +1404,7 @@ class JiraSyncService:
         key = result.get("key", "")
         if key:
             self.stats.total_exported += 1
-            _log.info("created Jira issue %s from task %s", key, task.id[:8])
+            _log.warning("jira: created issue %s from task %s", key, task.id[:8])
         return key
 
     def get_status(self) -> dict[str, Any]:

@@ -193,3 +193,78 @@ async def test_the_true_duration_is_sent_and_NOT_rounded_up(board: TaskBoard):
     sent = svc.client.add_worklog.await_args.args[1]
     assert sent == 163, f"the duration was adjusted before sending: {sent}"
     assert sent < 180, "rounded up to the next minute, billing time nobody worked"
+
+
+# --- writes must be visible at the operator's default level -------------------
+
+
+@pytest.mark.asyncio
+async def test_a_written_worklog_is_logged_at_WARNING(board: TaskBoard, caplog: Any):
+    """FOUND WHILE VERIFYING #1339: the success line was at INFO, operators run at the
+    default WARNING, so nothing in the log said a worklog had been written. I had to
+    read Jira to confirm it — which is exactly the position an operator would be in.
+    """
+    import logging
+
+    svc = _svc()
+    with caplog.at_level(logging.WARNING):
+        assert await svc.log_work(_task(board), 3600) is True
+
+    msg = " ".join(r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING)
+    assert "WWD-1" in msg and "3600" in msg, f"the write is invisible at default level: {msg!r}"
+
+
+def test_no_jira_WRITE_reports_success_at_INFO():
+    """The rule, swept rather than pinned per call site.
+
+    Every write Swarm makes to a SHARED tracker must be visible at the operator's
+    default level — a transition, a comment, an assignee change, a worklog, a created
+    ticket. Five of these were at INFO and therefore invisible; the sixth someone adds
+    would be too, which is why this checks the class.
+
+    Deliberately NOT applied to reads, discovery, or the already-terminal path: that one
+    records agreement WITHOUT writing, so it is correctly INFO. The rule is about
+    changing someone else's data, not about volume.
+    """
+    import ast
+
+    src = Path("src/swarm/integrations/jira.py").read_text()
+    tree = ast.parse(src)
+    writers = {
+        "transition_issue",
+        "add_comment",
+        "assign_issue",
+        "add_worklog",
+        "create_issue",
+        "update_comment",
+        "log_work",
+        "post_completion_comment",
+        "assign_to_me",
+        "create_jira_issue",
+    }
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
+            continue
+        if node.name not in writers:
+            continue
+        if "_log.info(" in ast.unparse(node):
+            offenders.append(node.name)
+    assert not offenders, (
+        f"these report a Jira WRITE at INFO, invisible to an operator running at the "
+        f"default level: {offenders}"
+    )
+
+
+def test_the_writer_sweep_can_see_the_functions_it_checks():
+    """Positive control — a misspelled name set would make the sweep vacuous."""
+    import ast
+
+    src = Path("src/swarm/integrations/jira.py").read_text()
+    names = {
+        n.name
+        for n in ast.walk(ast.parse(src))
+        if isinstance(n, ast.AsyncFunctionDef | ast.FunctionDef)
+    }
+    for expected in ("log_work", "transition_issue", "create_issue", "add_worklog"):
+        assert expected in names, f"{expected} is not in the module; the sweep checks nothing"
