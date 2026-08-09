@@ -431,6 +431,7 @@ class SwarmDaemon(EventEmitter):
             init_pilot=lambda enabled: self.init_pilot(enabled=enabled),
             write_identity=self.write_identity_for_spawn,
             load_worker_states=lambda: self.worker_state_store.load(),
+            save_worker_states=lambda states: self.worker_state_store.save(states),
         )
         # --- ShellService: operator bash sessions in a worker's directory ---
         # Tracked separately from ``self.workers`` on purpose — see the module

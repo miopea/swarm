@@ -6390,9 +6390,20 @@
     // `persist` records an OPERATOR choice; layout-driven callers (worker
     // focus, Queen dashboard) pass false so switching views never overwrites
     // what the operator asked for.
+    // Is THIS window the popped-out panel? Read from the URL rather than shared with
+    // the Command Center IIFE's _panelMode, because this runs in the main IIFE and the
+    // two are separate scopes — a bare cross-IIFE read throws.
+    function inPanelWindow() {
+        try { return /[?&]panel=/.test(window.location.search); } catch (e) { return false; }
+    }
+
     function setBottomCollapsed(collapsed, persist) {
         var panel = document.querySelector('.bottom-tabbed');
         if (!panel) return;
+        // The popped-out window must never write this preference. It shares localStorage
+        // with the main window, so persisting from here would silently redefine what the
+        // caret means over there.
+        if (inPanelWindow()) persist = false;
         collapsed = !!collapsed;
         panel.classList.toggle('collapsed', collapsed);
         var chevron = panel.querySelector('.btn-collapse');
@@ -6458,6 +6469,16 @@
     (function initBottomPanel() {
         var panel = document.querySelector('.bottom-tabbed');
         if (!panel) return;
+        // THE BLANK POPPED-OUT WINDOW, reported twice. The collapse preference lives in
+        // localStorage, which the popped window shares with the main one — so a panel
+        // minimized in the main window opened the pop-out already collapsed, showing a
+        // bare header and nothing else until a tab was clicked. Popping out then
+        // collapsing the main window (which is what the operator asked for) made it
+        // happen every single time.
+        //
+        // In this window the panel IS the window: a collapsed one has no reason to
+        // exist, so the stored preference simply does not apply here.
+        if (inPanelWindow()) { setBottomCollapsed(false, false); return; }
         var isMobile = window.innerWidth < 768;
         var stored = readBottomCollapsed();
         var shouldCollapse = stored === null ? isMobile : stored;
@@ -12948,7 +12969,12 @@
         // The point of popping out is to get the panel OFF this window, so collapse it
         // here. Persisted (the `true`), so it stays collapsed across a reload the same
         // way the caret would — the operator moved the panel, they did not hide it once.
-        setBottomCollapsed(true, true);
+        //
+        // window.-qualified because this runs in the Command Center IIFE and
+        // setBottomCollapsed is defined in the main one: a bare call throws
+        // ReferenceError and takes the rest of this function with it. Guarded, so a
+        // load order where the main IIFE has not run yet still opens the window.
+        if (window.setBottomCollapsed) { window.setBottomCollapsed(true, true); }
     };
 
     if (document.readyState === 'loading') {

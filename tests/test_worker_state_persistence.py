@@ -227,3 +227,68 @@ def test_the_old_bare_string_payload_is_still_read():
     loaded = WorkerStateStore(_DB()).load()
     assert loaded["hub"].state == "RESTING"
     assert loaded["hub"].since is None, "an absent timestamp must not be invented"
+
+
+# --- putting a worker to sleep must OUTLIVE the daemon -------------------------------
+
+
+@pytest.mark.asyncio
+async def test_putting_a_worker_to_sleep_persists_it():
+    """THE SECOND HALF of "some to sleep ... didn't stick".
+
+    Carrying ``state_since`` in the store was necessary but not sufficient: nothing was
+    writing it. Every other state change goes through the pilot and emits state_changed,
+    which is what the publisher persists on — but ``sleep_worker`` assigns the attribute
+    directly, and on an ALREADY-RESTING worker there is no transition to emit. The
+    backdated timestamp therefore lived only in memory.
+
+    The worker here starts RESTING deliberately: that is the case with no state change
+    at all, so a fix that merely emitted an event on transition would still fail it.
+    """
+
+    from swarm.worker.worker import SLEEPING_THRESHOLD, Worker, WorkerState
+
+    saved: list[dict] = []
+    w = Worker(name="hub", path="/tmp", provider_name="claude", state=WorkerState.RESTING)
+
+    svc = _make_service_for_sleep(w, saved.append)
+    await svc.sleep_worker("hub")
+
+    assert saved, "putting a worker to sleep wrote nothing — it cannot survive a reload"
+    entry = saved[-1]["hub"]
+    assert entry.state == "RESTING"
+    age = time.time() - entry.since
+    assert age > SLEEPING_THRESHOLD, (
+        f"persisted state_since is only {age:.0f}s old, so this worker comes back "
+        "RESTING rather than SLEEPING"
+    )
+
+
+def _make_service_for_sleep(worker, on_save):
+    """Minimal WorkerService wired for sleep_worker and nothing else."""
+    from unittest.mock import MagicMock
+
+    from swarm.server.worker_service import WorkerService
+
+    svc = WorkerService.__new__(WorkerService)
+    svc._get_workers = lambda: [worker]
+    svc.require_worker = lambda _n: worker
+    svc._save_worker_states = on_save
+    svc._drone_log = MagicMock()
+    svc._broadcast_ws = MagicMock()
+    return svc
+
+
+def test_a_persist_failure_never_breaks_the_operator_action():
+    """Best effort: a store that raises must cost the next restart its head start, not
+    the sleep the operator just asked for."""
+
+    from swarm.worker.worker import Worker, WorkerState
+
+    w = Worker(name="hub", path="/tmp", provider_name="claude", state=WorkerState.RESTING)
+
+    def _boom(_states):
+        raise RuntimeError("disk full")
+
+    svc = _make_service_for_sleep(w, _boom)
+    svc._persist_worker_states()  # must not raise

@@ -257,7 +257,7 @@ def test_popping_out_collapses_the_panel_in_the_main_window():
     js = Path("src/swarm/web/static/dashboard.js").read_text(encoding="utf-8")
     i = js.index("window.popOutTasks = function")
     body = js[i : js.index("\n    };", i)]
-    assert "setBottomCollapsed(true, true)" in body, body
+    assert "window.setBottomCollapsed(true, true)" in body, body
 
 
 def test_a_blocked_popup_leaves_the_main_panel_alone():
@@ -267,6 +267,41 @@ def test_a_blocked_popup_leaves_the_main_panel_alone():
     i = js.index("window.popOutTasks = function")
     body = js[i : js.index("\n    };", i)]
     guard = body.index("if (!w) return")
-    assert guard < body.index("setBottomCollapsed"), (
+    assert guard < body.index("window.setBottomCollapsed"), (
         "the collapse runs even when the popup was blocked"
+    )
+
+
+def test_the_popped_out_window_ignores_the_stored_collapse_preference():
+    """THE BLANK POP-OUT, root cause — reported twice, and the second time reproducibly.
+
+    The collapse preference lives in localStorage, which the popped-out window SHARES
+    with the main one. So a panel minimized in the main window opened the pop-out
+    already collapsed: a bare header and nothing else until a tab was clicked. Making
+    the pop-out collapse the main window (the operator's own request) turned that from
+    intermittent into every time.
+
+    In that window the panel IS the window, so the preference does not apply. Asserted
+    on initBottomPanel because that is where a stored value would otherwise win.
+    """
+    js = Path("src/swarm/web/static/dashboard.js").read_text(encoding="utf-8")
+    i = js.index("function initBottomPanel()")
+    body = js[i : js.index("})();", i)]
+    forced = body.index("inPanelWindow()")
+    assert "setBottomCollapsed(false, false)" in body, body
+    assert forced < body.index("readBottomCollapsed()"), (
+        "the stored collapse preference is read before the panel-window override, so a "
+        "minimized main window still opens the pop-out blank"
+    )
+
+
+def test_the_popped_out_window_never_writes_the_collapse_preference():
+    """The other direction. Both windows share localStorage, so persisting from the
+    pop-out would silently redefine what the caret means in the main window."""
+    js = Path("src/swarm/web/static/dashboard.js").read_text(encoding="utf-8")
+    i = js.index("function setBottomCollapsed(")
+    body = js[i : js.index("\n    }\n", i)]
+    assert "if (inPanelWindow()) persist = false;" in body, body
+    assert body.index("inPanelWindow()") < body.index("if (persist)"), (
+        "persistence is decided before the panel-window guard runs"
     )

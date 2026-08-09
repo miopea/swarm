@@ -107,6 +107,7 @@ class WorkerService:
         # #1357. A CALLABLE like every other dependency here, and defaulted because
         # several fixtures build a WorkerService for flows that never restore state.
         load_worker_states: Callable[[], dict[str, Any]] | None = None,
+        save_worker_states: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._broadcast_ws = broadcast_ws
         self._drone_log = drone_log
@@ -115,6 +116,7 @@ class WorkerService:
         self._get_pool = get_pool
         self._get_config = get_config
         self._load_worker_states = load_worker_states
+        self._save_worker_states = save_worker_states
         self._get_workers = get_workers
         self._set_workers = set_workers
         self._worker_lock = worker_lock
@@ -599,8 +601,36 @@ class WorkerService:
         self._drone_log.add(
             DroneAction.OPERATOR, name, "put to sleep (manual)", category=LogCategory.OPERATOR
         )
+        # Persist explicitly. Everything else that changes a worker's state goes through
+        # the pilot and emits state_changed, which is what the publisher persists on —
+        # but this sets the attribute directly, and on an ALREADY-RESTING worker there is
+        # no transition to emit at all. So the backdated timestamp lived only in memory
+        # and died with the daemon: "I set several to resting and some to sleep, but on
+        # reloading only public-website was resting."
+        self._persist_worker_states()
         workers = [{"name": w.name, "state": w.display_state.value} for w in self._get_workers()]
         self._broadcast_ws({"type": "workers_changed", "workers": workers})
+
+    def _persist_worker_states(self) -> None:
+        """Write the current state map. Best effort — never raises into an operator action.
+
+        Mirrors ``StatePublisher._persist_worker_states``; both exist because state is
+        changed on two paths (the pilot's classification and a direct operator action)
+        and only one of them emits an event.
+        """
+        if self._save_worker_states is None:
+            return
+        try:
+            from swarm.db.worker_state_store import RememberedState
+
+            self._save_worker_states(
+                {
+                    w.name: RememberedState(state=w.state.value, since=w.state_since)
+                    for w in self._get_workers()
+                }
+            )
+        except Exception:
+            _log.warning("could not persist worker states after an operator action", exc_info=True)
 
     async def _graceful_shutdown(self, worker: Worker) -> None:
         """Ask the agent to exit on its own: Esc, quit command, close the shell.
