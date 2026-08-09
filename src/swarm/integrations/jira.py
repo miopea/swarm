@@ -258,9 +258,33 @@ class JiraClient:
             data = await resp.json()
         return data if isinstance(data, list) else []
 
+    def _refuse_write(self, action: str, issue_key: str = "") -> bool:
+        """True when read-only mode is on, after logging what WOULD have happened.
+
+        ENFORCED HERE, at the client, because this is the only place every Jira write
+        passes through. Hiding buttons in the UI would not have helped: the sync loop
+        writes on a timer with nobody watching, which is exactly how 14 real WWD tickets
+        were transitioned on 2026-08-07 by a settings toggle.
+
+        Logged at WARNING, not DEBUG. A refused write is the whole point of the mode —
+        an operator running at default level needs to see what it would have done, or
+        read-only becomes indistinguishable from broken.
+        """
+        if not getattr(self._config, "read_only", False):
+            return False
+        _log.warning(
+            "jira READ-ONLY: refused to %s%s — would have written to Jira. Turn read-only "
+            "off in Settings > Integrations when you are ready.",
+            action,
+            f" on {issue_key}" if issue_key else "",
+        )
+        return True
+
     async def transition_issue(self, issue_key: str, transition_id: str) -> bool:
         """Transition an issue to a new status. Retries transient failures —
         a lost transition leaves Swarm and Jira permanently out of sync."""
+        if self._refuse_write(f"transition to {transition_id}", issue_key):
+            return False
         session = await self._ensure_session()
         url = f"{self._base_url}/rest/api/3/issue/{issue_key}/transitions"
         payload = {"transition": {"id": transition_id}}
@@ -287,6 +311,8 @@ class JiraClient:
 
     async def add_comment(self, issue_key: str, body: str) -> bool:
         """Add a comment to an issue using ADF (Atlassian Document Format)."""
+        if self._refuse_write("add a comment", issue_key):
+            return False
         session = await self._ensure_session()
         url = f"{self._base_url}/rest/api/3/issue/{issue_key}/comment"
         payload = {
@@ -331,6 +357,8 @@ class JiraClient:
 
     async def assign_issue(self, issue_key: str, account_id: str) -> bool:
         """Assign a Jira issue to a user by accountId."""
+        if self._refuse_write("assign", issue_key):
+            return False
         session = await self._ensure_session()
         url = f"{self._base_url}/rest/api/3/issue/{issue_key}/assignee"
 
@@ -368,6 +396,8 @@ class JiraClient:
 
     async def add_worklog(self, issue_key: str, seconds: int, comment: str) -> bool:
         """Log time against an issue. Returns True when Jira accepted it."""
+        if self._refuse_write(f"log {seconds}s of work", issue_key):
+            return False
         session = await self._ensure_session()
         url = f"{self._base_url}/rest/api/3/issue/{issue_key}/worklog"
         payload: dict[str, Any] = {
@@ -407,7 +437,14 @@ class JiraClient:
         labels: list[str] | None = None,
         assignee_account_id: str = "",
     ) -> dict[str, Any]:
-        """Create a Jira issue. Returns the created issue dict with 'key' and 'id'."""
+        """Create a Jira issue. Returns the created issue dict with 'key' and 'id'.
+
+        Returns an EMPTY dict in read-only mode. Callers already treat a missing "key"
+        as failure (create_jira_issue returns "", and the promotion approval refuses
+        rather than reporting success), so no caller has to learn about the mode.
+        """
+        if self._refuse_write(f"create a {issue_type} in {project}"):
+            return {}
         session = await self._ensure_session()
         url = f"{self._base_url}/rest/api/3/issue"
         payload: dict[str, Any] = {

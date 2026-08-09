@@ -39,6 +39,9 @@ def _apply_jira_v2_fields(jc: Any, body: dict[str, Any], consumed: list[str]) ->
     round-tripped back to the old one and the operator watched their input revert with
     no error at all. Confirmations were lost the same way.
     """
+    if "read_only" in body:
+        jc.read_only = bool(body["read_only"])
+        consumed.append("read_only")
     if "projects" in body:
         val = body["projects"]
         if not isinstance(val, list):

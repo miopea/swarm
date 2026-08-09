@@ -422,6 +422,12 @@ class JiraConfig:
     # produced stale-blocker problems. Sub-tasks are genuine work.
     issue_types: list[str] = field(default_factory=lambda: ["Story", "Task", "Bug", "Sub-task"])
     sync_interval_minutes: float = 5.0
+    # READ-ONLY MODE (#1342). Imports, discovery and reconciliation run normally; every
+    # WRITE is refused and logged as what it would have done. Exists because Jira is
+    # being enabled for every dev, and without it a newcomer's first misconfiguration
+    # lands in the team's ticket queue rather than on their own screen.
+    read_only: bool = False
+
     client_id: str = ""  # Atlassian OAuth app client ID
     client_secret: str = ""  # Atlassian OAuth app client secret (or $ENV_VAR)
     cloud_id: str = ""  # Auto-discovered Jira Cloud site ID

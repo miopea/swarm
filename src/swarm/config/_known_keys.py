@@ -135,6 +135,7 @@ _KNOWN_NOTIFY_KEYS = {
 _KNOWN_COORDINATION_KEYS = {"mode", "auto_pull", "file_ownership", "message_retention_days"}
 
 _KNOWN_JIRA_KEYS = {
+    "read_only",
     "enabled",
     "project",
     "sync_interval_minutes",

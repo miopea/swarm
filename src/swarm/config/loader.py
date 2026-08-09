@@ -174,6 +174,7 @@ def _parse_jira_section(jira_data: dict[str, object]) -> JiraConfig:
         )
     return JiraConfig(
         enabled=jira_data.get("enabled", False),
+        read_only=bool(jira_data.get("read_only", False)),
         project=jira_data.get("project", ""),
         sync_interval_minutes=jira_data.get("sync_interval_minutes", 5.0),
         projects=[str(x) for x in (jira_data.get("projects") or []) if str(x).strip()],

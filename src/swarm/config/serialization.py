@@ -367,6 +367,7 @@ def _serialize_jira_optional(config: HiveConfig, data: dict[str, Any]) -> None:
         # confirmation never reached the serializer and vanished on restart.
         "projects": list(j.projects),
         "issue_types": list(j.issue_types),
+        "read_only": j.read_only,
         "project_status_maps": {k: dict(v) for k, v in j.project_status_maps.items()},
         "confirmed_projects": list(j.confirmed_projects),
     }

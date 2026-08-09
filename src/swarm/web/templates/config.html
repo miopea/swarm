@@ -858,6 +858,23 @@
                The raw status_map textarea is gone too — the per-project mapping above
                replaces it, and hand-editing JSON was how a map targeting "Done" ended
                up refused by every ticket in a project that has no Done transition. #}
+            {# --- Safety: read-only ------------------------------------------------ #}
+            <div class="config-field">
+                <label for="cfg-jira-read_only">Read-only mode
+                    <span class="hint">Import and compare, but never write to Jira</span>
+                </label>
+                <input type="checkbox" id="cfg-jira-read_only" class="config-checkbox"
+                       {% if jr.get('read_only') %}checked{% endif %}>
+            </div>
+            <p class="text-xs text-muted" style="margin:-0.2rem 0 0.6rem">
+                Leave this <strong>on</strong> while you set Jira up. Imports, workflow
+                discovery and reconciliation all run normally; every write &mdash;
+                transition, ticket creation, comment, worklog, assignee &mdash; is refused
+                and logged as what it <em>would</em> have done. It is enforced at the point
+                Swarm talks to Jira, not by hiding buttons, because the sync loop writes on
+                a timer with nobody watching.
+            </p>
+
             {# --- Step 3: cadence -------------------------------------------------- #}
             <div class="config-field">
                 <label>3. Sync interval
@@ -2184,6 +2201,7 @@
                     .split(',').map(function(x) { return x.trim(); }).filter(Boolean),
                 project: ((document.getElementById('cfg-jira-projects').value || '')
                     .split(',').map(function(x) { return x.trim(); }).filter(Boolean)[0]) || '',
+                read_only: document.getElementById('cfg-jira-read_only').checked,
                 sync_interval_minutes: parseFloat(document.getElementById('cfg-jira-sync_interval').value),
 
 
