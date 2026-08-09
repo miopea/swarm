@@ -1129,11 +1129,7 @@ class JiraSyncService:
             return False
 
         marker = f"[swarm:blocker:{task.number}]"
-        body = (
-            f"{marker} Swarm is BLOCKED on this: {reason}"
-            if reason
-            else f"{marker} No longer blocked in Swarm; work has resumed."
-        )
+        body = _blocker_note_body(task, reason, marker)
         try:
             comments = await self.client.get_comments(task.jira_key)
         except Exception:
@@ -1626,6 +1622,39 @@ def in_active_sprint(sprint_value: object) -> bool:
 # detail on real linked tasks. Posting that verbatim to a service-desk ticket is wrong
 # in kind, not merely in length: the reporter wanted to know their problem is fixed.
 _MAX_RESOLUTION_CHARS = 400
+
+
+def _blocker_note_body(task: SwarmTask, reason: str, marker: str) -> str:
+    """The blocker note as the person who raised the ticket should read it.
+
+    IT USED TO POST THE RAW BLOCK REASON, which is written worker-to-operator and lands
+    verbatim on a thread a reporter reads. Observed on WWD-6743:
+
+        "Swarm is BLOCKED on this: Closing-comment template needs the 2026.8.9.17
+         reload before I can test it — that release fixes synced content being..."
+
+    Meaningless to a reporter, and the same internal-voice problem the closing comment
+    had. The free-text reason now stays inside Swarm, where the operator sees it.
+
+    WHAT IS SAFE TO SAY. ``external_blocker_ref`` is an ARTIFACT by design — the verb
+    asks for "npm eslint@^10" or a PR URL — so naming it tells a reader something true
+    and checkable. The operator-decision sentinel is reported as awaiting the team,
+    without the reason, because those are the most internal of all.
+    """
+    from swarm.tasks.task import AWAITING_OPERATOR_REF
+
+    if not reason:
+        return f"{marker} Work on this has resumed."
+
+    ref = str(getattr(task, "external_blocker_ref", "") or "").strip()
+    if ref == AWAITING_OPERATOR_REF:
+        detail = "pending a decision from the team"
+    elif ref:
+        detail = f"while we wait on: {ref}"
+    else:
+        # Blocked with no artifact named — say only what is certainly true.
+        detail = "while we wait on a dependency"
+    return f"{marker} Work on this is paused {detail}. We will update this ticket when it resumes."
 
 
 def _reporter_from_description(description: str) -> str:

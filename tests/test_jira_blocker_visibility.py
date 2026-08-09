@@ -57,9 +57,14 @@ def _task(board: TaskBoard, key: str = "WWD-1") -> SwarmTask:
 @pytest.mark.asyncio
 async def test_a_blocker_is_posted_to_the_ticket(board: TaskBoard):
     svc = _svc()
-    assert await svc.sync_blocker_note(_task(board), "waiting on the platform deploy") is True
+    task = _task(board)
+    task.external_blocker_ref = "platform release 6.2"
+    assert await svc.sync_blocker_note(task, "waiting on the platform deploy") is True
     body = svc.client.add_comment.await_args.args[1]
-    assert "BLOCKED" in body and "waiting on the platform deploy" in body
+    # CHANGED 2026-08-09: the note names the ARTIFACT, not the free-text reason, which
+    # is written worker-to-operator and read verbatim by whoever raised the ticket.
+    assert "Work on this is paused" in body and "platform release 6.2" in body
+    assert "waiting on the platform deploy" not in body
 
 
 @pytest.mark.asyncio
@@ -67,15 +72,24 @@ async def test_the_note_is_UPDATED_not_duplicated(board: TaskBoard):
     """Five-minute loop. A second comment per cycle would bury the ticket."""
     svc = _svc()
     svc.client.get_comments = AsyncMock(
-        return_value=[{"id": "77", "body": "[swarm:blocker:1] Swarm is BLOCKED on this: old"}]
+        return_value=[
+            {
+                "id": "77",
+                "body": (
+                    "[swarm:blocker:1] Work on this is paused while we wait on: "
+                    "old thing. We will update this ticket when it resumes."
+                ),
+            }
+        ]
     )
     task = _task(board)
+    task.external_blocker_ref = "the new thing"
 
-    assert await svc.sync_blocker_note(task, "new reason") is True
+    assert await svc.sync_blocker_note(task, "reason text") is True
 
     svc.client.add_comment.assert_not_called()
     key, cid, body = svc.client.update_comment.await_args.args
-    assert cid == "77" and "new reason" in body
+    assert cid == "77" and "the new thing" in body
 
 
 @pytest.mark.asyncio
@@ -83,7 +97,11 @@ async def test_an_unchanged_blocker_writes_nothing(board: TaskBoard):
     """THE NOISE GUARD. Without it every cycle rewrites the same sentence forever."""
     svc = _svc()
     task = _task(board)
-    same = f"[swarm:blocker:{task.number}] Swarm is BLOCKED on this: waiting on deploy"
+    task.external_blocker_ref = "a deploy"
+    same = (
+        f"[swarm:blocker:{task.number}] Work on this is paused while we wait on: "
+        f"a deploy. We will update this ticket when it resumes."
+    )
     svc.client.get_comments = AsyncMock(return_value=[{"id": "77", "body": same}])
 
     assert await svc.sync_blocker_note(task, "waiting on deploy") is False
@@ -97,12 +115,14 @@ async def test_clearing_rewrites_the_note_rather_than_leaving_it_lying(board: Ta
     it is actively misleading the person reading it."""
     svc = _svc()
     svc.client.get_comments = AsyncMock(
-        return_value=[{"id": "77", "body": "[swarm:blocker:1] Swarm is BLOCKED on this: x"}]
+        return_value=[
+            {"id": "77", "body": "[swarm:blocker:1] Work on this is paused while we wait on: x."}
+        ]
     )
 
     assert await svc.sync_blocker_note(_task(board), "") is True
     body = svc.client.update_comment.await_args.args[2]
-    assert "No longer blocked" in body
+    assert "Work on this has resumed" in body
 
 
 @pytest.mark.asyncio
@@ -179,3 +199,85 @@ def test_the_sweep_is_wired_into_the_sync_loop():
     loop = src[src.index("async def sync_loop") :]
     loop = loop[: loop.index("except asyncio.CancelledError")]
     assert "reconcile_blockers()" in loop, "blockers are never reported to Jira on a schedule"
+
+
+# --- the note is written for the reporter, not the operator --------------------
+
+
+def _blocked(board: TaskBoard, ref: str, reason: str) -> SwarmTask:
+    t = _task(board)
+    t.number = 1347
+    t.external_blocker_ref = ref
+    t.block_reason = reason
+    return t
+
+
+def test_the_raw_internal_reason_never_reaches_the_ticket():
+    """OBSERVED ON WWD-6743 2026-08-09. The note posted the block reason verbatim:
+
+        "Swarm is BLOCKED on this: Closing-comment template needs the 2026.8.9.17
+         reload before I can test it — that release fixes synced content being..."
+
+    Block reasons are written worker-to-operator. On a service-desk ticket the reporter
+    reads that and learns nothing — the same internal-voice problem the closing comment
+    had, on a different surface.
+    """
+    from swarm.integrations.jira import _blocker_note_body
+    from swarm.tasks.task import AWAITING_OPERATOR_REF
+
+    task = _blocked(_board_for(), AWAITING_OPERATOR_REF, "needs the 2026.8.9.17 reload")
+    body = _blocker_note_body(task, task.block_reason, "[swarm:blocker:1347]")
+
+    assert "2026.8.9.17" not in body, "an internal version number reached the ticket"
+    assert "reload" not in body.lower()
+    assert "pending a decision from the team" in body
+
+
+def test_an_external_blocker_NAMES_the_artifact():
+    """external_blocker_ref is an artifact by design — the verb asks for "npm
+    eslint@^10" or a PR URL — so naming it tells a reader something true and checkable,
+    unlike the free-text reason."""
+    from swarm.integrations.jira import _blocker_note_body
+
+    task = _blocked(_board_for(), "platform release 6.2", "some long internal narrative")
+    body = _blocker_note_body(task, task.block_reason, "[swarm:blocker:1347]")
+
+    assert "platform release 6.2" in body
+    assert "internal narrative" not in body
+
+
+def test_a_blocker_with_no_artifact_says_only_what_is_certain():
+    from swarm.integrations.jira import _blocker_note_body
+
+    task = _blocked(_board_for(), "", "internal-only explanation")
+    body = _blocker_note_body(task, task.block_reason, "[swarm:blocker:9]")
+
+    assert "internal-only" not in body
+    assert "wait on a dependency" in body
+
+
+def test_clearing_reads_plainly():
+    from swarm.integrations.jira import _blocker_note_body
+
+    body = _blocker_note_body(_blocked(_board_for(), "", ""), "", "[swarm:blocker:9]")
+    assert body == "[swarm:blocker:9] Work on this has resumed."
+
+
+def test_it_does_not_say_BLOCKED_in_swarm_jargon():
+    """ "Swarm is BLOCKED on this" is our vocabulary, not the reporter's."""
+    from swarm.integrations.jira import _blocker_note_body
+
+    task = _blocked(_board_for(), "a PR", "r")
+    body = _blocker_note_body(task, "r", "[swarm:blocker:1]")
+    assert "BLOCKED" not in body
+    assert "Work on this is paused" in body
+
+
+def _board_for() -> TaskBoard:
+    """A throwaway board — these check pure formatting, not persistence."""
+    import tempfile
+
+    from swarm.db.core import SwarmDB
+    from swarm.db.task_store import SqliteTaskStore
+
+    return TaskBoard(store=SqliteTaskStore(SwarmDB(Path(tempfile.mkdtemp()) / "b.db")))
