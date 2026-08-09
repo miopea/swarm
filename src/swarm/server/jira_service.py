@@ -455,16 +455,27 @@ class JiraService:
             fields = prefetched.get(task.jira_key)
             if fields is None:
                 continue
+            # PERSIST ON CHANGE, NOTIFY ON NEWS — two different questions, and
+            # conflating them silently lost data. refresh_synced_content mutates the
+            # board's own SwarmTask object, so a change was visible in the daemon and
+            # written to the database only when there ALSO happened to be a notifiable
+            # comment. A reporter/due-date update, or a ticket whose only new comment is
+            # Swarm's own, mutated memory and never persisted — surviving until some
+            # unrelated board write flushed it, and lost on restart.
+            #
+            # Observed on WWD-6743: the API served a description with the synced block
+            # while the database had none.
+            before = task.description
             try:
                 latest = await jira.refresh_synced_content(task, prefetched=fields)
             except Exception:
                 _log.warning("jira: refresh of %s raised", task.jira_key, exc_info=True)
                 continue
-            if not latest:
-                continue
-            updated += 1
-            self._task_board.update(task.id, description=task.description)
-            self._notify_of_jira_update(task, latest)
+            if task.description != before:
+                self._task_board.update(task.id, description=task.description)
+                updated += 1
+            if latest:
+                self._notify_of_jira_update(task, latest)
         if updated:
             self._broadcast_ws({"type": "task_update"})
         return updated

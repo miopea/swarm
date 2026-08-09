@@ -191,11 +191,20 @@ def _service(board: TaskBoard, jira: Any, store: Any = None):
 def _jira_reporting(latest: str) -> Any:
     jira = MagicMock()
     jira.enabled = True
-    # The sweep now BATCHES: one fetch_synced_fields for the whole set, then a per-task
-    # apply. Before batching it issued one API call per task, which measured ~123 calls
-    # per cycle on a 55-ticket board (#1350).
+    # The sweep BATCHES: one fetch_synced_fields for the whole set, then a per-task
+    # apply. Before batching it issued one API call per task — ~123 per cycle on a
+    # 55-ticket board (#1350).
     jira.fetch_synced_fields = AsyncMock(side_effect=lambda keys: {k: {} for k in keys})
-    jira.refresh_synced_content = AsyncMock(return_value=latest)
+
+    async def _apply(task: Any, prefetched: Any = None) -> str:
+        # MUTATES, like the real thing. The sweep now persists on an actual description
+        # change rather than on the return value, so a mock that reports news without
+        # changing anything no longer resembles the code under test.
+        if latest:
+            task.description = f"{task.description}\n\n--- Jira sync ---\nComments:\n{latest}"
+        return latest
+
+    jira.refresh_synced_content = AsyncMock(side_effect=_apply)
     return jira
 
 
@@ -261,7 +270,14 @@ async def test_one_failure_does_not_stop_the_rest(board: TaskBoard):
     jira = MagicMock()
     jira.enabled = True
     jira.fetch_synced_fields = AsyncMock(side_effect=lambda keys: {k: {} for k in keys})
-    jira.refresh_synced_content = AsyncMock(side_effect=[RuntimeError("boom"), "Bob: hi"])
+
+    async def _apply(task: Any, prefetched: Any = None) -> str:
+        if task.jira_key == "WWD-6":
+            raise RuntimeError("boom")
+        task.description = f"{task.description}\n\n--- Jira sync ---\nComments:\nBob: hi"
+        return "Bob: hi"
+
+    jira.refresh_synced_content = AsyncMock(side_effect=_apply)
 
     assert await _service(board, jira, MagicMock()).refresh_linked_tasks() == 1
 
@@ -475,3 +491,51 @@ def test_every_comment_swarm_writes_carries_the_marker():
             f"{name} writes to Jira without marking the text as Swarm's, so the comment "
             f"sync will report it back to a worker as new activity"
         )
+
+
+# --- persistence is separate from notification --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_change_with_nothing_to_notify_is_STILL_persisted(board: TaskBoard):
+    """FOUND LIVE 2026-08-09 on WWD-6743: the API served a description containing the
+    synced block while the DATABASE had none.
+
+    refresh_synced_content mutates the board's own SwarmTask object, and the service
+    persisted only when there was ALSO a notifiable comment. So a reporter/due-date
+    update — or a ticket whose only new comment is Swarm's own, which the echo fix now
+    suppresses — changed memory and never reached the database. It survived until some
+    unrelated board write flushed it, and was lost on restart.
+
+    Persist on CHANGE; notify on NEWS. Two questions, not one.
+    """
+    task = _linked(board, "WWD-1", worker="api")
+    store = MagicMock()
+    jira = MagicMock()
+    jira.enabled = True
+    jira.fetch_synced_fields = AsyncMock(side_effect=lambda keys: {k: {} for k in keys})
+
+    async def _mutate(t: Any, prefetched: Any = None) -> str:
+        t.description = "body\n\n--- Jira sync ---\nReported by: Larissa"
+        return ""  # nothing worth telling a worker about
+
+    jira.refresh_synced_content = AsyncMock(side_effect=_mutate)
+
+    assert await _service(board, jira, store).refresh_linked_tasks() == 1
+    assert "Reported by: Larissa" in board.get(task.id).description, (
+        "the synced block never reached the board, so it is lost on restart"
+    )
+    store.send.assert_not_called(), "it notified about a change with no news"
+
+
+@pytest.mark.asyncio
+async def test_no_change_persists_nothing(board: TaskBoard):
+    """The sweep runs every cycle for every open linked task; writing unconditionally
+    would churn the board and its broadcasts forever."""
+    _linked(board, "WWD-2", worker="api")
+    jira = MagicMock()
+    jira.enabled = True
+    jira.fetch_synced_fields = AsyncMock(side_effect=lambda keys: {k: {} for k in keys})
+    jira.refresh_synced_content = AsyncMock(return_value="")
+
+    assert await _service(board, jira, MagicMock()).refresh_linked_tasks() == 0
