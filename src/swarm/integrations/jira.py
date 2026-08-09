@@ -48,6 +48,13 @@ _JIRA_ISSUE_FIELDS = (
     "reporter,duedate"
 )
 
+# EXACTLY the fields _build_synced_description reads. Named once because the batched
+# sweep and the single-task refresh must request the same set: when batching was added it
+# asked for "comment,attachment" only, so reporter and duedate — added later to
+# _JIRA_ISSUE_FIELDS — silently never reached the scheduled path. The unit tests missed
+# it because they drive the single-task path with a mocked get_issue.
+_SYNC_BLOCK_FIELDS = "comment,attachment,reporter,duedate"
+
 # Cap how much of the synced text we append to a task description so we don't
 # blow past the task description size limit (10000 chars enforced in routes).
 _DESC_BUDGET = 9000
@@ -861,7 +868,7 @@ class JiraSyncService:
                 issues = await self.client.search_issues(
                     f"key IN ({', '.join(chunk)})",
                     max_results=len(chunk),
-                    fields="comment,attachment",
+                    fields=_SYNC_BLOCK_FIELDS,
                 )
             except Exception:
                 # A batch that cannot be read is a no-op for those tasks, never a

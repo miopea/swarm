@@ -176,3 +176,46 @@ def test_assign_calls_it_before_returning():
         "imported tasks still dispatch with no acceptance criteria, so the verifier "
         "default-passes every one of them"
     )
+
+
+# --- the two refresh paths must agree ------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_BATCHED_path_returns_everything_the_block_renders(tmp_path: Path):
+    """FOUND LIVE 2026-08-09: reporter and due date never appeared on a real task.
+
+    The scheduled sweep batches via fetch_synced_fields, which asked Jira for
+    "comment,attachment" only — a field list written before reporter/duedate existed. So
+    the two fields reached the single-task refresh (which uses the full default set) and
+    never reached the path that actually runs every five minutes.
+
+    Every unit test passed because they drive refresh_synced_content directly with a
+    mocked get_issue. This asserts what the BATCH asks for.
+    """
+    from swarm.integrations.jira import _SYNC_BLOCK_FIELDS
+
+    svc = _svc(tmp_path)
+    svc.client.search_issues = AsyncMock(return_value=[])
+    await svc.fetch_synced_fields(["WWD-1"])
+
+    requested = svc.client.search_issues.await_args.kwargs["fields"]
+    assert requested == _SYNC_BLOCK_FIELDS
+    for needed in ("comment", "attachment", "reporter", "duedate"):
+        assert needed in requested, f"the scheduled refresh never fetches {needed}"
+
+
+def test_the_block_renders_nothing_it_does_not_request():
+    """The inverse, so the constant cannot quietly fall behind the renderer: every field
+    _build_synced_description reads must be in the batch's field list."""
+    from swarm.integrations.jira import _SYNC_BLOCK_FIELDS
+
+    src = Path("src/swarm/integrations/jira.py").read_text()
+    for reader in ("_format_ticket_facts", "_build_synced_description"):
+        body = src[src.index(f"def {reader}") :]
+        body = body[: body.index("\ndef ", 5)]
+        for field in ("comment", "attachment", "reporter", "duedate"):
+            if f'"{field}"' in body or f'get("{field}")' in body:
+                assert field in _SYNC_BLOCK_FIELDS, (
+                    f"{reader} renders {field} but the batched refresh never asks for it"
+                )
