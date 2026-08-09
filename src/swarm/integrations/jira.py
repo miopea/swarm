@@ -830,7 +830,46 @@ class JiraSyncService:
     def _sync_tail(description: str) -> str:
         return description.partition(_JIRA_SYNC_MARKER)[2]
 
-    async def refresh_synced_content(self, task: SwarmTask) -> str:
+    # One search returns at most this many issues; the sweep chunks beyond it.
+    _REFRESH_BATCH = 50
+
+    async def fetch_synced_fields(self, keys: list[str]) -> dict[str, dict[str, Any]]:
+        """Comment/attachment fields for many tickets in ONE search per chunk.
+
+        MEASURED 2026-08-09: refreshing one ticket per call made the sweep O(open linked
+        tasks) — about 123 API calls per cycle on a 55-ticket board, ~14,760/hour across
+        ten devs, forever. A JQL `key IN (...)` search returns the same fields for the
+        whole set at once.
+
+        Keys are VALIDATED, not escaped, so a malformed jira_key cannot alter the query —
+        the same guard the ownership check uses.
+        """
+        import re as _re
+
+        safe = [k for k in keys if k and _re.fullmatch(r"[A-Z][A-Z0-9_]*-\d+", k)]
+        out: dict[str, dict[str, Any]] = {}
+        for i in range(0, len(safe), self._REFRESH_BATCH):
+            chunk = safe[i : i + self._REFRESH_BATCH]
+            try:
+                issues = await self.client.search_issues(
+                    f"key IN ({', '.join(chunk)})",
+                    max_results=len(chunk),
+                    fields="comment,attachment",
+                )
+            except Exception:
+                # A batch that cannot be read is a no-op for those tasks, never a
+                # truncation — refresh_synced_content is not called for them.
+                _log.debug("batched refresh failed for %d keys", len(chunk), exc_info=True)
+                continue
+            for issue in issues or []:
+                key = str(issue.get("key", "") or "")
+                if key:
+                    out[key] = issue.get("fields", {}) or {}
+        return out
+
+    async def refresh_synced_content(
+        self, task: SwarmTask, prefetched: dict[str, Any] | None = None
+    ) -> str:
         """Re-mirror a linked ticket's comments and attachments. ADDITIVE ONLY.
 
         Returns the newest comment's text when the synced content CHANGED, else "".
@@ -856,14 +895,16 @@ class JiraSyncService:
         """
         if not self.enabled or not task.jira_key:
             return ""
-        try:
-            issue = await self.client.get_issue(task.jira_key)
-        except Exception:
-            # A refresh that cannot read is a no-op, never a truncation.
-            _log.debug("could not refresh %s", task.jira_key, exc_info=True)
-            return ""
-
-        fields = issue.get("fields", {}) or {}
+        if prefetched is not None:
+            fields = prefetched
+        else:
+            try:
+                issue = await self.client.get_issue(task.jira_key)
+            except Exception:
+                # A refresh that cannot read is a no-op, never a truncation.
+                _log.debug("could not refresh %s", task.jira_key, exc_info=True)
+                return ""
+            fields = issue.get("fields", {}) or {}
         # NOT re-derived from the Jira body: that would drop worker-authored text.
         base_desc = _strip_sync_tail(task.description).rstrip()
         existing = list(task.attachments or [])

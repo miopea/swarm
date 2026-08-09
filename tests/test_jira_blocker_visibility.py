@@ -126,6 +126,10 @@ def _service(board: TaskBoard, jira: Any):
     svc._drone_log = MagicMock()
     svc._broadcast_ws = lambda _p: None
     svc._track_task = lambda _t: None
+    # reconcile_blockers narrows to blocked-or-noted tasks after a first full pass
+    # (#1350), so a hand-built service needs the same starting state a real one has.
+    svc._blocker_noted = set()
+    svc._blocker_pass_done = False
     return svc
 
 

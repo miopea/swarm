@@ -60,6 +60,9 @@ class JiraService:
         # itself still happens and still logs.
         self._message_store = message_store
         self._task_history = task_history
+        # Tasks we have posted a blocker note for — see reconcile_blockers.
+        self._blocker_noted: set[str] = set()
+        self._blocker_pass_done = False
 
     async def run_import(self) -> int:
         """Execute a single Jira import cycle. Returns count of new tasks."""
@@ -368,9 +371,25 @@ class JiraService:
         jira = self._get_jira()
         if not jira or not jira.enabled:
             return 0
+
+        # ONE full pass per daemon start, cheap thereafter.
+        #
+        # Reading every open linked ticket's comments every cycle cost one API call per
+        # task forever, to discover nothing for tasks that have never been blocked. But
+        # narrowing purely to "is blocked now" would strand a note left by a PREVIOUS
+        # daemon instance, since the set of known notes lives in memory — so the first
+        # pass after a restart still checks everything and rebuilds it.
+        known = self._blocker_noted
+        first_pass = not self._blocker_pass_done
+
         updated = 0
         for task in self._task_board.all_tasks:
             if not task.jira_key or task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+                continue
+            blocked_now = task.status is TaskStatus.BLOCKED
+            if not first_pass and not blocked_now and task.id not in known:
+                # Not blocked and carries no note we posted: nothing to say, and asking
+                # Jira would only confirm that.
                 continue
             reason = ""
             if task.status is TaskStatus.BLOCKED:
@@ -380,7 +399,12 @@ class JiraService:
                     or "blocked; no reason recorded"
                 )
             try:
-                if await jira.sync_blocker_note(task, reason):
+                changed = await jira.sync_blocker_note(task, reason)
+                if reason:
+                    known.add(task.id)
+                else:
+                    known.discard(task.id)
+                if changed:
                     updated += 1
                     _log.warning(
                         "jira: %s blocker note %s — #%s",
@@ -390,6 +414,7 @@ class JiraService:
                     )
             except Exception:
                 _log.warning("jira: blocker note for %s raised", task.jira_key, exc_info=True)
+        self._blocker_pass_done = True
         return updated
 
     async def refresh_linked_tasks(self) -> int:
@@ -420,10 +445,18 @@ class JiraService:
             and t.status not in (TaskStatus.DONE, TaskStatus.FAILED)
             and not _is_disowned(t)
         ]
+        # ONE search for the whole set instead of one call per task — see
+        # fetch_synced_fields. A task missing from the response is simply not refreshed
+        # this cycle, which is a no-op rather than a truncation.
+        prefetched = await jira.fetch_synced_fields([t.jira_key for t in candidates])
+
         updated = 0
         for task in candidates:
+            fields = prefetched.get(task.jira_key)
+            if fields is None:
+                continue
             try:
-                latest = await jira.refresh_synced_content(task)
+                latest = await jira.refresh_synced_content(task, prefetched=fields)
             except Exception:
                 _log.warning("jira: refresh of %s raised", task.jira_key, exc_info=True)
                 continue

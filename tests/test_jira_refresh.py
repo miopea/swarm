@@ -191,6 +191,10 @@ def _service(board: TaskBoard, jira: Any, store: Any = None):
 def _jira_reporting(latest: str) -> Any:
     jira = MagicMock()
     jira.enabled = True
+    # The sweep now BATCHES: one fetch_synced_fields for the whole set, then a per-task
+    # apply. Before batching it issued one API call per task, which measured ~123 calls
+    # per cycle on a 55-ticket board (#1350).
+    jira.fetch_synced_fields = AsyncMock(side_effect=lambda keys: {k: {} for k in keys})
     jira.refresh_synced_content = AsyncMock(return_value=latest)
     return jira
 
@@ -256,6 +260,7 @@ async def test_one_failure_does_not_stop_the_rest(board: TaskBoard):
     _linked(board, "WWD-7", worker="web")
     jira = MagicMock()
     jira.enabled = True
+    jira.fetch_synced_fields = AsyncMock(side_effect=lambda keys: {k: {} for k in keys})
     jira.refresh_synced_content = AsyncMock(side_effect=[RuntimeError("boom"), "Bob: hi"])
 
     assert await _service(board, jira, MagicMock()).refresh_linked_tasks() == 1
