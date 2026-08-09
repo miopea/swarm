@@ -398,3 +398,80 @@ def test_appending_to_a_task_with_no_marker_is_unchanged(board: TaskBoard):
     new_desc, refusal = _resolve_description(task, None, "MORE")
     assert refusal is None
     assert new_desc == "PLAIN BODY\n\nMORE"
+
+
+# --- Swarm must not report its own comments as news ---------------------------
+
+
+@pytest.mark.asyncio
+async def test_swarms_own_blocker_note_does_not_notify(tmp_path: Path, board: TaskBoard):
+    """OBSERVED LIVE 2026-08-09, in my own inbox:
+
+        [finding] from jira: WWD-6719 (your task #1347) has new activity — Latest
+        comment: [swarm:blocker:1347] Swarm is BLOCKED on this: ...
+
+    Posting a blocker note made the comment sync see new activity and message the worker
+    about a comment SWARM HAD JUST WRITTEN — twice, once for the block and once for the
+    clear. An echo like that trains workers to ignore the notification, which is exactly
+    when a real stakeholder comment gets missed.
+    """
+    svc = _svc(tmp_path)
+    svc.client.get_issue = AsyncMock(
+        return_value=_issue(["[swarm:blocker:1347] Swarm is BLOCKED on this: waiting"])
+    )
+    task = _task(board, "THE JIRA BODY")
+
+    latest = await svc.refresh_synced_content(task)
+
+    assert latest == "", "Swarm notified a worker about its own comment"
+    assert "Swarm is BLOCKED" in task.description, (
+        "the note should still be MIRRORED — only the notification is suppressed, "
+        "because the mirror is what a human reads"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_real_comment_still_notifies(tmp_path: Path, board: TaskBoard):
+    """The suppression must not become a blanket mute — a stakeholder changing scope is
+    the whole reason this feature exists."""
+    svc = _svc(tmp_path)
+    svc.client.get_issue = AsyncMock(return_value=_issue(["actually the customer needs X"]))
+    assert "customer needs X" in await svc.refresh_synced_content(_task(board, "THE JIRA BODY"))
+
+
+@pytest.mark.asyncio
+async def test_a_human_comment_under_an_older_swarm_note_still_notifies(
+    tmp_path: Path, board: TaskBoard
+):
+    """Only the NEWEST comment decides. A swarm note earlier in the thread must not mute
+    everything after it."""
+    svc = _svc(tmp_path)
+    svc.client.get_issue = AsyncMock(
+        return_value=_issue(["[swarm:blocker:9] Swarm is BLOCKED on this: x", "please also do Y"])
+    )
+    assert "do Y" in await svc.refresh_synced_content(_task(board, "THE JIRA BODY"))
+
+
+def test_every_comment_swarm_writes_carries_the_marker():
+    """The blocker note and the worklog already carried markers; the COMPLETION comment
+    did not, so it would echo the same way. Swept rather than pinned per call site."""
+    import ast
+
+    from swarm.integrations.jira import _SWARM_COMMENT_PREFIX
+
+    src = Path("src/swarm/integrations/jira.py").read_text()
+    writers = ("post_completion_comment", "sync_blocker_note", "log_work")
+    for name in writers:
+        fn = next(
+            n
+            for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.AsyncFunctionDef) and n.name == name
+        )
+        # Case-insensitive, and accepts the CONSTANT as well as the literal: the
+        # completion comment appends _SWARM_COMMENT_MARKER rather than the raw string,
+        # which the first version of this check missed.
+        code = ast.unparse(fn).lower()
+        assert _SWARM_COMMENT_PREFIX in code or "marker" in code, (
+            f"{name} writes to Jira without marking the text as Swarm's, so the comment "
+            f"sync will report it back to a worker as new activity"
+        )

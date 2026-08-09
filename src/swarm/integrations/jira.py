@@ -55,6 +55,11 @@ _JIRA_ISSUE_FIELDS = (
 # it because they drive the single-task path with a mocked get_issue.
 _SYNC_BLOCK_FIELDS = "comment,attachment,reporter,duedate"
 
+# Every comment Swarm writes carries this prefix. Used to recognise our OWN words when
+# deciding whether a ticket has new activity worth telling a worker about.
+_SWARM_COMMENT_PREFIX = "[swarm:"
+_SWARM_COMMENT_MARKER = "[swarm:completion]"
+
 # Cap how much of the synced text we append to a task description so we don't
 # blow past the task description size limit (10000 chars enforced in routes).
 _DESC_BUDGET = 9000
@@ -1217,6 +1222,10 @@ class JiraSyncService:
         if task.resolution:
             parts.append(f"\n----\n*Technical Resolution:*\n{task.resolution}")
 
+        # Marked as Swarm's own, so the comment sync does not report it back to the
+        # worker as "new activity" — see _latest_comment. The blocker note and the
+        # worklog already carried markers; this one did not, so it echoed.
+        parts.append(f"\n{_SWARM_COMMENT_MARKER}")
         body = "\n".join(parts)
 
         try:
@@ -1624,6 +1633,17 @@ def _latest_comment(comment_field: object) -> str:
         body = _extract_text(c.get("body", "")).strip()
         if not body:
             continue
+        if _SWARM_COMMENT_PREFIX in body:
+            # OUR OWN WORDS. Observed live 2026-08-09: posting a blocker note made the
+            # comment sync see "new activity" and message the worker about a comment
+            # Swarm had just written — twice, once for the block and once for the clear.
+            # An echo like that trains workers to ignore the notification, which is
+            # exactly when a real stakeholder comment gets missed.
+            #
+            # The comment is still MIRRORED into the description; only the notification
+            # is suppressed. The mirror is what a human reads, and Swarm's own note
+            # belongs in the thread.
+            return ""
         author = _format_comment_author(c.get("author"))
         return f"{author}: {body}"
     return ""
