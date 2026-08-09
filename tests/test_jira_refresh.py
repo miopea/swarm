@@ -323,3 +323,73 @@ def test_no_caller_passes_a_Message_object_to_send():
         f"these pass a Message object to send(), which raises TypeError into whatever "
         f"except block surrounds it: {offenders}"
     )
+
+
+# --- the sequence that actually happens, which the fixture above did not ------
+
+
+@pytest.mark.asyncio
+async def test_findings_appended_AFTER_a_sync_still_survive(tmp_path: Path, board: TaskBoard):
+    """OBSERVED ON REAL DATA 2026-08-09, and it destroyed the findings.
+
+    `test_worker_authored_description_text_survives` passes and proved nothing about
+    this case: its fixture had NO existing sync tail, so the appended text landed above
+    the marker. The real sequence is import -> sync -> worker appends -> sync again, and
+    by the second sync the description already ENDS with the generated block. Appending
+    to the end therefore put the findings BELOW the marker, and the next refresh
+    stripped and rebuilt the tail, taking them with it.
+
+    Two features each correct alone: #1289 added append_description precisely so adding
+    to a description cannot lose it, and the sync owns everything after the marker.
+    Together they deleted exactly what append_description exists to protect.
+    """
+    from swarm.mcp.handlers._edit import _resolve_description
+
+    svc = _svc(tmp_path)
+    svc.client.get_issue = AsyncMock(return_value=_issue(["first comment"]))
+    task = _task(board, "THE JIRA BODY")
+
+    # 1. first sync — the description now ends with the generated block
+    await svc.refresh_synced_content(task)
+    assert "--- Jira sync ---" in task.description
+
+    # 2. the worker appends findings, exactly as swarm_edit_task does
+    new_desc, refusal = _resolve_description(task, None, "WORKER FINDINGS: the latch is the cause")
+    assert refusal is None
+    task.description = new_desc
+
+    # 3. a new comment arrives, so the tail is rebuilt
+    svc.client.get_issue = AsyncMock(return_value=_issue(["first comment", "second comment"]))
+    await svc.refresh_synced_content(task)
+
+    assert "WORKER FINDINGS: the latch is the cause" in task.description, (
+        "the refresh destroyed findings a worker appended after the first sync — the "
+        "exact data loss append_description exists to prevent"
+    )
+    assert "second comment" in task.description, "the new comment did not arrive"
+
+
+def test_appending_puts_text_above_the_sync_marker(board: TaskBoard):
+    """The mechanism, stated directly: anything added must land in the user-authored
+    region, because the sync regenerates everything after the marker."""
+    from swarm.mcp.handlers._edit import _resolve_description
+    from swarm.tasks.task import JIRA_SYNC_MARKER
+
+    task = _task(board, f"BODY{JIRA_SYNC_MARKER}Comments:\n[x] Someone:\nhello")
+    new_desc, refusal = _resolve_description(task, None, "MY FINDINGS")
+
+    assert refusal is None
+    base, _, tail = new_desc.partition(JIRA_SYNC_MARKER)
+    assert "MY FINDINGS" in base, "the addition landed below the marker; the next sync eats it"
+    assert "MY FINDINGS" not in tail
+    assert "hello" in tail, "the generated tail was not preserved"
+
+
+def test_appending_to_a_task_with_no_marker_is_unchanged(board: TaskBoard):
+    """The common case must not regress: an unlinked task has no marker at all."""
+    from swarm.mcp.handlers._edit import _resolve_description
+
+    task = _task(board, "PLAIN BODY")
+    new_desc, refusal = _resolve_description(task, None, "MORE")
+    assert refusal is None
+    assert new_desc == "PLAIN BODY\n\nMORE"

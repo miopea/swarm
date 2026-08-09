@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from swarm.mcp._arg_types import EditTaskArgs
 from swarm.mcp.types import TextContent
-from swarm.tasks.task import TaskStatus
+from swarm.tasks.task import JIRA_SYNC_MARKER, TaskStatus
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
@@ -136,9 +136,21 @@ def _resolve_description(
     if not addition:
         return None, "'append_description' is empty — nothing to add. Nothing changed."
     existing = task.description or ""
-    # Blank-line separated so appended blocks stay readable instead of running into
-    # the previous paragraph.
-    return (f"{existing}\n\n{addition}" if existing else addition), None
+    # APPEND TO THE USER-AUTHORED REGION, NOT TO THE END OF THE STRING.
+    #
+    # Observed on real data 2026-08-09: a linked task's description ends with the block
+    # the Jira sync regenerates. Appending to the end therefore put the worker's findings
+    # BELOW the `--- Jira sync ---` marker, and the next sync — five minutes later —
+    # stripped the tail and rebuilt it, taking the findings with it.
+    #
+    # Two features that are each correct alone: #1289 added append_description precisely
+    # so that adding to a description cannot lose it, and the Jira sync owns everything
+    # after the marker. Together they deleted exactly what append_description exists to
+    # protect. The addition now goes before the marker and the generated tail is
+    # re-attached unchanged.
+    base, marker, tail = existing.partition(JIRA_SYNC_MARKER)
+    new_base = f"{base.rstrip()}\n\n{addition}" if base.strip() else addition
+    return new_base + (marker + tail if marker else ""), None
 
 
 def _handle_edit_task(d: SwarmDaemon, worker_name: str, args: EditTaskArgs) -> list[TextContent]:

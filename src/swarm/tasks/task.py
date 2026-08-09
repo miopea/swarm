@@ -17,6 +17,12 @@ _log = logging.getLogger("swarm.tasks.task")
 # these (see ``SwarmTask.is_available``), so a deliberately-parked deferred
 # item (e.g. a "HOLD until upstream ships" dependency bump) stays on the
 # board without being grabbed by a mismatched worker. Matched case-folded.
+# The boundary between the user-authored part of a description and the block the Jira
+# sync regenerates. It lives HERE, not in the Jira module, because two unrelated writers
+# have to agree on it: the sync rebuilds everything after it, and any code that ADDS to a
+# description must stay before it or its text is discarded on the next sync.
+JIRA_SYNC_MARKER = "\n\n--- Jira sync ---\n"
+
 HOLD_TAG = "hold"  # canonical tag applied when filing a task on HOLD
 # #1015/#1045: applied by ``TaskBoard.park`` when a worker deliberately sets
 # its OWN active task down. Park moves ACTIVE → ASSIGNED and keeps the owner,

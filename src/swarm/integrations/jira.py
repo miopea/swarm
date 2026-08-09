@@ -12,7 +12,13 @@ import aiohttp
 from swarm.config import JiraConfig
 from swarm.integrations.retry import is_transient_status, retry_transient
 from swarm.logging import get_logger
-from swarm.tasks.task import SwarmTask, TaskPriority, TaskStatus, TaskType
+from swarm.tasks.task import (
+    JIRA_SYNC_MARKER,
+    SwarmTask,
+    TaskPriority,
+    TaskStatus,
+    TaskType,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -23,7 +29,7 @@ _log = get_logger("integrations.jira")
 
 # Marker that delimits the auto-synced tail of a Jira-imported description.
 # Anything after this line is regenerated on every refresh.
-_JIRA_SYNC_MARKER = "\n\n--- Jira sync ---\n"
+_JIRA_SYNC_MARKER = JIRA_SYNC_MARKER
 
 # Field list requested from the Jira REST search/get APIs. Includes comment
 # and attachment so we can mirror them into the Swarm task on import.
