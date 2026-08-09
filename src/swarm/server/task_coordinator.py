@@ -360,7 +360,42 @@ class TaskCoordinator:
                     f"task queued: {task.title}",
                     category=LogCategory.OPERATOR,
                 )
+            await self._synthesize_criteria_if_missing(task, actor)
         return result
+
+    async def _synthesize_criteria_if_missing(self, task: SwarmTask, actor: str) -> None:
+        """Give an imported Jira task acceptance criteria before it is dispatched.
+
+        MEASURED GAP: apply_synthesized_criteria runs for swarm_create_task and
+        create_task_smart, and the JIRA IMPORT PATH NEVER CALLS IT. So every imported
+        ticket arrived with no criteria at all, and the verifier grades a task with none
+        by default-passing it — every piece of Jira work was unverifiable by
+        construction.
+
+        SYNTHESISED RATHER THAN PARSED FROM THE TICKET, deliberately. Sampling 50 real
+        tickets, ZERO mentioned acceptance criteria, so a parser would import nothing;
+        and criteria parsed at import go stale the moment someone edits the ticket,
+        because the refresh is additive and does not touch them. Synthesis reads the
+        description Swarm already mirrors and has no such coupling.
+
+        ON ASSIGN, NOT ON IMPORT: an imported ticket may never be worked, and this costs
+        a model call. Assignment is also the last point before dispatch, so the criteria
+        reach the worker in its task message — which is why this is awaited rather than
+        backgrounded.
+
+        Scoped to LINKED tasks: locally created ones already get criteria at creation,
+        and widening it would add a model call to flows that never lacked them.
+        apply_synthesized_criteria is itself gated on config, skips a task that already
+        has criteria, and never raises.
+        """
+        if not getattr(task, "jira_key", "") or task.acceptance_criteria:
+            return
+        try:
+            await self._d.tasks.apply_synthesized_criteria(task, actor=actor)
+        except Exception:
+            # Advisory. A task that dispatches without criteria is worse-verified, not
+            # broken; failing the assignment over it would be the wrong trade.
+            _log.warning("criteria synthesis failed for %s on assign", task.jira_key, exc_info=True)
 
     # ----- start -----
 

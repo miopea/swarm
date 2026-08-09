@@ -39,7 +39,14 @@ _JIRA_SYNC_MARKER = JIRA_SYNC_MARKER
 # divergence, not a match.
 _TERMINAL_STATUSES = (TaskStatus.DONE, TaskStatus.FAILED)
 
-_JIRA_ISSUE_FIELDS = "summary,description,status,issuetype,priority,labels,comment,attachment"
+_JIRA_ISSUE_FIELDS = (
+    "summary,description,status,issuetype,priority,labels,comment,attachment,"
+    # Measured 2026-08-09 across 50 real tickets: reporter is populated on 100% of
+    # both WWD and IS, duedate on 36%/12%. components, parent, environment,
+    # fixVersions and issuelinks were populated on ZERO, so they are deliberately
+    # not requested — importing a field nobody fills is the sprint mistake again.
+    "reporter,duedate"
+)
 
 # Cap how much of the synced text we append to a task description so we don't
 # blow past the task description size limit (10000 chars enforced in routes).
@@ -1508,6 +1515,25 @@ def _format_comment_timestamp(raw: str) -> str:
     return raw
 
 
+def _format_ticket_facts(fields: dict[str, Any]) -> str:
+    """Reporter and due date, rendered as one short block, or "".
+
+    Deliberately does NOT touch task priority. A due date is a scheduling FACT the
+    worker should see; letting it silently reorder the board is a separate decision
+    with its own blast radius, and the sprint work already showed how easily an
+    unverified prioritisation rule ships.
+    """
+    lines: list[str] = []
+    reporter = (fields.get("reporter") or {}) if isinstance(fields.get("reporter"), dict) else {}
+    name = str(reporter.get("displayName", "") or "").strip()
+    if name:
+        lines.append(f"Reported by: {name}")
+    due = str(fields.get("duedate", "") or "").strip()
+    if due:
+        lines.append(f"Due: {due}")
+    return "\n".join(lines)
+
+
 def _format_comments(comment_field: object) -> str:
     """Render Jira comments as a plain-text block.
 
@@ -1635,6 +1661,14 @@ def _build_synced_description(
         parts.append(base_description.rstrip())
 
     sync_sections: list[str] = []
+    # WHO ASKED and WHEN IT IS DUE, above the comments because they are the context a
+    # worker needs before reading the thread. They live in the REGENERATED block rather
+    # than on SwarmTask so a due date moved in Jira updates on the next sync — a stored
+    # copy would silently go stale, and neither is Swarm's to own.
+    ticket_facts = _format_ticket_facts(fields)
+    if ticket_facts:
+        sync_sections.append(ticket_facts)
+
     comments_text = _format_comments(fields.get("comment"))
     if comments_text:
         sync_sections.append("Comments:\n" + comments_text)
