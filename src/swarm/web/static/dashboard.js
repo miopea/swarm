@@ -4,7 +4,33 @@
     var _workerCount = _swarmCfg.workerCount || 0;
     let selectedWorker = null;
     var _pageReady = false;
-    try { selectedWorker = sessionStorage.getItem('swarm_selected_worker') || null; } catch(e) {}
+    // PANEL MODE (#1353) starts with NO selected worker, and this is the earliest point
+    // it can be enforced. window.open COPIES the opener's sessionStorage, so the popped
+    // window would otherwise inherit the opener's worker here — before init runs — and
+    // anything that later acts on `selectedWorker` would mount an xterm and attach a
+    // second PTY subscription for a terminal nobody can see. Terminal traffic is the
+    // heaviest thing this daemon moves.
+    var _panelMode = false;
+    try {
+        _panelMode = new URLSearchParams(window.location.search).get('panel') === 'tasks';
+    } catch (_e) {}
+    if (!_panelMode) {
+        try { selectedWorker = sessionStorage.getItem('swarm_selected_worker') || null; } catch(e) {}
+    } else {
+        // Marked HERE, not in init(). Two reasons: the class is purely presentational
+        // and must not depend on the whole of init() completing, and applying it before
+        // first paint avoids flashing the full dashboard for a moment. document.body is
+        // available because this script is loaded at the end of <body>; the listener is
+        // the belt-and-braces path if that ever changes.
+        if (document.body) {
+            document.body.classList.add('panel-mode');
+        } else {
+            document.addEventListener('DOMContentLoaded', function () {
+                document.body.classList.add('panel-mode');
+            });
+        }
+        try { document.title = 'Swarm — Tasks & Decisions'; } catch (_e2) {}
+    }
 
     // Show toast stored before a reload (survives location.reload)
     try {
@@ -103,6 +129,7 @@
 
     // --- Delegated event handlers (replaces inline onclick/onkeydown/oninput) ---
     var _actions = {
+        popOutTasks: function() { window.popOutTasks(); },
         toggleDrones: function() { toggleDrones(); },
         tunnelAction: function() { tunnelAction(); },
         requestNotifPermission: function() { requestNotifPermission(); },
@@ -12877,7 +12904,16 @@
         // operator returns to it. The operator can always click
         // "Queen Dashboard" in the sidebar to switch to CC.
         var restoredWorker = null;
-        try { restoredWorker = sessionStorage.getItem('swarm_selected_worker'); } catch (_) {}
+        if (isPanelMode()) {
+            // The class and title are applied at the top of this IIFE, before first
+            // paint. Nothing to do here except NOT restore a worker:
+            // DELIBERATELY NOT restoring one. window.open COPIES the opener's
+            // sessionStorage, so the popped window would restore the same worker and
+            // mount a second xterm — attaching a SECOND PTY subscription for a terminal
+            // nobody can see. Terminal traffic is the heaviest thing this daemon moves.
+        } else {
+            try { restoredWorker = sessionStorage.getItem('swarm_selected_worker'); } catch (_) {}
+        }
         if (restoredWorker && restoredWorker !== 'null' && restoredWorker.length > 0) {
             // Start in worker view; user explicitly clicks Queen Dashboard
             // when they want the CC.
@@ -12914,6 +12950,26 @@
             loadAttention().then(maybeNotifyAttention);
         }, POLL_INTERVAL_MS);
     }
+
+    // --- PANEL MODE (#1353) -------------------------------------------------
+    //
+    // The SAME page, showing only the tasks/decisions panel, opened in its own window.
+    // Reused rather than given its own template on purpose: a second page would need a
+    // second copy of the task renderer, the socket wiring and every element id, and two
+    // renderers for one panel drift — the Jira mappings panel already proved that, with
+    // the server-rendered one winning on load.
+    function isPanelMode() {
+        // Computed once at load — see _panelMode at the top of this IIFE, which has to
+        // run before the sessionStorage worker restore.
+        return _panelMode;
+    }
+
+    window.popOutTasks = function () {
+        // A named window, so pressing the button twice focuses the existing one rather
+        // than opening a second copy that would hold its own socket.
+        var w = window.open('/?panel=tasks', 'swarm-tasks', 'width=1100,height=800');
+        if (w) { try { w.focus(); } catch (_) {} }
+    };
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);

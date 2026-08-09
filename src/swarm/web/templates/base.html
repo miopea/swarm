@@ -1430,6 +1430,25 @@
             width: 60px;
         }
         /* Bottom tabbed panel */
+        /* PANEL MODE (#1353): the same dashboard page, showing only the tasks and
+           decisions panel, opened in its own window.
+
+           Deliberately NOT a second page. A standalone template would need its own copy
+           of the task renderer, its own socket wiring and its own element ids — and two
+           renderers for one panel drift, with the server-rendered one winning on load.
+           That already happened once with the Jira mappings panel. Reusing the page
+           means one renderer, one reconciler, and every action handler works unchanged. */
+        body.panel-mode .worker-list,
+        body.panel-mode .detail-area,
+        body.panel-mode #status-bar .status-actions,
+        body.panel-mode #bottom-panel-fab,
+        body.panel-mode #cc-queen-strip { display: none !important; }
+        body.panel-mode .dashboard { grid-template-columns: 1fr; grid-template-rows: 1fr; padding: 0; }
+        body.panel-mode .bottom-tabbed { grid-column: 1; grid-row: 1; height: 100vh; max-height: 100vh; }
+        body.panel-mode .bottom-tabbed > .tab-content.active { max-height: none; }
+        /* The pop-out control is meaningless inside the popped window itself. */
+        body.panel-mode [data-action="popOutTasks"] { display: none !important; }
+
         .bottom-tabbed {
             min-height: 0;
             overflow: hidden;

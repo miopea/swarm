@@ -477,3 +477,51 @@ def test_the_mapping_rows_are_dropdowns_of_real_statuses(playwright_page):
     # Grouped, so choosing a To Do status to mean 'completed' is visibly wrong rather
     # than merely a typo.
     assert first.locator("optgroup").count() >= 2, "options are not grouped by category"
+
+
+@pytest.mark.browser
+def test_panel_mode_renders_only_the_tasks_and_decisions_panel(playwright_page):
+    """#1353 in a real browser. The source scans prove the CSS and handlers exist; only
+    this proves the popped window actually renders the panel and hides the rest."""
+    page, daemon, base = playwright_page
+    page.goto(f"{base}/?panel=tasks", wait_until="domcontentloaded")
+    page.wait_for_selector("body.panel-mode", timeout=10000)
+
+    assert page.locator("#tab-tasks").count() == 1, "the tasks panel is missing"
+    assert page.locator("#tab-decisions").count() == 1, "the decisions panel is missing"
+    assert not page.locator(".worker-list").is_visible(), "the worker sidebar is still shown"
+    assert not page.locator(".detail-area").is_visible(), "the terminal area is still shown"
+    # The pop-out control must not offer to pop out the popped window.
+    assert not page.locator("#pop-out-tasks-btn").is_visible()
+
+
+@pytest.mark.browser
+def test_panel_mode_mounts_no_terminal(playwright_page):
+    """THE EXPENSIVE PROPERTY. window.open copies sessionStorage, so a popped window
+    could inherit the opener's selected worker and mount an xterm — attaching a second
+    PTY subscription for a terminal nobody can see."""
+    page, daemon, base = playwright_page
+    page.goto(f"{base}/", wait_until="domcontentloaded")
+    # Simulate the opener having a worker selected, which window.open would copy.
+    page.evaluate("() => sessionStorage.setItem('swarm_selected_worker', 'api')")
+
+    page.goto(f"{base}/?panel=tasks", wait_until="domcontentloaded")
+    page.wait_for_selector("body.panel-mode", timeout=10000)
+    page.wait_for_timeout(600)
+
+    assert page.locator(".xterm").count() == 0, (
+        "the popped window mounted a terminal, so it is holding a PTY subscription for "
+        "a view that is not even visible"
+    )
+
+
+@pytest.mark.browser
+def test_the_normal_dashboard_is_unaffected(playwright_page):
+    """The gate must not leak into the ordinary page — panel mode is opt-in by URL."""
+    page, daemon, base = playwright_page
+    page.goto(f"{base}/", wait_until="domcontentloaded")
+    page.wait_for_selector("#tab-tasks", timeout=10000)
+
+    assert page.locator("body.panel-mode").count() == 0
+    assert page.locator(".worker-list").is_visible(), "the sidebar vanished from the dashboard"
+    assert page.locator("#pop-out-tasks-btn").is_visible(), "the pop-out control is missing"

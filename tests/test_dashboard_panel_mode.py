@@ -1,0 +1,152 @@
+"""Popping the tasks/decisions panel into its own window (#1353).
+
+OPERATOR REQUEST: "pop-out the task/decision area of the UI so I could run these as a
+separate window, especially now that task management is handled there."
+
+IT IS THE SAME PAGE, not a second one. A standalone template would need its own copy of
+the task renderer, the socket wiring and every element id — and two renderers for one
+panel drift, with the server-rendered one winning on load. That already happened to the
+Jira mappings panel. Reusing the page means one renderer, one reconciler, and every
+action handler works unchanged.
+
+THE COST THAT HAD TO BE DESIGNED AROUND: window.open COPIES the opener's sessionStorage,
+and the dashboard restores the previously-selected worker from it on load — which mounts
+an xterm and attaches a SECOND PTY subscription for a terminal nobody can see. Terminal
+traffic is the heaviest thing this daemon moves.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+_JS = Path("src/swarm/web/static/dashboard.js").read_text()
+_HTML = Path("src/swarm/web/templates/dashboard.html").read_text()
+_BASE = Path("src/swarm/web/templates/base.html").read_text()
+
+
+def _js_without_comments() -> str:
+    """Whole-line // and /* comments dropped.
+
+    Scans in this repo have matched the PROSE EXPLAINING a change rather than the change
+    five separate times. The comments added here name both `sessionStorage` and
+    `panel-mode`.
+    """
+    out = []
+    for line in _JS.split("\n"):
+        st = line.lstrip()
+        if st.startswith(("//", "/*", "*/", "* ")):
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+# --- the control exists and is wired ------------------------------------------
+
+
+def test_the_pop_out_control_is_rendered_and_registered():
+    """A data-action with no handler is a button that does nothing — silently."""
+    assert 'data-action="popOutTasks"' in _HTML
+    assert re.search(r"^\s+popOutTasks: function", _js_without_comments(), re.M), (
+        "the pop-out button has no handler in the action registry"
+    )
+
+
+def test_it_opens_the_panel_url_in_a_named_window():
+    """NAMED, so pressing it twice focuses the existing window instead of opening a
+    second copy that would hold its own socket."""
+    code = _js_without_comments()
+    fn = code[code.index("window.popOutTasks = function") :][:600]
+    assert "'/?panel=tasks'" in fn
+    assert "'swarm-tasks'" in fn, "an unnamed window opens a duplicate on every click"
+
+
+def test_the_control_hides_itself_inside_the_popped_window():
+    """Offering "pop out" inside the popped-out window is a loop with no meaning."""
+    assert 'body.panel-mode [data-action="popOutTasks"]' in _BASE
+
+
+# --- the expensive mistake ------------------------------------------------------
+
+
+def test_panel_mode_does_NOT_restore_a_worker():
+    """THE PROPERTY WORTH THE MOST. window.open copies sessionStorage, so without this
+    the popped window restores the opener's selected worker, mounts an xterm, and
+    attaches a second PTY subscription for a terminal that is not even visible."""
+    code = _js_without_comments()
+    # EVERY read of the stored worker must sit behind a panel-mode check. There are two:
+    # one at the top of the IIFE that runs before init, and one in init itself. The first
+    # version of this test scanned only around the FIRST occurrence in the file and so
+    # checked the wrong one.
+    reads = [m.start() for m in re.finditer(r"getItem\('swarm_selected_worker'\)", code)]
+    assert reads, "the scan found no restore at all; it is checking nothing"
+    for idx in reads:
+        # A TIGHT window — 160 chars. The first version used 500 and passed with the
+        # guard replaced by `if (true)`, because that window also swept up the
+        # DECLARATION of _panelMode a few lines above. Proximity of a name is not a
+        # guard; the branch has to be the thing immediately enclosing the read.
+        window = code[max(0, idx - 160) : idx]
+        assert "!_panelMode" in window or "} else {" in window, (
+            f"a read of the stored worker is not gated on panel mode; the popped window "
+            f"will attach a second PTY for an invisible terminal. Context: {window[-90:]!r}"
+        )
+
+
+def test_panel_mode_is_detected_from_the_query_string():
+    code = _js_without_comments()
+    fn = code[code.index("function isPanelMode") :][:400]
+    assert "panel" in fn and "tasks" in fn
+
+
+# --- what the popped window shows ----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "hidden",
+    [".worker-list", ".detail-area", "#bottom-panel-fab", "#cc-queen-strip"],
+)
+def test_panel_mode_hides_everything_but_the_panel(hidden: str):
+    assert f"body.panel-mode {hidden}" in _BASE, f"{hidden} is still shown in the popped window"
+
+
+def test_the_panel_itself_is_given_the_whole_window():
+    """Otherwise it keeps the height it had as a bottom strip and the popped window is
+    mostly empty."""
+    assert "body.panel-mode .bottom-tabbed" in _BASE
+    assert "100vh" in _BASE[_BASE.index("body.panel-mode .bottom-tabbed") :][:200]
+
+
+def test_the_tasks_and_decisions_panels_are_the_ones_kept():
+    """Both, not just tasks — the operator named the decisions surface specifically,
+    and it is where promotion approvals land."""
+    assert 'id="tab-tasks"' in _HTML
+    assert 'id="tab-decisions"' in _HTML
+
+
+# --- it inherits the live-update machinery rather than reimplementing it --------
+
+
+def test_it_reuses_the_existing_renderer_and_reconciler():
+    """The whole reason for reusing the page. If a second renderer ever appears, the two
+    drift and the stale one wins on load."""
+    code = _js_without_comments()
+    assert code.count("function reconcileTaskView") == 1, (
+        "a second task reconciler exists; the popped window and the dashboard will drift"
+    )
+    assert "startTaskReconciler" in code, "the popped window has no reconciliation path"
+
+
+def test_no_second_template_was_added():
+    """A standalone panel template is the thing this design avoids."""
+    templates = {p.name for p in Path("src/swarm/web/templates").glob("*.html")}
+    for forbidden in ("panel.html", "tasks_panel.html", "popout.html"):
+        assert forbidden not in templates, f"{forbidden} duplicates the dashboard renderer"
+
+
+def test_the_js_still_parses_as_a_single_iife():
+    """Cheap structural check: an unbalanced edit to a 13k-line file fails everything at
+    once, and the browser tests are the only other thing that would notice."""
+    assert _JS.count("(function()") >= 1
+    assert _JS.rstrip().endswith("})();")
