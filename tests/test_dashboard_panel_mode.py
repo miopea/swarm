@@ -164,3 +164,83 @@ def test_the_js_still_parses_as_a_single_iife():
     once, and the browser tests are the only other thing that would notice."""
     assert _JS.count("(function()") >= 1
     assert _JS.rstrip().endswith("})();")
+
+
+# --- The blank pop-out, and why the first fix could not have worked -----------------
+
+# Anchored WITH the brace: `body.panel-mode .detail-area > .panel:not(...)` appears
+# first and a loose anchor sliced that rule instead, which is how the first run of
+# these tests went red against a correct stylesheet.
+_PANEL_RULES = "body.panel-mode .detail-area {"
+
+
+def _base_css() -> str:
+    return Path("src/swarm/web/templates/base.html").read_text(encoding="utf-8")
+
+
+def test_panel_mode_does_not_try_to_lay_out_a_grid_with_flex_direction():
+    """THE DEFECT. `.detail-area` is `display: grid`, so the original
+
+        body.panel-mode .detail-area { flex-direction: column; }
+
+    was inert — it parsed, applied, and did nothing. The panel kept the terminal's
+    grid tracks. Measured live at 1100x800: rows `415.86px 0px 233.94px`, i.e. ~230px
+    of the window given to an empty track, and at shorter heights the track the panel
+    lands in collapses and the window renders blank.
+
+    Asserting the property (a grid is sized with grid rules) rather than the string,
+    so a future `flex-flow`/`align-items` reintroduction is caught too.
+    """
+    css = _base_css()
+    i = css.index(_PANEL_RULES)
+    block = css[i : css.index("}", i)]
+    for flex_only in ("flex-direction", "flex-flow"):
+        assert flex_only not in block, (
+            f"{flex_only} in a rule targeting .detail-area, which is display:grid — "
+            "this is the inert declaration that left the popped-out window blank"
+        )
+
+
+def test_panel_mode_collapses_the_detail_area_to_a_single_cell():
+    """THE FIX, stated as the property that matters: one row, one column, so there is
+    no second track to strand the panel in and none of the window is wasted."""
+    css = _base_css()
+    i = css.index(_PANEL_RULES)
+    block = css[i : css.index("}", i)]
+    assert "grid-template-rows: 1fr" in block, block
+    assert "grid-template-columns: 1fr" in block, block
+
+
+def test_the_panel_is_placed_in_that_cell():
+    """A single-cell grid still strands the panel if nothing puts it there — the
+    hidden terminal is display:none, but the resize handle is not."""
+    css = _base_css()
+    i = css.index("body.panel-mode .bottom-tabbed {")
+    block = css[i : css.index("}", i)]
+    assert "grid-row: 1" in block and "grid-column: 1" in block, block
+
+
+def test_the_pop_out_icon_sits_with_the_collapse_caret():
+    """Operator: "the popout button should be next to minimize. The alignment is all
+    off." `.btn-collapse` carries `margin-left: auto`, so a sibling placed before it
+    lands at the end of the LEFT group with the whole header's slack between them.
+    The icon has to take the auto margin for the two to end up adjacent."""
+    css = _base_css()
+    i = css.index(".btn.btn-icon {")
+    block = css[i : css.index("}", i)]
+    assert "margin-left: auto" in block, (
+        "without the auto margin the icon stays with '+ New Task' and the caret is "
+        "pushed to the far right — the gap the operator screenshotted"
+    )
+
+    markup = Path("src/swarm/web/templates/dashboard.html").read_text(encoding="utf-8")
+    j = markup.index('data-action="popOutTasks"')
+    k = markup.index('data-action="toggleBottomPanel"', j)
+    # up to the caret's own opening tag — not to its data-action, which sits INSIDE
+    # that tag and would count the caret itself as an intruder.
+    between = markup[
+        markup.index("</button>", j) + len("</button>") : markup.rindex("<button", j, k)
+    ]
+    assert "<button" not in between, (
+        f"something was inserted between the pop-out icon and the caret: {between!r}"
+    )

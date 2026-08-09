@@ -363,6 +363,16 @@ class WorkerService:
             # in the same pass.
             remembered = _remembered_states(self._load_worker_states)
             new_workers: list[Worker] = []
+            # #1357 diagnostic. The first diagnostic proved the restore did not take
+            # effect (all sixteen workers read was=BUZZING at first classification) but
+            # not WHY, and there are three candidate explanations that look identical
+            # from the outside: nothing was loaded, every worker took the `existing`
+            # branch so _restore_state was never reached, or it was restored and
+            # something overwrote it. Counting each separately tells them apart in one
+            # restart. WARNING because the operator runs at the default level.
+            _adopted_existing = 0
+            _adopted_new = 0
+            _restored = 0
             for proc in processes:
                 # Operator shells share the pool's flat namespace with real
                 # workers but are NOT workers. Adopting one here would put a
@@ -378,6 +388,7 @@ class WorkerService:
                 if is_shell_session(proc.name) and config.get_worker(proc.name) is None:
                     continue
                 if proc.name in existing:
+                    _adopted_existing += 1
                     w = existing[proc.name]
                     w.process = proc
                     # Kind is a property of the name, so discover/restart
@@ -408,8 +419,22 @@ class WorkerService:
                     # first poll — four to six seconds of a confidently wrong dashboard.
                     # The pilot still re-classifies from the PTY immediately; this only
                     # decides what is shown in the meantime.
+                    _adopted_new += 1
                     _restore_state(w, remembered)
+                    if w.state.value != WorkerState.BUZZING.value:
+                        _restored += 1
                 new_workers.append(w)
+            if remembered or _adopted_new:
+                _log.warning(
+                    "[#1357] rebuild: %d remembered (%s), adopted %d existing / %d new, "
+                    "%d left non-BUZZING after restore",
+                    len(remembered),
+                    ", ".join(f"{k}={v}" for k, v in sorted(remembered.items())[:4]) or "-",
+                    _adopted_existing,
+                    _adopted_new,
+                    _restored,
+                )
+
             # Sort by default group member order if available, else config sort_order
             dg_name = config.default_group or "default"
             default_grp = next(

@@ -1433,10 +1433,21 @@
         /* Icon-only control: square, no label, sized to sit beside the collapse caret
            rather than compete with the tabs. It was a full bordered "Pop out" button
            wedged INTO the tab group, where it read as another tab. */
+        /* Icon-only control, styled and placed to sit WITH the collapse caret.
+           .btn-collapse carries margin-left:auto, so a sibling before it lands at the
+           end of the LEFT group with a gap between them — which is what the operator
+           saw. Taking the auto margin here pushes both to the right edge together, and
+           the caret then follows immediately. Neutral colours so it does not read as
+           another orange action button beside "+ New Task". */
         .btn.btn-icon {
-            min-width: 1.9rem; padding: 0.15rem 0.4rem;
-            font-size: 0.95rem; line-height: 1.2;
+            min-width: 1.9rem; padding: 0.2rem 0.5rem;
+            font-size: 0.8rem; line-height: 1.2;
+            background: transparent; color: var(--muted);
+            border: 1px solid var(--border); border-radius: 4px;
+            margin-left: auto; flex-shrink: 0;
         }
+        /* The caret no longer needs to push itself right — the icon before it does. */
+        .bottom-tabbed > .panel-header > .btn-icon + .btn-collapse { margin-left: 0.25rem; }
 
         /* PANEL MODE (#1353): the same dashboard page, showing only the tasks and
            decisions panel, opened in its own window.
@@ -1459,9 +1470,23 @@
         body.panel-mode #bottom-panel-fab,
         body.panel-mode #cc-queen-strip { display: none !important; }
         body.panel-mode .dashboard { grid-template-columns: 1fr; padding: 0; }
-        body.panel-mode .detail-area { flex-direction: column; }
-        body.panel-mode .bottom-tabbed { flex: 1 1 auto; height: auto; max-height: none; }
-        body.panel-mode .bottom-tabbed > .tab-content.active { max-height: none; flex: 1 1 auto; }
+        /* .detail-area is a GRID with three rows sized for the terminal, the resize
+           handle and the bottom panel — NOT a flex column. An earlier `flex-direction`
+           here did nothing at all, and the panel landed in the terminal's row while a
+           second row kept its height: at 1100x800 that wasted ~230px, and at smaller
+           heights the row collapses and the window reads as blank. Collapse it to a
+           single cell so the panel gets the whole window at every size. */
+        body.panel-mode .detail-area {
+            grid-template-rows: 1fr !important;
+            grid-template-columns: 1fr !important;
+        }
+        body.panel-mode .bottom-tabbed {
+            grid-row: 1; grid-column: 1;
+            flex: 1 1 auto; height: auto; max-height: none; min-height: 0;
+        }
+        body.panel-mode .bottom-tabbed > .tab-content.active {
+            max-height: none; flex: 1 1 auto; min-height: 0;
+        }
         /* The pop-out control is meaningless inside the popped window itself. */
         body.panel-mode [data-action="popOutTasks"] { display: none !important; }
 
