@@ -159,6 +159,11 @@ class SwarmDaemon(EventEmitter):
         from swarm.messages.store import MessageStore
 
         self.message_store = MessageStore(swarm_db=self.swarm_db)
+        # #1357: last-known worker states, so a restart does not default every worker to
+        # BUZZING for the seconds before the pilot's first classification.
+        from swarm.db.worker_state_store import WorkerStateStore
+
+        self.worker_state_store = WorkerStateStore(self.swarm_db)
         # Task #873: per-sender fan-out cap on identical direct messages, so a
         # worker can't hand-enumerate the roster in one burst and wake the
         # whole fleet. Read live from drone config (hot-reload picks up knob
@@ -355,6 +360,7 @@ class SwarmDaemon(EventEmitter):
             service_registry=self.service_registry,
             track_task=self._track_task,
             mark_dirty=lambda: self._mark_state_dirty(),
+            save_worker_states=lambda states: self.worker_state_store.save(states),
         )
         # --- ProposalCoordinator: task-done, assignment, proposal lifecycle ---
         from swarm.server.proposal_coordinator import ProposalCoordinator
@@ -424,6 +430,7 @@ class SwarmDaemon(EventEmitter):
             worker_lock=self._worker_lock,
             init_pilot=lambda enabled: self.init_pilot(enabled=enabled),
             write_identity=self.write_identity_for_spawn,
+            load_worker_states=lambda: self.worker_state_store.load(),
         )
         # --- ShellService: operator bash sessions in a worker's directory ---
         # Tracked separately from ``self.workers`` on purpose — see the module

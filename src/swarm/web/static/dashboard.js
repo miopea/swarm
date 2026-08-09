@@ -197,7 +197,6 @@
         hideRuleModal: function() { hideRuleModal(); },
         testRulePattern: function() { testRulePattern(); },
         submitRule: function() { submitRule(); },
-        previewJiraSync: function() { previewJiraSync(); },
         syncJira: function() { syncJira(); },
         showOutlookImport: function() { showOutlookImport(); },
         hideOutlookImport: function() { hideOutlookImport(); },
@@ -6712,30 +6711,6 @@
 
     window.showCreateTask = function() {
         openTaskModal('create');
-    };
-
-    window.previewJiraSync = function() {
-        fetch('/api/jira/preview', { headers: { 'X-Requested-With': 'Dashboard' } })
-            .then(function(r) {
-                if (!r.ok) return r.json().then(function(d) { showToast(d.error || 'Jira preview failed', true); });
-                return r.json();
-            })
-            .then(function(data) {
-                if (!data || !('count' in data)) return;
-                if (data.error) {
-                    showToast('Jira API error: ' + data.error + '\nJQL: ' + (data.jql || ''), true);
-                    return;
-                }
-                if (data.count === 0) {
-                    showToast('Jira preview: no new issues found\nJQL: ' + (data.jql || ''));
-                    return;
-                }
-                var lines = data.tasks.map(function(t) {
-                    return t.jira_key + ' — ' + t.title + ' (' + t.type + ', ' + t.priority + ')';
-                });
-                showToast('Preview: ' + data.count + ' issue(s) ready to import:\n' + lines.join('\n'));
-            })
-            .catch(function() { showToast('Jira preview failed', true); });
     };
 
     window.syncJira = function() {

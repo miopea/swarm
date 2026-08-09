@@ -31,6 +31,41 @@ _KILL_POLL_INTERVAL = 0.1  # how often to check whether it has gone
 _KILL_SHELL_EXIT_DELAY = 0.5  # after `exit`, before signalling the process
 
 
+def _remembered_states(loader: Callable[[], dict[str, str]] | None) -> dict[str, str]:
+    """Last-known worker states, or {} when unavailable.
+
+    Defensive because worker adoption runs on paths where no loader is wired (several
+    fixtures build a partial service), and a missing one must cost the head start, not
+    the roster.
+    """
+    if loader is None:
+        return {}
+    try:
+        return loader()
+    except Exception:
+        _log.debug("could not load remembered worker states", exc_info=True)
+        return {}
+
+
+def _restore_state(worker: Worker, remembered: dict[str, str]) -> None:
+    """Apply a remembered state to a freshly adopted worker.
+
+    STUNG is never restored. A worker that had crashed before the restart may well have
+    been revived BY that restart, and showing a dead worker as dead when it is alive is
+    the same class of error as showing an idle worker as busy — just in the other
+    direction. The pilot settles it within one poll either way.
+    """
+    name = getattr(worker, "name", "")
+    saved = remembered.get(name, "")
+    if not saved or saved == WorkerState.STUNG.value:
+        return
+    try:
+        worker.state = WorkerState(saved)
+    except ValueError:
+        # An unknown value means the enum changed under a stored map. Leave the default.
+        _log.debug("ignoring unrecognised remembered state %r for %s", saved, name)
+
+
 def _infer_provider_from_name(name: str) -> str:
     """Infer provider from worker name suffix (e.g., foo-codex)."""
     n = name.lower()
@@ -56,6 +91,9 @@ class WorkerService:
         worker_lock: asyncio.Lock,
         init_pilot: Callable[[bool], None],
         write_identity: Callable[[WorkerConfig, str], None],
+        # #1357. A CALLABLE like every other dependency here, and defaulted because
+        # several fixtures build a WorkerService for flows that never restore state.
+        load_worker_states: Callable[[], dict[str, str]] | None = None,
     ) -> None:
         self._broadcast_ws = broadcast_ws
         self._drone_log = drone_log
@@ -63,6 +101,7 @@ class WorkerService:
         self._get_pilot = get_pilot
         self._get_pool = get_pool
         self._get_config = get_config
+        self._load_worker_states = load_worker_states
         self._get_workers = get_workers
         self._set_workers = set_workers
         self._worker_lock = worker_lock
@@ -320,6 +359,9 @@ class WorkerService:
             from swarm.worker.worker import infer_worker_kind
 
             existing = {w.name: w for w in workers}
+            # Read ONCE per rebuild, not per worker: a cold start adopts every process
+            # in the same pass.
+            remembered = _remembered_states(self._load_worker_states)
             new_workers: list[Worker] = []
             for proc in processes:
                 # Operator shells share the pool's flat namespace with real
@@ -361,6 +403,12 @@ class WorkerService:
                         kind=infer_worker_kind(proc.name),
                         process=proc,
                     )
+                    # #1357: Worker.state defaults to BUZZING, so without this every
+                    # restart claims all workers are actively working until the pilot's
+                    # first poll — four to six seconds of a confidently wrong dashboard.
+                    # The pilot still re-classifies from the PTY immediately; this only
+                    # decides what is shown in the meantime.
+                    _restore_state(w, remembered)
                 new_workers.append(w)
             # Sort by default group member order if available, else config sort_order
             dg_name = config.default_group or "default"

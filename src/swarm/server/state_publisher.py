@@ -65,10 +65,15 @@ class StatePublisher:
         service_registry: ServiceRegistry,
         track_task: Callable[[asyncio.Task[object]], None],
         mark_dirty: Callable[[], None] | None = None,
+        # #1357. A CALLABLE, not the store: the publisher is constructed before the
+        # daemon finishes wiring, and defaulted because several test fixtures build one
+        # for flows that never persist anything.
+        save_worker_states: Callable[[dict[str, str]], None] | None = None,
         debounce_delay: float = 0.3,
     ) -> None:
         self._broadcast_ws = broadcast_ws
         self._get_workers = get_workers
+        self._save_worker_states = save_worker_states
         self._get_worker_task_map = get_worker_task_map
         self._expire_proposals = expire_proposals
         self._broadcast_proposals = broadcast_proposals
@@ -92,6 +97,15 @@ class StatePublisher:
         self._state_debounce_delay: float = debounce_delay
 
     # --- Task board ---
+
+    def _persist_worker_states(self) -> None:
+        """Write the current state map. Best effort — never breaks a state transition."""
+        if self._save_worker_states is None:
+            return
+        try:
+            self._save_worker_states({w.name: w.state.value for w in self._get_workers()})
+        except Exception:
+            _log.debug("worker state persist failed", exc_info=True)
 
     def on_task_board_changed(self) -> None:
         self._broadcast_ws({"type": "tasks_changed"})
@@ -142,6 +156,12 @@ class StatePublisher:
     def on_state_changed(self, worker: Worker) -> None:
         """Called when any worker changes state — push to WS clients."""
         from swarm.tasks.proposal import ProposalStatus, ProposalType
+
+        # #1357: remember what the fleet was doing, so the next restart shows the last
+        # known states instead of defaulting all sixteen workers to BUZZING for the
+        # seconds before the pilot's first classification. Persisted on CHANGE rather
+        # than on a timer, so this is one small write per real transition.
+        self._persist_worker_states()
 
         # When a worker resumes working, expire stale escalation AND completion
         # proposals — the worker is no longer idle so the proposals are outdated.

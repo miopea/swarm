@@ -1430,6 +1430,14 @@
             width: 60px;
         }
         /* Bottom tabbed panel */
+        /* Icon-only control: square, no label, sized to sit beside the collapse caret
+           rather than compete with the tabs. It was a full bordered "Pop out" button
+           wedged INTO the tab group, where it read as another tab. */
+        .btn.btn-icon {
+            min-width: 1.9rem; padding: 0.15rem 0.4rem;
+            font-size: 0.95rem; line-height: 1.2;
+        }
+
         /* PANEL MODE (#1353): the same dashboard page, showing only the tasks and
            decisions panel, opened in its own window.
 
