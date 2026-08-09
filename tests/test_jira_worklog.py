@@ -177,3 +177,19 @@ def test_the_duration_comes_from_history_not_from_started_at():
         "the worklog duration is not reconstructed from task history"
     )
     assert "started_at" not in code, "still subtracting started_at, which activate() resets"
+
+
+@pytest.mark.asyncio
+async def test_the_true_duration_is_sent_and_NOT_rounded_up(board: TaskBoard):
+    """MEASURED against real Jira: it truncates timeSpentSeconds to whole minutes —
+    3661s reads back as 3660, and a 163s task reads back as "2m".
+
+    We send the true figure and let Jira truncate rather than rounding up ourselves.
+    Rounding 163s up to 180s would bill 17 seconds nobody worked; truncation
+    under-reports, which is the safe direction for a timesheet.
+    """
+    svc = _svc()
+    await svc.log_work(_task(board), 163)
+    sent = svc.client.add_worklog.await_args.args[1]
+    assert sent == 163, f"the duration was adjusted before sending: {sent}"
+    assert sent < 180, "rounded up to the next minute, billing time nobody worked"

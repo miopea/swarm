@@ -919,9 +919,16 @@ class JiraSyncService:
             )
         return ok
 
-    # Jira rounds sub-minute worklogs to zero, so anything shorter is not loggable.
-    # Rounding UP to a minute is the honest choice for a task that genuinely took
-    # forty seconds; inventing more than that would overstate.
+    # MEASURED against real Jira 2026-08-09, not assumed: Jira TRUNCATES timeSpentSeconds
+    # down to whole minutes. Posting 3661s reads back as 3660; a 163s task reads back as
+    # 120s ("2m"). So anything under a minute would store as zero and vanish.
+    #
+    # Two consequences, both deliberate:
+    #   * floor of 60s, so a task that genuinely took forty seconds is recorded rather
+    #     than silently dropped;
+    #   * we send the TRUE figure and let Jira truncate, rather than rounding up to the
+    #     nearest minute ourselves. Rounding 163s up to 180s would bill 17 seconds
+    #     nobody worked. Under-reporting is the safe direction for a timesheet.
     _MIN_WORKLOG_SECONDS = 60
 
     async def log_work(self, task: SwarmTask, seconds: float) -> bool:
