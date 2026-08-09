@@ -42,6 +42,9 @@ def _apply_jira_v2_fields(jc: Any, body: dict[str, Any], consumed: list[str]) ->
     if "read_only" in body:
         jc.read_only = bool(body["read_only"])
         consumed.append("read_only")
+    if "sprint_priority_boost" in body:
+        jc.sprint_priority_boost = bool(body["sprint_priority_boost"])
+        consumed.append("sprint_priority_boost")
     if "projects" in body:
         val = body["projects"]
         if not isinstance(val, list):

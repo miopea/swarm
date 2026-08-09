@@ -136,6 +136,7 @@ _KNOWN_COORDINATION_KEYS = {"mode", "auto_pull", "file_ownership", "message_rete
 
 _KNOWN_JIRA_KEYS = {
     "read_only",
+    "sprint_priority_boost",
     "enabled",
     "project",
     "sync_interval_minutes",

@@ -126,6 +126,7 @@ class JiraClient:
         self._base_url = self._resolve_base_url()
         self._session: aiohttp.ClientSession | None = None
         self._current_token: str | None = None  # track OAuth token for session reuse
+        self._sprint_field: str | None = None  # discovered lazily; see discover_sprint_field
 
     def _resolve_base_url(self) -> str:
         if self._token_manager and self._token_manager.api_base_url:
@@ -373,6 +374,37 @@ class JiraClient:
                 _log.warning("comment update on %s failed: %d", issue_key, resp.status)
                 return False
         return True
+
+    async def discover_sprint_field(self) -> str:
+        """The site's sprint custom-field id (e.g. customfield_10020), or "".
+
+        DISCOVERED BY NAME, never hardcoded. The id differs per site, and hardcoding a
+        per-site identifier is precisely the mistake the hardcoded 'Done' transition made
+        — it worked on one project and was refused by eleven tickets on another.
+
+        Cached for the process: field ids do not change under a running daemon, and this
+        is consulted on every import.
+        """
+        if self._sprint_field is not None:
+            return self._sprint_field
+        try:
+            session = await self._ensure_session()
+            async with session.get(f"{self._base_url}/rest/api/3/field") as resp:
+                fields = await resp.json() if resp.status == 200 else []
+        except Exception:
+            _log.debug("sprint field discovery failed", exc_info=True)
+            return ""
+        found = ""
+        for f in fields if isinstance(fields, list) else []:
+            if isinstance(f, dict) and str(f.get("name", "")).strip().lower() == "sprint":
+                found = str(f.get("id", "") or "")
+                break
+        self._sprint_field = found
+        if found:
+            _log.info("jira: sprint field discovered as %s", found)
+        else:
+            _log.info("jira: no sprint field on this site; sprint prioritisation inert")
+        return found
 
     async def get_comments(self, issue_key: str) -> list[dict[str, Any]]:
         """Existing comments on an issue, oldest first."""
@@ -658,8 +690,16 @@ class JiraSyncService:
 
         jql = self.build_jql()
 
+        # Ask for the sprint field ONLY when prioritisation is on and the site actually
+        # has one. Requesting an id that does not exist makes Jira reject the whole
+        # search, which would take imports down for a feature nobody enabled.
+        sprint_field = ""
+        if getattr(self._config, "sprint_priority_boost", False):
+            sprint_field = await self.client.discover_sprint_field()
+
         try:
-            issues = await self.client.search_issues(jql)
+            fields = f"{_JIRA_ISSUE_FIELDS},{sprint_field}" if sprint_field else ""
+            issues = await self.client.search_issues(jql, fields=fields)
         except (aiohttp.ClientError, TimeoutError) as e:
             self._record_error("import", e)
             return []
@@ -688,6 +728,11 @@ class JiraSyncService:
 
             fields = issue.get("fields", {})
             task = _jira_issue_to_task(key, fields)
+            if sprint_field and in_active_sprint(fields.get(sprint_field)):
+                # RAISE only, never lower. Sprint membership says "this is current", not
+                # "this is more important than the urgent thing already on the board" —
+                # and it must never demote work someone deliberately marked urgent.
+                task.priority = _raise_priority(task.priority)
             await self._enrich_task_from_fields(task, fields)
             new_tasks.append(task)
             known_keys.add(key)
@@ -1428,6 +1473,43 @@ def _format_comments(comment_field: object) -> str:
         lines.append(body)
         lines.append("")  # blank line between comments
     return "\n".join(lines).rstrip()
+
+
+def _raise_priority(current: TaskPriority) -> TaskPriority:
+    """One step up the ladder, capped at HIGH.
+
+    Deliberately does NOT reach URGENT. Urgent means production is affected; being in
+    the current sprint means the work is scheduled. Collapsing the two would make the
+    signal that wakes people up indistinguishable from ordinary planned work.
+    """
+    ladder = [TaskPriority.LOW, TaskPriority.NORMAL, TaskPriority.HIGH]
+    if current not in ladder:
+        return current  # already URGENT, or something unrecognised — leave it alone
+    return ladder[min(ladder.index(current) + 1, len(ladder) - 1)]
+
+
+def in_active_sprint(sprint_value: object) -> bool:
+    """True when an issue's sprint field names a sprint in state "active".
+
+    The field is a LIST — an issue can sit in a closed sprint and the current one at the
+    same time, which is exactly what happens when work rolls over. Only an active entry
+    counts; a closed one is history and must not raise priority.
+
+    Tolerates both shapes Jira returns: dicts on modern sites, and the legacy
+    "...,state=ACTIVE,..." strings some instances still emit for this field.
+    """
+    if not sprint_value:
+        return False
+    entries = sprint_value if isinstance(sprint_value, list) else [sprint_value]
+    for entry in entries:
+        if isinstance(entry, dict):
+            if str(entry.get("state", "")).strip().lower() == "active":
+                return True
+        elif isinstance(entry, str) and "state=ACTIVE" in entry.upper().replace("STATE=", "state="):
+            return True
+        elif isinstance(entry, str) and "state=active" in entry.lower():
+            return True
+    return False
 
 
 def _latest_comment(comment_field: object) -> str:

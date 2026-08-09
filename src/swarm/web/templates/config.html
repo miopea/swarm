@@ -875,6 +875,21 @@
                 a timer with nobody watching.
             </p>
 
+            {# --- Sprint prioritisation --------------------------------------------- #}
+            <div class="config-field">
+                <label for="cfg-jira-sprint_priority_boost">Prioritise current-sprint work
+                    <span class="hint">Raise imported issues that are in an active sprint</span>
+                </label>
+                <input type="checkbox" id="cfg-jira-sprint_priority_boost" class="config-checkbox"
+                       {% if jr.get('sprint_priority_boost') %}checked{% endif %}>
+            </div>
+            <p class="text-xs text-muted" style="margin:-0.2rem 0 0.6rem">
+                Off by default. It <strong>prioritises, never restricts</strong> &mdash; every
+                assigned issue still imports, sprint ones just sort higher (never as high as
+                Urgent, which means production is affected). Inert on a project with no
+                sprints, and the sprint field is discovered per site rather than assumed.
+            </p>
+
             {# --- Step 3: cadence -------------------------------------------------- #}
             <div class="config-field">
                 <label>3. Sync interval
@@ -2202,6 +2217,7 @@
                 project: ((document.getElementById('cfg-jira-projects').value || '')
                     .split(',').map(function(x) { return x.trim(); }).filter(Boolean)[0]) || '',
                 read_only: document.getElementById('cfg-jira-read_only').checked,
+                sprint_priority_boost: document.getElementById('cfg-jira-sprint_priority_boost').checked,
                 sync_interval_minutes: parseFloat(document.getElementById('cfg-jira-sync_interval').value),
 
 

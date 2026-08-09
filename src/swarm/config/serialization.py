@@ -368,6 +368,7 @@ def _serialize_jira_optional(config: HiveConfig, data: dict[str, Any]) -> None:
         "projects": list(j.projects),
         "issue_types": list(j.issue_types),
         "read_only": j.read_only,
+        "sprint_priority_boost": j.sprint_priority_boost,
         "project_status_maps": {k: dict(v) for k, v in j.project_status_maps.items()},
         "confirmed_projects": list(j.confirmed_projects),
     }

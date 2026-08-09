@@ -428,6 +428,20 @@ class JiraConfig:
     # lands in the team's ticket queue rather than on their own screen.
     read_only: bool = False
 
+    # SPRINT PRIORITISATION (#1341). When on, an imported issue in an ACTIVE sprint is
+    # raised one priority step so it sorts above backlog work.
+    #
+    # OFF BY DEFAULT, deliberately. Measured 2026-08-09 on the operator's site: the
+    # sprint field exists (customfield_10020) but WWD has zero issues carrying one and
+    # IS rejects sprint JQL outright — it is a service desk with no board. So this could
+    # not be verified against a real sprint-using project, and shipping unverifiable
+    # behaviour ON would change import results for teams I cannot test against.
+    #
+    # It PRIORITISES and never RESTRICTS: sprint membership must not decide what gets
+    # imported. Filtering to a sprint would hide genuinely assigned work, which is a
+    # surprising way to lose a ticket.
+    sprint_priority_boost: bool = False
+
     client_id: str = ""  # Atlassian OAuth app client ID
     client_secret: str = ""  # Atlassian OAuth app client secret (or $ENV_VAR)
     cloud_id: str = ""  # Auto-discovered Jira Cloud site ID
