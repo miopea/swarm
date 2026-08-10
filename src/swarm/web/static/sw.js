@@ -1,4 +1,13 @@
-const CACHE_NAME = 'swarm-v22';
+// v23 BUMPED TO EVICT A LEAK, not merely to refresh the shell.
+// v22 accumulated one permanent Cache Storage entry per /api/health?_=<timestamp>
+// poll — a unique URL every few seconds, cached by the old catch-all fetch handler and
+// never evicted. That grew the BROWSER process to 12.3GB and killed the tab with a
+// Chromium OOM (0xE0000008, 2MB allocation).
+// The activate handler below deletes every cache whose name is not CACHE_NAME, so
+// renaming is what actually reclaims the gigabytes already banked in v22 — the fetch-
+// handler fix only stops new ones. Together with skipWaiting()/clients.claim() the
+// eviction happens on the next load, with no manual "clear site data" step.
+const CACHE_NAME = 'swarm-v23';
 const APP_SHELL = ['/manifest.json', '/static/theme.js', '/static/bees/happy.svg', '/static/icon-192.png', '/static/icon-512.png', '/offline.html'];
 
 const INLINE_OFFLINE = `<!DOCTYPE html>

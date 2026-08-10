@@ -69,3 +69,26 @@ def test_only_the_app_shell_is_precached():
     assert m, "APP_SHELL is gone"
     entries = [e for e in m.group(1).split(",") if e.strip()]
     assert len(entries) < 20, f"the precache list has grown to {len(entries)} entries"
+
+
+def test_the_cache_version_was_bumped_past_the_leaking_one():
+    """CLEARING WHAT IS ALREADY BANKED. The fetch-handler fix stops NEW entries; it does
+    not remove the gigabytes v22 accumulated. The activate handler deletes every cache
+    whose name differs from CACHE_NAME, so renaming is what actually reclaims them —
+    and it does so on the next load, with no manual "clear site data" step.
+    """
+    m = re.search(r"CACHE_NAME = 'swarm-v(\d+)'", _SW)
+    assert m, "CACHE_NAME is gone or renamed"
+    assert int(m.group(1)) >= 23, (
+        f"still on swarm-v{m.group(1)} — the leaking cache is never evicted"
+    )
+
+
+def test_the_activate_handler_still_evicts_old_caches():
+    """A POSITIVE CONTROL on the bump. Renaming reclaims nothing if the eviction that
+    depends on it is removed, and the two live in different parts of the file."""
+    i = _SW.index("addEventListener('activate'")
+    block = _SW[i : i + 300]
+    assert "caches.delete" in block and "!== CACHE_NAME" in block, (
+        "old caches are no longer deleted on activate; the version bump reclaims nothing"
+    )
