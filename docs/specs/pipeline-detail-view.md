@@ -1,6 +1,31 @@
+---
+title: "Pipeline Detail View + Retry (P3)"
+status: SHIPPED
+proposed_date: 2026-05-20
+shipped_date: 2026-05-20
+---
+
 # Pipeline Detail View + Retry — P3 of the Editor UX Series
 
-Status: **specified, not yet implemented**
+> **Status: SHIPPED.** CHANGELOG: "Pipeline detail view + retry — P3 of the
+> editor UX series." Backend: `PipelineEngine.retry_step` +
+> `_assert_retry_eligible` (`src/swarm/pipelines/engine.py`) and
+> `POST /api/pipelines/{id}/steps/{step_id}/retry`
+> (`server/routes/pipelines.py::handle_retry_step`, 404/409 mapping as spec'd).
+> Frontend: `#pipeline-detail-modal` in `web/templates/dashboard.html`, rendered
+> by `_pldRender` / `_pldComputeWaves` / `_pldRenderStep` / `_pldRenderResult` in
+> `web/static/dashboard.js`, live-refreshed on `pipelines_changed`. Tests in
+> `tests/test_pipelines.py` cover the cascade, the eligibility guards, and all
+> four route status codes.
+>
+> Three cosmetic deviations, none behavioural: no named `_failed_downstream`
+> helper (logic inlined in `retry_step`), automated-step config renders expanded
+> rather than collapsible, and the WS re-render does a bare `innerHTML` assign so
+> **scroll position is not preserved** — the exact risk this spec's own "Risks"
+> section flagged. The header also omits human-readable schedule / next-fire /
+> `updated_at`. Retained as a historical reference.
+
+Status: ~~**specified, not yet implemented**~~ → SHIPPED, see banner above
 Date: 2026-05-20
 Series: P1 (create/edit overhaul) → P2 (schedule builder + tz) → **P3 (detail view + retry)** → P4/P5/P6
 Audience: implementer (almost certainly the same model that wrote this spec)

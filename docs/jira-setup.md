@@ -44,6 +44,15 @@ The app needs these scopes, which the setup link requests for you:
 > cleaner. Tokens are stored in the `secrets` table of `~/.swarm/swarm.db`, never in
 > `swarm.yaml`.
 
+## 1b. Tick **enabled** — OAuth is a different switch
+
+Settings → Integrations → Jira → **enabled**, then Save.
+
+Connecting OAuth does **not** enable the integration. They are independent, and every
+Jira action gates on this one — with it off you get a green "Connected" banner and
+`Discover workflow`, `Preview` and `Sync` all refuse with *"Jira integration is switched
+off"*. The status box above the section tells you which of the two is missing.
+
 ## 2. Turn ON read-only — before anything else
 
 Settings → Integrations → Jira → **Read-only mode**.
@@ -99,11 +108,14 @@ When the plan looks right, turn **read-only off**. Writes begin on the next cycl
   Jira** — that badge is how you tell a synced task from a local one at a glance. If it
   renders as a dashed badge with no link, Swarm has the key but never recorded your site
   URL; reconnecting Jira fixes it, and nothing else is affected.
-- **Acceptance criteria are synthesized** for a linked task that has none, at two points:
-  when it is assigned, and when a Swarm-created task is first linked to a ticket. The
-  second exists because a task created here is assigned *before* the link exists, so the
-  assign-time pass has no Jira context to work from. A task that already has criteria
-  never triggers another model call.
+- **Acceptance criteria are synthesized** for a linked task that has none, at three
+  points: when it is assigned, when the **Queen reassigns it** (`queen_reassign_task`
+  assigns through the board directly and so runs its own pass), and when a Swarm-created
+  task is first linked to a ticket. The last exists because a task created here is
+  assigned *before* the link exists, so the assign-time pass has no Jira context to work
+  from. A task that already has criteria never triggers another model call.
+  Requires `drones.verifier_criteria_synthesis` (on by default) — **with it off, imported
+  tickets arrive with no criteria and the verifier default-passes them.**
 - **New comments keep arriving** after import — they land under a `--- Jira sync ---`
   marker in the task description, and the assigned worker gets a message with the latest
   one. A scope change on the ticket reaches whoever is working it.
@@ -127,11 +139,29 @@ routes nothing, so you lose nothing by avoiding it.
 is released and parked, its link kept, and nothing is written back. That is how a
 handover works: assign in Jira, and the work moves.
 
-**Jira owns status.** If you move a ticket in Jira, Jira wins.
+**Swarm owns status on a linked task — not Jira.** Moving a ticket in Jira does not
+change the Swarm task, and the reconciler pushes Swarm's status back on the next cycle
+(within 5 minutes by default). Nothing imports Jira status: the content refresh is
+additive and never touches a task's status.
+
+To hand work over, change the **assignee** — that is the only Jira-side edit Swarm acts
+on. The one exception is a ticket already in a terminal Jira status, which Swarm records
+as agreement rather than writing over.
 
 **Swarm does not create tickets on its own.** A worker can *request* one
 (`swarm_request_jira_ticket`); it appears on the Decisions tab and nothing is created
 until you approve it.
+
+**Dragging a ticket URL onto the board imports it regardless of assignee or project
+scope.** It is a deliberate manual override of the assignee routing, so a ticket assigned
+to someone else *can* reach your board that way.
+
+**Worklogs round down.** Jira truncates to whole minutes, so anything under a minute is
+floored to 1m and everything else rounds down — under-reporting is the deliberate
+direction.
+
+**Only Story, Task, Bug and Sub-task are imported *by default*** (`jira.issue_types`).
+Epics are absent from that default list rather than structurally excluded.
 
 ## Turning it off
 
@@ -145,6 +175,9 @@ import.
 - Settings → Integrations shows each project's mapping, its confirmation state, and how
   many tasks are linked to it — including projects you have linked tasks in but have not
   configured.
+- **"Jira integration is switched off"** means OAuth is fine and the **enabled**
+  checkbox is not — two separate switches. `GET /auth/jira/status` returns `connected`,
+  `configured`, `enabled` and `cloud_id` separately if you want to check by hand.
 - Turn **read-only** back on at any time. It takes effect on the next call, and imports
   keep working so you can keep diagnosing.
 
@@ -152,10 +185,17 @@ import.
 
 Two operational notes:
 
-- **Per-cycle API cost is bounded**, not proportional to board size: roughly 14 calls
-  per cycle regardless of how many tickets are linked (one import search, one ownership
-  check, one batched refresh, a capped worklog backfill). Blocked tasks add one call
-  each. At a 5-minute interval that is ~170 calls/hour per developer.
+- **Steady-state API cost is small and mostly flat**, but three things DO scale — the
+  earlier version of this note claimed otherwise and was wrong:
+  - Settled: ~15 calls/cycle — one import search, two for the ownership check (the
+    `/myself` lookup is not cached), one batched refresh, and a worklog backfill capped
+    at 10 tickets per cycle.
+  - **The first cycle after every daemon restart re-reads the comments of every open
+    linked ticket** to rebuild its blocker-note set. That is one call per ticket and is
+    directly proportional to board size.
+  - Each blocked task costs two calls (read, then post or update), and each task whose
+    status Jira has not yet acknowledged costs two or three until it converges.
+  So: flat once settled, a burst after a restart or a bulk status change.
 - **Bulk-filing work?** File the tickets **unassigned** and assign them one at a time as
   they become ready. An unassigned ticket is never imported, so nothing can be picked up
   out of order — that is the ordering mechanism, not Jira issue links, which Swarm does

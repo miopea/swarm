@@ -1,6 +1,27 @@
+---
+title: "Post-Overhaul Cleanup (follow-up to P1–P6)"
+status: SHIPPED
+proposed_date: 2026-05-20
+shipped_date: 2026-05-20
+shipped_releases: ["2026.5.20.9"]
+---
+
 # Post-Overhaul Cleanup — Follow-up to P1–P6 UX Series
 
-Status: **specified, not yet implemented**
+> **Status: SHIPPED (`2026.5.20.9`).** All five items landed; this spec is linked
+> by path from that CHANGELOG entry.
+>
+> 1. **Linked-task-by-ID** — `GET /api/tasks/{task_id}` (`server/routes/tasks.py::handle_get_task`, 404 on miss) + `showTaskEditorById` in `web/static/dashboard.js`; the scroll-and-flash path is kept as fallback. Later adopted fleet-wide — the 17-`data-*` DOM opener was deleted and every edit path routes through it.
+> 2. **PlaybookConfig range validation** — `_validate_playbook_ranges` in `server/config_appliers/playbooks.py`, called before generic dispatch; unit-interval / non-negative / positive-integer / `>= 300` rules all present, `ValueError → 400`. **Location deviation:** it is a module-level function in the applier module, not a `ConfigManager` method — which is where its stated mirror `_validate_drone_ranges` actually lives, so this spec's location note was the stale part.
+> 3. **Retry-on-COMPLETED with confirmation** — `retry_step(..., confirmed=False)` + `_assert_retry_eligible` (`pipelines/engine.py`), route threads `{"confirmed": true}`, `#retry-confirm-modal` with a gating checkbox in `web/templates/dashboard.html`; FAILED retry still skips the modal.
+> 4. **`test_ws_auth` flake** — fixed, and the **root cause differed from this spec's guess**: not shared mutable state but per-test-body imports paying the `swarm.server.api` import cost inside the 30 s pytest timeout. Imports hoisted to module level; the cause is recorded in `tests/test_ws_auth.py`'s docstring.
+> 5. **Mobile QA via Playwright** — `scripts/mobile_qa.py`; findings in `docs/qa-mobile-findings-2026-05-20.md` (now itself resolved).
+>
+> The items this spec explicitly deferred (step event log, force-complete/force-fail
+> buttons, Bug B, Bug D, managed browser, content system) are correctly still
+> unbuilt. Retained as a historical reference.
+
+Status: ~~**specified, not yet implemented**~~ → SHIPPED, see banner above
 Date: 2026-05-20
 Predecessors: P1–P6 release commits `2026.5.20.2`–`.8` (pushed to origin/main)
 Audience: implementer (almost certainly the same model that wrote this spec)

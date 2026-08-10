@@ -1,5 +1,26 @@
 # Mobile QA Findings — 2026-05-20
 
+> ## RESOLVED — every finding below is fixed. Retained as a QA-method example.
+>
+> Verified against the current tree. Do not file any of these again; re-run
+> `scripts/mobile_qa.py` for a fresh picture instead.
+>
+> | Finding | Resolution (verified in code) |
+> |---|---|
+> | ~~J1 — `queenCooldownTimer is not defined`~~ | Declared at `web/static/dashboard.js` (`var queenCooldownTimer = null;`) alongside its clear-site. |
+> | ~~J2 — `updateQueenHealthIndicator is not defined`~~ | Defined and exported as `window.updateQueenHealthIndicator` in IIFE 2; the WS handler now calls it through a `typeof … === 'function'` guard. |
+> | ~~P1 — worker list eats 140+ px / horizontal scroller~~ | **The surface no longer exists.** The horizontal worker-card scroller was replaced by a custom combobox/listbox worker switcher (`web/templates/partials/worker_list.html`, `role="combobox"` + `role="listbox"`; #1291 / #1359). Covered by `tests/test_mobile_ui_1291.py`, `tests/test_worker_selector_1359.py`, `tests/test_worker_selector_browser.py`. |
+> | ~~P2 — status strip label/value collision~~ | `.cc-qs-item` now sets `gap: 0.35em`; `#cc-queen-strip` wraps at 0.75rem on mobile. |
+> | ~~P3 — digest strip overflows~~ | `.cc-digest-strip { overflow-x: auto; }` in the mobile block of `base.html`. |
+> | ~~P4 — header status pills wrap to 3 lines~~ | BUZ/RES/SLE pills hidden under the `max-width: 768px` block. |
+> | ~~P5 — worker card subtitle wastes 3 lines~~ | `.queen-card-subtitle` no longer exists anywhere in `src/swarm/web/`. |
+> | ~~P6 — empty-state truncates mid-word~~ | `.cc-empty { white-space: normal; word-break: normal; }` — the sibling rule the finding asked for. |
+> | ~~P7 — FAB timing~~ | Was already a harness note; addressed in `scripts/mobile_qa.py`. |
+>
+> A caveat the method itself later earned: the P1 replacement is **clipping-sensitive**,
+> and `bounding_box()` / `is_visible()` cannot measure clipping. See `project-notes.md`,
+> "Debugging the dashboard: what the tests cannot see".
+
 **Viewport:** 390×844 (iPhone 14 portrait), device-scale-factor 2.0
 **Browser:** Chromium 148 (Playwright 1.60)
 **User agent:** synthetic iPhone OS 16 Safari

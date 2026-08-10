@@ -1,7 +1,9 @@
 # swarm — project notes
 
 > Moved out of `CLAUDE.md` on 2026-08-04 so it is read when relevant
-> rather than loaded into every session. Content is unchanged.
+> rather than loaded into every session. The move itself carried the content
+> across unchanged; sections written since then were authored here and were
+> never in `CLAUDE.md` (everything under "Debugging the dashboard" onward).
 > Protocol: `claude-team-config/docs/specs/prompt-ablation.md`.
 
 Most of this describes code that can simply be read. It is kept because
@@ -10,7 +12,7 @@ access paths, and decisions whose reasoning is not in the source.
 
 ---
 
-## 2. What This Is
+## 1. What This Is
 
 A Python web tool for orchestrating multiple Claude Code agents.
 Workers run in PTYs managed by a pty-holder sidecar. The background drones handle routine decisions.
@@ -156,12 +158,15 @@ do not collapse them into one.
 **Why we didn't delete the headless Queen:**
 
 The "should we collapse into one Queen?" question was audited in task #252 →
-execution in #253 → interview-driven decision in
-`docs/specs/headless-queen-architecture.md` (dated 2026-04-22). The data
-said no: ~104 decisions/day post-backoff-fix, peaks of 70+/hour, and a
-73% hit rate on oversight interventions. If this question resurfaces in
-the future, re-read the spec before relitigating — the answer's unlikely
-to change without new data.
+execution in #253 → an interview-driven decision recorded in the CHANGELOG
+under **"Headless Queen architecture close-out (task #253 follow-up)"** and
+**"Delete redundant 'Ask Queen' dashboard UI (task #253)"**. (Older notes
+pointed at `docs/specs/headless-queen-architecture.md`; that file was never
+committed and does not exist in this repo — the CHANGELOG entries are the
+surviving record.) The data said no: ~104 decisions/day post-backoff-fix,
+peaks of 70+/hour, and a 73% hit rate on oversight interventions. If this
+question resurfaces in the future, re-read those entries before
+relitigating — the answer's unlikely to change without new data.
 
 **When to prefer a deterministic drone rule instead:**
 
@@ -326,16 +331,16 @@ the client honours reconnect contracts.
 ### Key Modules
 - `cli.py` — Click CLI entry point
 - `config/` — Config models and loader (DB-first, YAML as seed)
-- `db/` — Unified SQLite store (`swarm.db`) — tasks, proposals, config, messages, pipelines, buzz log, secrets, worker_blockers (v7), task verification fields (v8), queen threads/messages/learnings (v6)
-- `pty/` — PTY holder, process management, ring buffer, WS bridge (holder.py, process.py, pool.py, buffer.py, bridge.py)
-- `worker/` — Worker dataclass + lifecycle (worker.py, manager.py, headless.py). State detection lives in `providers/` + `drones/state_tracker.py`.
-- `drones/` — Background drone loop + specialized watchers (pilot.py, rules.py, log.py, idle_watcher.py, inter_worker_watcher.py, pressure.py, context_pressure.py, verifier.py, oversight_handler.py, state_tracker.py, task_lifecycle.py, directives.py, decision_executor.py, coordination.py, poll_dispatcher.py, standing_loop.py, dreamer.py, suggest.py, tuning.py, nudge_guard.py). Per-worker health detectors (context_files, diminishing_returns, rate_limit, recovery, loop, pressure) live in `drones/detectors/`.
+- `db/` — Unified SQLite store (`swarm.db`) — tasks, proposals, config, messages, pipelines, buzz log, secrets, worker_blockers, task verification fields, queen threads/messages/learnings. Stores: base_store.py, task_store.py, task_history.py, proposal_store.py, pipeline_store.py, config_store.py, buzz_store.py, playbook_store.py, queen_chat_store.py, skills_store.py, secrets.py, worker_state_store.py. Don't hardcode a schema version in prose — it is `db/schema.py::CURRENT_VERSION`, with the migration ladder in `db/core.py` / `db/migrate.py`.
+- `pty/` — PTY holder, process management, ring buffer, WS bridge (holder.py, process.py, pool.py, buffer.py, bridge.py, command_handler.py, provider.py, terminal.py). The bridge caps reconnect replay at `_MAX_REPLAY_BYTES` = 256 KB, trimmed to a line boundary so xterm never gets a half-written escape sequence.
+- `worker/` — Worker dataclass + lifecycle (worker.py, manager.py, headless.py), plus memory.py (per-worker RSS/limits) and usage.py (token/cost from the CLI session JSONL). State detection lives in `providers/` + `drones/state_tracker.py`.
+- `drones/` — Background drone loop + specialized watchers (pilot.py, rules.py, log.py, idle_watcher.py, inter_worker_watcher.py, pressure.py, context_pressure.py, verifier.py, oversight_handler.py, state_tracker.py, task_lifecycle.py, directives.py, decision_executor.py, coordination.py, poll_dispatcher.py, standing_loop.py, dreamer.py, suggest.py, tuning.py, nudge_guard.py, backoff.py, store.py). Per-worker health detectors live in `drones/detectors/`: context_files.py, context_recovery.py, context_pressure_check.py, diminishing_returns.py, rate_limit.py, loop.py.
 - `queen/` — Two Queens: interactive PTY runtime + headless `claude -p` decision function (queen.py with `HEADLESS_DECISION_PROMPT`, runtime.py with reconcile logic, session.py, oversight.py, queue.py, context.py, verifier.py for the dedicated verifier subprocess wrapper, contribute.py for shipped→local CLAUDE.md sync)
 - `hooks/` — Claude Code hook installer (install.py) — installs PreToolUse / SessionStart / PreCompact / PostCompact hooks plus per-worker `/swarm-*` slash commands and `swarm-checkpoint` / `swarm-coordinate` Skills
-- `server/` — Daemon (`daemon.py`), API routes (`routes/`, incl. `standing_loops.py`, `harness_digest.py`), loop lifecycle (`loop_runner.py`), WebSocket, escalation/proposal handlers
+- `server/` — Daemon (`daemon.py`) plus the pieces extracted out of it: `runner.py` (process entry point + `_exec_restart`), `worker_service.py` (worker lifecycle / adoption / state restore), `state_publisher.py` (state-change events + best-effort state persist), `task_coordinator.py` and `task_manager.py` (task lifecycle), `config_manager.py` + `config_appliers/` (per-section validate + apply), `invariants.py` (task-board invariant reconciliation), `health.py`, `loop_runner.py` (background loop lifecycle), `broadcast.py`, plus escalation/proposal handlers and the Jira/email services. Endpoints live in `routes/` (incl. `standing_loops.py`, `harness_digest.py`, and `system.py`, which owns `/api/server/restart` and `/api/client-vitals`).
 - `tasks/` — Task board, history, proposals, workflows, blockers (BlockerStore for worker-reported task dependencies)
 - `pipelines/` — Multi-step workflow engine (AGENT / AUTOMATED / HUMAN steps)
-- `mcp/` — HTTP MCP server + 16 worker tools (tools.py) + 15 Queen tools (queen_tools.py) exposed to the respective PTY sessions
+- `mcp/` — HTTP MCP server (`server.py`) + **24 worker tools** and **18 Queen tools** exposed to the respective PTY sessions. `tools.py` / `queen_tools.py` are now aggregators — the schemas and handlers live in `mcp/handlers/` and `mcp/queen_handlers/`. Counts drift; the authoritative check is `len(TOOLS)` / `len(QUEEN_TOOLS)` (note `TOOLS` extends `QUEEN_TOOLS`, so the worker count is the difference).
 - `analysis/` — Tool-usage analytics (`tool_usage.py`) backing `swarm analyze-tools`, and the harness-improvement digest (`harness_digest.py`) backing the dashboard's Harness tab
 - `messages/` — Inter-worker message store (findings, warnings, dependencies, status, operator)
 - `coordination/` — File ownership tracking and auto-pull sync
@@ -354,14 +359,38 @@ the client honours reconnect contracts.
 
 ---
 
-## 4. Conventions
+## 2. Conventions
 
 ### State Machine
 - `BUZZING` — worker is actively processing ("esc to interrupt" visible)
-- `RESTING` — worker is idle (prompt visible, < 5 min)
-- `SLEEPING` — worker idle > 5 min (display-only state)
+- `RESTING` — worker is idle (prompt visible, under the sleep threshold)
+- `SLEEPING` — worker has been RESTING past the sleep threshold. **Display-only**:
+  it is never stored, `Worker.display_state` derives it from `state_since`, and
+  the operator's "put to sleep" works by setting RESTING and backdating
+  `state_since` past the threshold.
 - `WAITING` — worker showing a choice/approval prompt
 - `STUNG` — worker's Claude process has exited
+
+**The sleep threshold is not 5 minutes, and the two sources disagree — and the
+one the operator can edit is the one nothing reads.**
+
+- `worker/worker.py::SLEEPING_THRESHOLD` = **1200 s / 20 min**. This is the
+  effective threshold: `Worker.sleeping_threshold` defaults to it, and
+  `Worker.display_state` is the only place SLEEPING is derived.
+- `DroneConfig.sleeping_threshold` = **900 s / 15 min** (`config/models.py`,
+  same default in `config/loader.py`). It is validated, serialized, plumbed into
+  the per-worker config in `drones/rules.py`, and exposed in the config UI
+  labelled *"Seconds idle before RESTING → SLEEPING"* — and **no code reads it**.
+  Nothing ever assigns it onto `Worker.sleeping_threshold`.
+
+So editing the dashboard field changes nothing, and a worker sleeps at 20 minutes
+regardless. Verified by exhaustive grep; don't quote 5 or 15 minutes, and don't
+assume the two were reconciled. (Not fixed here — this is a doc pass. Anyone
+fixing it should decide which number is intended before wiring them together.)
+
+**State survives a daemon restart.** `state` *and* `state_since` are persisted
+best-effort by `db/worker_state_store.py` and restored on adoption, so a slept
+worker comes back SLEEPING rather than all-BUZZING — see "PTY Integration" below.
 
 ### Dynamic workflows coexistence
 
@@ -398,7 +427,9 @@ self-scheduled its next tick and parked at the prompt — so there is **no
 persistent footer indicator** to scrape, and reporting `BUZZING` would lie to
 the dashboard and confuse the stuck-BUZZING safety nets. A parked loop must
 still not be nudged or assigned over: it isn't free, it's waiting to resume
-its own loop. Full design: `docs/specs/native-loop-functions.md` §2.
+its own loop. The design spec (`docs/specs/native-loop-functions.md`) was never
+committed and is not in this repo — the shipped record is the CHANGELOG entry
+for **#761** under `## [2026.6.23]`.
 
 The reliable signal is the **ScheduleWakeup tool result** the harness prints
 when the worker parks — `Next wakeup scheduled for <time> (in Ns)` — verified
@@ -450,13 +481,14 @@ generous value (a true runaway burns far more output than a normal task — see
 cross-project #523 at ~257K output tokens) to catch runaways without parking
 legitimate work. `tokens_spent` is **ephemeral** (not persisted → no DB
 migration); it resets on restart alongside the delta baseline. The **per-loop
-daily aggregate cap** (spec §3.4, for standing loops) is a separate later layer
+daily aggregate cap** (for standing loops) is a separate later layer
 built on top of this per-task foundation, landing with #765.
 
 ### Standing background-improvement loops (task #765)
 
-The "my job is to write loops" model, scoped to Swarm
-(`docs/specs/native-loop-functions.md` §3). A standing loop is a recurring
+The "my job is to write loops" model, scoped to Swarm (design spec
+`docs/specs/native-loop-functions.md` was never committed; the shipped record
+is the CHANGELOG entry for **#765** under `## [2026.6.23]`). A standing loop is a recurring
 **task generator**, not a board entity: `StandingLoopManager`
 (`drones/standing_loop.py`) files **one normal one-shot task** (tagged
 `standing-loop`) through the existing board — no new task status, no verifier
@@ -510,8 +542,35 @@ escalation-pattern incident) — the operator holds the apply switch.
 ### PTY Integration
 - Output read from in-process ring buffer via `worker.process.get_content()`
 - Input sent via `worker.process.send_keys()` / `send_enter()` / `send_interrupt()`
-- Worker state stored in Worker objects (no external state)
+- Worker state is **authoritative in the `Worker` objects at runtime**, and
+  **persisted best-effort** so a cold start doesn't invent an answer. Never read
+  the store to decide anything live — the pilot's next poll is the source of truth.
 - Never inject text into worker PTYs while the user may be typing
+
+### Worker-state persistence (#1357)
+
+`Worker.state` defaults to `BUZZING`, so before this existed every daemon start
+rendered the whole fleet as "actively working" for the four-to-six seconds the
+pilot needed to classify each PTY — an operator glancing at a fresh dashboard
+saw a fully-busy swarm that wasn't.
+
+- **Where.** `db/worker_state_store.py` writes one `{name: RememberedState(state, since)}`
+  map into the existing `config` key-value table under `worker_states`. A KV row,
+  deliberately not a table: no relationships, no history, no migration.
+- **Who writes.** `server/state_publisher.py` persists **on state change** (not on a
+  timer), and `server/worker_service.py` persists again after a direct operator
+  action — the two paths that mutate state, only one of which emits an event.
+  `daemon.py` constructs the store and wires both via `save_worker_states`.
+- **Who reads.** `server/worker_service.py` restores on **adoption**, applying both
+  `state` and `state_since`. Restoring `state_since` is load-bearing: SLEEPING is
+  derived from it, so dropping it silently downgrades every slept worker to RESTING.
+- **What is discarded.** `STUNG` is never restored (the restart may have revived
+  the worker), a future `since` is ignored, and the whole map is thrown away when
+  it is older than `_MAX_AGE_SECONDS` (**30 min**) — a daemon that has been down
+  overnight knows nothing useful, and stale state shown as current is the same bug
+  in a quieter form.
+- Every write and read is wrapped and swallowed; a persistence failure costs the
+  next restart its head start and nothing else.
 
 ### Polling & Lifecycle
 - Throttle polling with adaptive backoff (5s base → 15s max)
@@ -521,7 +580,7 @@ escalation-pattern incident) — the operator holds the apply switch.
 
 ---
 
-## 8. Development
+## 3. Development
 
 ### Dev-Only Commands (for development, not user operations)
 The user operates swarm through the **web dashboard**. These commands are only for development and CI:
@@ -543,24 +602,34 @@ uv run swarm validate            # Validate swarm.yaml
 `swarm` at `~/.local/bin/swarm` is the **installed** (potentially stale) version.
 `uv run swarm` uses the **dev** version from the project .venv.
 
-After changing source code, reinstall with cache-busting:
+After changing source code, reinstall with cache-busting. **This is the one
+canonical form** — other reinstall incantations appear elsewhere in the docs and
+in older notes; prefer this one, run from the repo root
+(`/home/bschleifer/projects/personal/swarm`):
 ```bash
-uv tool uninstall swarm-ai && uv cache clean swarm-ai && uv tool install --no-cache /home/bschleifer/projects/swarm
+uv cache clean swarm-ai && uv tool install --no-cache --force .
+swarm holder-restart
 ```
-**WARNING**: `uv tool install --force` is NOT enough — uv reuses its build cache.
+`holder-restart` restarts the PTY holder **preserving worker child processes**,
+so it is safe and does not take the fleet down. Do not kill the holder PID.
+
+**WARNING**: `--force` alone is NOT enough — uv reuses its build cache, which is
+why `uv cache clean swarm-ai` comes first.
 
 ### Dev Reload — don't tell the user to restart manually
 In dev mode (running from the project `.venv`, i.e. `which swarm` shows `./.venv/bin/swarm`) the dashboard footer has a **Reload** button that is the canonical way to pick up code changes. It:
 
-1. POSTs `/api/server/restart` (see `src/swarm/server/routes/system.py:243`)
+1. POSTs `/api/server/restart` — `server/routes/system.py::handle_server_restart`
 2. Runs `reinstall_from_local_source()` then sets the shutdown event
-3. On shutdown, `_exec_restart()` (`src/swarm/server/daemon.py:2517`) clears all `__pycache__/`, checkpoints the DB, releases the file lock, and `os.execv`s into a fresh process
+3. On shutdown, `server/runner.py::_exec_restart` (it moved out of `daemon.py`) clears all `__pycache__/`, checkpoints the DB, releases the file lock, and `os.execv`s into a fresh process
 
-Python fully re-imports every module. Edits to `state_tracker.py`, MCP tools, etc., land without any `swarm stop && swarm start`.
+Cite these by **symbol, not line** — both files churn and the line numbers here were wrong twice.
+
+**The daemon process** fully re-imports every module. Edits to `state_tracker.py`, MCP tools, etc., land in the daemon without any `swarm stop && swarm start`. This is a claim about the daemon **only** — the separate PTY-holder instance runs from a copied tool install that Reload does *not* reliably refresh. See "Two running instances, and only one tracks your edits" below before concluding an edit has landed everywhere.
 
 **Never tell the user the daemon has "stale bytecode" and needs a manual restart without first checking whether they've hit Reload.** The Reload button is safer (it checkpoints the DB first) and faster. `swarm stop && swarm start` or `systemctl --user restart swarm` are only needed when the dashboard is unreachable.
 
-Reload does NOT clear Claude Code session state (queued messages in `~/.claude/sessions/…`, pending `/compact`s in a worker's input buffer, etc.). If a fix still seems not to apply post-reload, suspect the persistence layer Swarm doesn't control — not stale bytecode.
+Reload does NOT clear Claude Code session state (queued messages in `~/.claude/sessions/…`, pending `/compact`s in a worker's input buffer, etc.). If a fix still seems not to apply post-reload, there are two suspects, in this order: the **PTY-holder's** copied install (stale bytecode there is real — see the next section), then the persistence layer Swarm doesn't control.
 
 ---
 
@@ -609,11 +678,14 @@ is usually the whole answer.
 
 A stale module there ran 6-day-old code for hours, throwing ~148 `TypeError`/minute while
 every reload appeared to succeed. Symptoms: an exception loop in `~/.swarm/swarm.log` that
-survives reloads. Fix: `uv cache clean swarm-ai && uv tool install --no-cache --force .`,
-then `swarm holder-restart` — which restarts the holder **preserving worker child
-processes**, so it is safe and does not take the fleet down. Do not kill the holder PID.
+survives reloads. Fix: the canonical reinstall from "Dev vs Installed Version" above —
+`uv cache clean swarm-ai && uv tool install --no-cache --force .`, then
+`swarm holder-restart`.
 
-## 9. Swarm / Conductor
+This is the section that scopes the "Dev Reload re-imports everything" claim above:
+that claim is true of the **daemon process** and false of the holder.
+
+## 4. Swarm / Conductor
 
 ### Headless Conductor Pattern
 Instead of infinite polling loops, use bounded headless invocations with clear exit conditions:

@@ -3,6 +3,8 @@
 > Catalog of improvements derived from reverse-engineering Claude Code v2.1.88 source (512K lines, 1,900 files). Each item is rated by **impact** (how much it improves Swarm) and **effort** (implementation cost). Rating scale: S (game-changing), A (high-value), B (solid win), C (nice-to-have).
 >
 > Many items have since shipped — see the "Already Implemented" table at the bottom and per-item status in [`claude-code-roadmap.md`](claude-code-roadmap.md) before treating any entry as actionable.
+>
+> **This is a snapshot, not current.** The analysis is pinned to Claude Code **v2.1.88**. Swarm's runtime detection has since been verified against **v2.1.186** (see `project-notes.md`, "Native `/loop` coexistence"), and the harness has changed underneath several observations here — footer strings, tool surface, and compaction behaviour in particular. Re-verify against the installed binary before relying on any specific string or constant below.
 
 ---
 
@@ -331,7 +333,14 @@ Claude Code's write queue allows only one inflight operation at a time, with exp
 
 ---
 
-## Implementation Priority (Recommended Order)
+## Implementation Priority (Recommended Order) — HISTORICAL
+
+> **This ordering is spent, not a plan.** 10 of the 12 items below have shipped;
+> only **B1** (batch state updates, satisfied in substance rather than as scoped)
+> and the optimization half of **B4** remain open. Do not pick work off this list
+> — [`claude-code-roadmap.md`](claude-code-roadmap.md) carries the per-item status,
+> and [`../CHANGELOG.md`](../CHANGELOG.md) is the authoritative shipped record.
+> Retained for the reasoning behind the original sequencing.
 
 1. **A1** — Diminishing returns detection (low effort, immediate $ savings)
 2. **S2** — Microcompaction threshold (low-medium effort, big session length win)

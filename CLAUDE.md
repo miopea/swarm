@@ -2,7 +2,7 @@
 
 > See `~/.claude/CLAUDE.md` for universal rules (design principles, code quality, TDD workflow, quality gates).
 
-## 1. Quick Reference
+## Quick Reference
 
 ### Essential Rules
 | Rule | Action |
@@ -14,7 +14,7 @@
 | Warnings | STOP — warnings = failures |
 | `type: ignore` | FORBIDDEN — fix the type error |
 | Creating a file | SEARCH existing code first |
-| Installed tool stale? | `uv tool uninstall swarm-ai && uv cache clean swarm-ai && uv tool install --no-cache .` |
+| Installed tool stale? | Follow *Dev vs Installed Version* in [`docs/project-notes.md`](docs/project-notes.md) — that is the canonical cache-busting reinstall |
 
 ### Key Files
 | File | When to Check |
@@ -23,12 +23,15 @@
 | `src/swarm/drones/state_tracker.py` | Debugging state detection issues (provider patterns in `src/swarm/providers/`) |
 | `src/swarm/drones/pilot.py` | Understanding the poll loop and drone actions |
 | `src/swarm/server/daemon.py` | Core daemon lifecycle, events, WebSocket broadcasts |
-| `src/swarm/server/api.py` | All HTTP/WebSocket endpoints |
-| `src/swarm/web/templates/dashboard.html` | Dashboard UI and JS |
+| `src/swarm/server/routes/` | HTTP/WebSocket endpoint handlers (tasks, workers, queen, jira, config, websocket, …) |
+| `src/swarm/web/routes/` | Page + HTMX partial routes, login/passkeys, PWA manifest & share target |
+| `src/swarm/server/api.py` | The aiohttp app factory — registers no routes itself; owns session auth, CSRF, security headers, and rate limiting |
+| `src/swarm/web/templates/dashboard.html` | Dashboard markup (modals, panels, partial mount points) |
+| `src/swarm/web/static/dashboard.js` | Dashboard behaviour — WebSocket wiring, terminal, task board, keyboard shortcuts |
 
 ---
 
-## 3. Design Principles
+## Design Principles
 
 ### Architecture Guidelines
 - **Event-driven decoupling** — Pilot emits events, daemon subscribes; never tight-couple components
@@ -39,7 +42,7 @@
 
 ---
 
-## 5. Critical Rules
+## Critical Rules
 
 After making code edits, always run `uv run ruff format` before validation checks. Never commit unformatted code.
 
@@ -68,7 +71,7 @@ TDD Bug Fix: Write test (red) → Fix → Run test → Iterate (5x) → Ask if s
 
 ---
 
-## 6. Workflow
+## Workflow
 
 ### Bug Fix Sequence
 1. Reproduce the bug (or understand the report)
@@ -88,7 +91,7 @@ TDD Bug Fix: Write test (red) → Fix → Run test → Iterate (5x) → Ask if s
 
 ---
 
-## 7. Slash Commands
+## Slash Commands
 
 **IMPORTANT**: Use these instead of running commands manually. They handle error cases and ensure consistency.
 
@@ -113,6 +116,29 @@ PRE_COMMIT: /check (not manual uv run ruff/pytest)
 COMMITTING: /commit (not manual git commit)
 BUG_FIXING: /fix-and-ship or /diagnose first
 ```
+
+### Project-local
+
+Checked into this repo, so they exist here whether or not the global set is installed.
+
+`.claude/commands/`:
+
+| Command | Purpose |
+|---------|---------|
+| `/test` | Run the swarm orchestration test on a dedicated port with auto-shutdown |
+| `/swarm-status` | Current task, queue, peer worker state, unread messages |
+| `/swarm-handoff` | Hand off the current task and dispatch follow-on work to another worker |
+| `/swarm-finding` | Broadcast a finding to the swarm |
+| `/swarm-warning` | Warn a specific worker (API change, breakage, dependency) |
+| `/swarm-blocker` | Declare a task-dependency blocker — pauses idle-watcher nudges |
+| `/swarm-progress` | Report structured phase / percent progress |
+
+`.claude/skills/`:
+
+| Skill | Purpose |
+|-------|---------|
+| `swarm-checkpoint` | Run `/check`, then commit on green or report a blocker and note the Queen on red |
+| `swarm-coordinate` | Advisory peer/task survey producing a delegation suggestion — never creates or dispatches tasks |
 
 ---
 

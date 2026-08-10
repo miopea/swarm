@@ -3,7 +3,7 @@
 > Originally compiled from a deep-dive interview on 2026-02-26.
 > **Status (2026-04-16): Phases 1–6 are all shipped, plus a post-roadmap batch of Anthropic-engineering-inspired features (`swarm_batch` MCP tool, cron pipeline schedules, compact telemetry, approval-rate gauge, test infra pinning, skills registry, `claude_code_security` service handler, `swarm analyze-tools` CLI, opt-in CC sandbox).** This doc is retained as a historical reference for the original design. Current roadmap work lives in [`claude-code-roadmap.md`](claude-code-roadmap.md).
 >
-> **This is a historical design doc — [`../CHANGELOG.md`](../CHANGELOG.md) is the authoritative record of what has shipped.** Everything in Phases 1–6 and the follow-on batches below has landed; the project ships continuously (current version `2026.6.27`). Recent additions not in the original phases include the verifier drone, worker-reported blockers, the playbook-synthesis loop, daemon health-sweep alerting + lifecycle notifications + daily digest, DB auto-backup/restore, the `swarm_query_peers` peer-visibility tool, the dashboard's Queen-history and Messages tabs, native `/loop` coexistence (#761), the per-task token-budget governor (#762), standing background-improvement loops (#765), the operator-gated harness-improvement digest, and first-class blocked-on-external task state (#876).
+> **This is a historical design doc — [`../CHANGELOG.md`](../CHANGELOG.md) is the authoritative record of what has shipped.** Everything in Phases 1–6 and the follow-on batches below has landed; the project ships continuously, so no version is quoted here (it re-rots every release — read the top of the CHANGELOG). Recent additions not in the original phases include the verifier drone, worker-reported blockers, the playbook-synthesis loop, daemon health-sweep alerting + lifecycle notifications + daily digest, DB auto-backup/restore, the `swarm_query_peers` peer-visibility tool, the dashboard's Queen-history and Messages tabs, native `/loop` coexistence (#761), the per-task token-budget governor (#762), standing background-improvement loops (#765), the operator-gated harness-improvement digest, and first-class blocked-on-external task state (#876).
 > Build order was foundation-first; each layer unlocked the next.
 > Architecture: direct integration into existing modules (not plugins).
 
@@ -11,7 +11,7 @@
 
 ## Phase 1: Drone Log Persistence (SQLite) — **SHIPPED**
 
-> Delivered as part of the unified SQLite migration (`src/swarm/db/`). Drone decisions now land in `swarm.db` (`buzz_log` table) and are queryable from the dashboard. See `docs/specs/sqlite-unified-storage.md` for the migration details.
+> Delivered as part of the unified SQLite migration (`src/swarm/db/`). Drone decisions now land in `swarm.db` (`buzz_log` table) and are queryable from the dashboard. The `docs/specs/sqlite-unified-storage.md` spec cited by older notes was never committed to this repo — for the migration details read `src/swarm/db/schema.py` (`CURRENT_VERSION`) and the migration ladder in `db/core.py` / `db/migrate.py`, plus the unified-SQLite entries in [`../CHANGELOG.md`](../CHANGELOG.md).
 
 **Goal**: Persist drone decision logs so they survive daemon restarts and enable analytics.
 

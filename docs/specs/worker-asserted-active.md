@@ -1,6 +1,42 @@
+---
+title: "Worker-asserted ACTIVE"
+status: SHIPPED
+proposed_date: 2026-08-05
+shipped_date: 2026-08-05
+shipped_releases: ["2026.8.5.5"]
+related_specs:
+  - taskboard-state-machine-audit.md
+---
+
 # Worker-asserted ACTIVE
 
-Status: **specified, not built.** Scoped 2026-08-05 with the operator.
+> **Status: SHIPPED (`2026.8.5.5`), plus the #1282 discoverability follow-up.**
+>
+> The verb is `swarm_start_task` (`src/swarm/mcp/handlers/_start.py`, args
+> `StartTaskArgs` in `mcp/_arg_types.py`). Every refusal is non-mutating and names
+> the resolving fact — wrong owner, BLOCKED, closed, already-ACTIVE, ambiguous —
+> and every accepted call writes `task_history` with
+> `detail="worker-asserted start"`. Inference is gone:
+> `WorkerStateTracker._promote_one_assigned` no longer calls `activate()`, pinned
+> by a source-inspection test. There is no timed fallback, and no
+> `busy_with_operator` state was added — the dispatch guard reuses
+> `PtyProcess.is_operator_engaged`. Taught in the dispatch template
+> (`server/messages.py::_LIFECYCLE_INSTRUCTIONS`), the executable
+> `WORKFLOW_TEMPLATES`, and the existing idle nudge. Tests:
+> `tests/test_worker_asserted_active.py`, `test_start_task_is_taught.py`,
+> `test_start_parked_task.py`.
+>
+> **One acceptance criterion is only incidentally satisfied.** AC-4 ("a
+> worker-asserted ACTIVE task is never demoted") has no test, and
+> `TaskBoard.activate` still unconditionally demotes any other ACTIVE task for
+> that worker. The queueing behaviour comes from the auto-chain firing only on
+> completion, not from the rule this spec states.
+>
+> Shipped beyond scope: `unpark=true` on the verb (#1286) and
+> `SwarmDaemon.mark_task_in_progress` (#1288), an operator-asserted ACTIVE path
+> routed through `_activate_with_history` so the `activate()` caller count stays at two.
+
+Status: ~~**specified, not built.**~~ → SHIPPED, see banner above. Scoped 2026-08-05 with the operator.
 Precedes the #1104 audit deliberately — see "Relationship to #1104".
 
 ## The problem

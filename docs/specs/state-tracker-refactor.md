@@ -1,9 +1,32 @@
+---
+title: "WorkerStateTracker Refactor"
+status: SHIPPED
+shipped_date: 2026-05-26
+shipped_releases: ["2026.5.26.2", "2026.5.26.3", "2026.5.26.4"]
+---
+
 # WorkerStateTracker Refactor — Spec
+
+> **Status: SHIPPED (2026-05-26).** All three phases landed — see the CHANGELOG
+> entries "WorkerStateTracker refactor — Phase 1 / Phase 2 / Phase 3 (final)".
+> The extracted detectors live in `src/swarm/drones/detectors/`:
+> `context_files.py`, `diminishing_returns.py`, `rate_limit.py` (Phase 1),
+> `context_recovery.py` (Phase 2), `context_pressure_check.py` (Phase 3). Each
+> module's docstring names its phase. `drones/state_tracker.py` is down from 856
+> to ~778 lines and now delegates rather than owning per-worker health state.
+>
+> Note the detector **names differ from this spec's proposals** — the shipped
+> files are `context_recovery.py` and `context_pressure_check.py`, not the names
+> used below. Read the directory, not this doc.
+>
+> One item is deliberately open: the `ContextPressureCheck` / context-pressure
+> watcher duplication, flagged in `context_pressure_check.py`'s own docstring as
+> a follow-up. Retained as a historical reference.
 
 **Audit finding**: #3 (MAJOR — SRP violation)
 **Source**: `/audit-code` 2026-05-26 report (this conversation)
 **Author**: pre-implementation spec — operator approval needed before code lands
-**Status**: draft
+**Status**: ~~draft~~ → SHIPPED, see banner above
 
 ---
 

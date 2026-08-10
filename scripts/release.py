@@ -22,6 +22,10 @@ The script is deliberately side-effect free unless ``--apply`` is
 passed so dry runs are safe. All logic lives in pure functions so the
 test suite can exercise the arithmetic and the CHANGELOG rewrite
 without touching the filesystem.
+
+``--apply`` **refuses and exits 1 when ``## Unreleased`` has no bullets**,
+writing nothing. See ``promote_changelog`` for why: promoting an empty
+Unreleased is how 108 consecutive releases came to record nothing at all.
 """
 
 from __future__ import annotations
@@ -76,16 +80,46 @@ def compute_next_version(current: str, today: date) -> str:
 _UNRELEASED_HEADING = "## Unreleased"
 _EMPTY_SKELETON = "## Unreleased\n\n### Features\n\n### Changes\n\n### Fixes\n"
 
+# A list item with actual text after the dash. ``### Fixes`` alone is not
+# content, and neither is a stray ``-`` on its own line.
+_BULLET_RE = re.compile(r"(?m)^[ \t]*-[ \t]+\S")
+
+
+class EmptyUnreleasedError(ValueError):
+    """Raised when ``## Unreleased`` carries no bullets at release time.
+
+    Subclasses ``ValueError`` so callers that already catch the malformed-
+    CHANGELOG case keep working; ``main()`` catches it by type to exit
+    non-zero with an actionable message rather than a traceback.
+    """
+
 
 def promote_changelog(changelog_text: str, version: str, iso_date: str) -> str:
     """Insert a dated ``## [version] - YYYY-MM-DD`` section carrying the
     current Unreleased content, then reset Unreleased to the empty
     Features/Changes/Fixes skeleton.
 
-    Runs even when Unreleased is empty so every release has a
-    recognisable anchor in the CHANGELOG — it's easier to backfill
-    notes under an existing heading than to reconstruct "which release
-    had no entry" later.
+    **Refuses (raises ``EmptyUnreleasedError``) when the Unreleased body
+    contains no ``- `` bullets.** This function used to promote regardless,
+    on the theory that a dated anchor with an empty skeleton was easier to
+    backfill than to reconstruct later. That was wrong in exactly the way a
+    silent failure usually is: nothing ever pushed back, so **108
+    consecutive releases — every one from 2026.8.6 through 2026.8.10.19 —
+    shipped as hollow ``### Features / ### Changes / ### Fixes`` headings
+    with no bullets under any of them** (113 empty dated sections in all,
+    counting five stragglers from April and May), while README.md advertised
+    the CHANGELOG as "the authoritative record of what has shipped".
+    Backfilling them meant reconstructing five days of history from commit
+    bodies — precisely the work the empty anchors were supposed to save.
+
+    The anchor was never the scarce thing — the notes were. Refusing costs
+    the releaser one sentence at the moment they still remember what they
+    changed; not refusing costs an archaeologist an afternoon.
+
+    Idempotence is preserved on the path that matters: promoting populated
+    content twice still produces one dated section per version, and a second
+    run against the freshly-reset skeleton now refuses instead of stacking
+    another empty heading.
     """
     if _UNRELEASED_HEADING not in changelog_text:
         raise ValueError(
@@ -108,11 +142,21 @@ def promote_changelog(changelog_text: str, version: str, iso_date: str) -> str:
         unreleased_body = rest[:idx]
         tail = rest[idx:]  # includes the leading newline + next heading
 
+    if not _BULLET_RE.search(unreleased_body):
+        raise EmptyUnreleasedError(
+            f"{_UNRELEASED_HEADING} has no '- ' bullets — refusing to cut {version}. "
+            "Promoting an empty Unreleased is what silently produced 108 hollow "
+            "CHANGELOG sections (2026.8.6 through 2026.8.10.19). Add at least one "
+            "bullet under ### Features, ### Changes or ### Fixes describing what "
+            "this release changes, then re-run."
+        )
+
     dated_section = f"\n\n## [{version}] - {iso_date}\n{unreleased_body.rstrip()}\n"
 
-    # Always reset Unreleased to the skeleton — even if it was already
-    # empty. This makes subsequent runs idempotent and normalises
-    # whatever indentation / spacing the previous editor left behind.
+    # Reset Unreleased to the skeleton, normalising whatever indentation /
+    # spacing the previous editor left behind. Reaching here means the body
+    # had bullets, so nothing is being discarded — it moved to the dated
+    # section above.
     rebuilt = before + _EMPTY_SKELETON + dated_section + tail
     # Normalise more than two consecutive blank lines into exactly one.
     rebuilt = re.sub(r"\n{3,}", "\n\n", rebuilt)
@@ -160,17 +204,24 @@ def read_current_version(repo_root: Path) -> str:
 
 def apply_release(repo_root: Path, today: date | None = None) -> str:
     """End-to-end: compute next version, rewrite files + CHANGELOG,
-    return the new version string. Raises on any malformed input."""
+    return the new version string. Raises on any malformed input.
+
+    The CHANGELOG is promoted **in memory first** so a refusal (empty
+    Unreleased, unrecognised structure) aborts before anything is written.
+    Bumping ``pyproject.toml`` and then refusing would leave the tree in a
+    state where re-running computes a *different* next version.
+    """
     today = today or date.today()
     current = read_current_version(repo_root)
     new_version = compute_next_version(current, today)
 
-    update_version_files(repo_root, new_version)
-
     changelog = repo_root / "CHANGELOG.md"
+    promoted: str | None = None
     if changelog.exists():
-        original = changelog.read_text()
-        promoted = promote_changelog(original, new_version, today.isoformat())
+        promoted = promote_changelog(changelog.read_text(), new_version, today.isoformat())
+
+    update_version_files(repo_root, new_version)
+    if promoted is not None:
         changelog.write_text(promoted)
     return new_version
 
@@ -198,7 +249,13 @@ def main(argv: list[str] | None = None) -> int:
 
     repo = _repo_root()
     if args.apply:
-        new_version = apply_release(repo)
+        try:
+            new_version = apply_release(repo)
+        except EmptyUnreleasedError as exc:
+            # Non-zero exit so /ship stops here rather than committing a
+            # release that records nothing. Nothing has been written.
+            print(f"release: {exc}", file=sys.stderr)
+            return 1
     else:
         new_version = compute_next_version(read_current_version(repo), date.today())
 

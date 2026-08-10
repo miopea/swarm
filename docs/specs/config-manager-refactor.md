@@ -1,8 +1,30 @@
+---
+title: "ConfigManager Refactor"
+status: SHIPPED
+shipped_date: 2026-05-26
+shipped_releases: ["2026.5.26.6"]
+---
+
 # ConfigManager Refactor — Spec
+
+> **Status: SHIPPED (2026-05-26, `2026.5.26.6`).** See the CHANGELOG entry
+> "ConfigManager refactor (audit finding #2)". Every section applier was
+> extracted into `src/swarm/server/config_appliers/` (`_base.py`, `drones.py`,
+> `queen.py`, `playbooks.py`, `notifications.py`, `workflows.py`, `test.py`,
+> `coordination.py`, `jira.py`, `advanced.py`, `llms.py`, `workers.py`), driven
+> by `config_appliers.SECTION_REGISTRY`. `server/config_manager.py` is down from
+> 1584 to ~702 lines and its module docstring points back here.
+>
+> One naming deviation worth knowing: the range validators are **module-level
+> functions in the applier modules**, not `ConfigManager` methods — e.g.
+> `_validate_playbook_ranges` in `config_appliers/playbooks.py` and
+> `_validate_drone_ranges` in `config_appliers/drones.py`.
+>
+> Retained as a historical reference.
 
 **Audit finding**: #2 (MAJOR — SRP violation)
 **Source**: `/audit-code` 2026-05-26 report
-**Status**: draft — operator approval needed before code lands
+**Status**: ~~draft — operator approval needed before code lands~~ → SHIPPED, see banner above
 
 ---
 

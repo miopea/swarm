@@ -6,9 +6,9 @@
 >
 > **Status (2026-04-16):** Phase 0 is fully shipped. Most of Phase 1 and the MCP work from Phase 4 have landed. A follow-on batch of Anthropic-engineering-inspired features (tracked in CHANGELOG Unreleased) has also shipped: `swarm_batch` MCP tool, cron pipeline schedules, compact event telemetry, approval-rate gauge, `InfraSnapshot` in test runs, SQLite skills registry (schema v5), `claude_code_security` service handler, `swarm analyze-tools` CLI, and opt-in Claude Code sandbox. Grep for the named files/fields to verify.
 >
-> **Last reviewed 2026-04-16.** Heavy post-roadmap shipping (releases 2026.4.22.2 – 2026.4.22.8) added: `swarm_report_blocker` (task #250, schema v7), `swarm_note_to_queen` (#248), interactive Queen CLAUDE.md + drift reconcile (#251/#254), `HEADLESS_DECISION_PROMPT` seeding (#253), pressure threshold tuning (#254 / version .6), and the two-Queens architecture decision (`docs/specs/headless-queen-architecture.md`).
+> **Last reviewed 2026-04-16.** Heavy post-roadmap shipping (releases 2026.4.22.2 – 2026.4.22.8) added: `swarm_report_blocker` (task #250, schema v7), `swarm_note_to_queen` (#248), interactive Queen CLAUDE.md + drift reconcile (#251/#254), `HEADLESS_DECISION_PROMPT` seeding (#253), pressure threshold tuning (#254 / version .6), and the two-Queens architecture decision (recorded in the CHANGELOG under "Headless Queen architecture close-out (task #253 follow-up)" — the `docs/specs/headless-queen-architecture.md` spec it cites was never committed to this repo).
 >
-> **This is a planning doc; [`../CHANGELOG.md`](../CHANGELOG.md) is the authoritative record of what has shipped** (the project releases continuously — current version `2026.6.27`). Since this roadmap was last revised, shipped work includes the verifier drone, the playbook-synthesis loop, daemon health-sweep alerting, task/pipeline lifecycle notifications + a daily digest, DB auto-backup + `swarm db restore`, retry/backoff for the Jira/Graph integrations, the `swarm_query_peers` peer-visibility tool, the dashboard's searchable Queen-history and inter-worker Messages tabs, native `/loop` coexistence (#761), the per-task token-budget governor (#762), standing background-improvement loops (#765), and the operator-gated harness-improvement digest.
+> **This is a planning doc; [`../CHANGELOG.md`](../CHANGELOG.md) is the authoritative record of what has shipped** (the project releases continuously; no version is quoted here because it re-rots every release — read the top of the CHANGELOG). Since this roadmap was last revised, shipped work includes the verifier drone, the playbook-synthesis loop, daemon health-sweep alerting, task/pipeline lifecycle notifications + a daily digest, DB auto-backup + `swarm db restore`, retry/backoff for the Jira/Graph integrations, the `swarm_query_peers` peer-visibility tool, the dashboard's searchable Queen-history and inter-worker Messages tabs, native `/loop` coexistence (#761), the per-task token-budget governor (#762), standing background-improvement loops (#765), and the operator-gated harness-improvement digest.
 
 ---
 
@@ -207,7 +207,13 @@ Dashboard and UX improvements that make Swarm easier to operate.
 
 ---
 
-### 2.3 — Rate Limit Messaging [C2]
+### 2.3 — Rate Limit Messaging [C2] — **SHIPPED**
+
+> Live: `_RE_RATE_LIMIT` in `src/swarm/providers/claude.py` supplies the pattern;
+> `src/swarm/drones/detectors/rate_limit.py` (`RateLimitDetector`) owns the
+> per-worker debounce and the buzz-log emit, wired from `drones/state_tracker.py`.
+> The "pause lowest-priority worker" half of the original scope is **not** built —
+> the detector reports, it does not act.
 
 **What**: Parse rate limit indicators from worker output and display structured info in buzz log.
 
@@ -225,7 +231,12 @@ Dashboard and UX improvements that make Swarm easier to operate.
 
 ---
 
-### 2.4 — Agent Progress Tracking [C4]
+### 2.4 — Agent Progress Tracking [C4] — **SHIPPED**
+
+> Live: `recent_tools: list[dict[str, str]]` on `Worker`
+> (`src/swarm/worker/worker.py`), appended by the hook handler in
+> `src/swarm/server/routes/hooks.py` (capped at `_MAX_RECENT_TOOLS`) and
+> surfaced through the worker payload (`recent_tools[-5:]`).
 
 **What**: Track per-worker tool activity via PostToolUse hooks. Show "last 5 tool calls" in dashboard.
 
@@ -335,7 +346,15 @@ Deeper improvements that change how Swarm operates.
 
 ---
 
-### 3.5 — Post-Task Knowledge Consolidation (Dream) [B3]
+### 3.5 — Post-Task Knowledge Consolidation (Dream) [B3] — **SHIPPED**
+
+> Live: `src/swarm/drones/dreamer.py` mines the buzz log into the
+> `queen_learnings` table (tagged `discovered_by_dreamer:{key}`), recalled through
+> `swarm_get_learnings` / `queen_query_learnings`; per-task capture is the
+> `learnings` field on `SwarmTask` (`src/swarm/tasks/task.py`), recalled into
+> future dispatches via `playbook_ops.recall_learnings_for_task`.
+> **Deviation from this spec:** `learnings` shipped as a `str`, not the `dict`
+> proposed below.
 
 **What**: After task completion, trigger a background pass that extracts key learnings (files, patterns, gotchas) and stores them in task metadata.
 
@@ -353,7 +372,14 @@ Deeper improvements that change how Swarm operates.
 
 ---
 
-### 3.6 — Prompt Cache Optimization [B4]
+### 3.6 — Prompt Cache Optimization [B4] — **PARTIAL**
+
+> The **measurement** half is live: `src/swarm/worker/usage.py` parses
+> `cache_read_input_tokens` / `cache_creation_input_tokens` out of the session
+> JSONL into `TokenUsage`, prices both in `estimate_cost_for_provider`, and
+> `cache_read_ratio()` feeds `worker.cache_ratio` from `server/daemon.py`.
+> The **optimization** half — standardizing the system-prompt prefix in
+> `pty/holder.py` so same-repo workers share a cache prefix — is not built.
 
 **What**: Standardize system prompt construction across workers in the same repo so they share prompt cache prefixes.
 
@@ -441,8 +467,8 @@ Bounded queue with backpressure for critical daemon operations. ~3-4 hours.
 |-------|-------|--------|---------|
 | **0** | 5 | SHIPPED | Hook-based integration layer |
 | **1** | 6 | SHIPPED (1.2 partial) | Cost savings, fewer restarts, cleaner ops |
-| **2** | 4 | In progress — grep to verify individual items | Better dashboard, less noise |
-| **3** | 6 | Mixed — 3.1, 3.3, 3.4 shipped; 3.2 partial; 3.5, 3.6 pending | Speculation, recovery, conflict prevention |
+| **2** | 4 | SHIPPED — 2.2 / 2.3 / 2.4 explicitly; 2.1 satisfied in substance (`state_publisher.on_workers_changed` sends one coalesced `workers_changed` frame for the whole fleet — there is no `broadcast_batch()` method as scoped) | Better dashboard, less noise |
+| **3** | 6 | Mixed — 3.1, 3.3, 3.4, 3.5 shipped; 3.2 and 3.6 partial | Speculation, recovery, conflict prevention, learnings |
 | **4** | 2 | SHIPPED | Direct worker coordination, MCP interface |
 | **5** | 3 | Pending | Code quality polish |
 | **Total** | **26** | **majority shipped** | |

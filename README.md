@@ -10,6 +10,18 @@ Every agent session runs in a managed PTY. The **web dashboard** gives you real-
 
 ![Dashboard overview — workers, terminal, and task board](docs/screenshots/dashboard-overview.png)
 
+## Contents
+
+**Start here:** [Why Swarm](#why-swarm) · [Features](#features) · [Requirements](#requirements) · [Installation](#installation) · [Quick Start](#quick-start) · [Install as App (PWA)](#install-as-app-pwa)
+
+**Using it:** [Web Dashboard](#web-dashboard) · [Task System](#task-system) · [Pipelines](#pipelines) · [Queen & Proposals](#queen--proposals) · [MCP for Workers](#mcp-for-workers)
+
+**Integrations:** [Email](#email-integration) · [Jira](#jira-integration) · [Remote Access](#remote-access) · [Updating](#updating)
+
+**Reference:** [Documentation](#documentation) · [Service Management](#service-management) · [CLI Reference](#cli-reference) · [Environment Variables](#environment-variables) · [Configuration](#configuration) · [REST API](#rest-api) · [Architecture](#architecture)
+
+**Contributing:** [Testing](#testing) · [Development](#development) · [Contributing](#contributing) · [License](#license)
+
 ## Why Swarm
 
 **Your agent sessions never stall.** **Drones** — Swarm's background poll workers — auto-approve safe prompts, revive crashed agents, and escalate the hard decisions to the **Queen** (a headless Claude conductor) or the operator. You stop babysitting and start reviewing results.
@@ -61,7 +73,7 @@ Drones are specialized background sweepers that share the daemon's poll loop. Ea
 **Worker Coordination (MCP)**
 
 - **MCP server** -- Swarm exposes an HTTP MCP server at `/mcp` so the agents themselves can coordinate via tool calls
-- **16 coordination tools** -- `swarm_check_messages`, `swarm_send_message`, `swarm_task_status`, `swarm_claim_file`, `swarm_complete_task`, `swarm_create_task`, `swarm_park_task` (hand the current task back to the queue), `swarm_block_on_external` (mark a task blocked on an external dependency so the swarm stops nudging it), `swarm_get_learnings`, `swarm_get_playbooks` (recall reusable procedures synthesized from past successes), `swarm_report_progress`, `swarm_report_blocker` (declare task-dependency blocker, suppresses idle nudges), `swarm_query_peers` (read-only snapshot of peer worker state for handoff decisions), `swarm_note_to_queen` (lightweight side-channel note), `swarm_draft_email` (create a Microsoft Graph draft in the operator's Outlook Drafts folder — never sent automatically), and `swarm_batch` (run multiple ops in one round-trip)
+- **24 coordination tools** -- `swarm_check_messages`, `swarm_send_message`, `swarm_task_status`, `swarm_claim_file`, `swarm_complete_task`, `swarm_create_task`, `swarm_park_task` (hand the current task back to the queue), `swarm_block_on_external` (mark a task blocked on an external dependency so the swarm stops nudging it), `swarm_get_learnings`, `swarm_get_playbooks` (recall reusable procedures synthesized from past successes), `swarm_report_progress`, `swarm_report_blocker` (declare task-dependency blocker, suppresses idle nudges), `swarm_query_peers` (read-only snapshot of peer worker state for handoff decisions), `swarm_note_to_queen` (lightweight side-channel note), `swarm_draft_email` (create a Microsoft Graph draft in the operator's Outlook Drafts folder — never sent automatically), the task-lifecycle set (`swarm_start_task`, `swarm_edit_task`, `swarm_unblock_task`, `swarm_archive_task`, `swarm_block_on_operator`, `swarm_relabel_blocker`, `swarm_annotate_resolution`, `swarm_request_jira_ticket`), and `swarm_batch` (run multiple ops in one round-trip)
 - **Inter-worker messages** -- workers send findings, warnings, dependencies, and status updates to each other (or broadcast)
 - **File claims** -- advisory locks prevent two workers from editing the same file at once
 - **Learnings** -- resolutions from completed tasks are searchable by other workers for context
@@ -76,7 +88,7 @@ Drones are specialized background sweepers that share the daemon's poll loop. Ea
 **Also included**
 
 - **Jira integration** -- two-way sync with Jira Cloud (OAuth 2.0), import/export tasks, create Jira issues from the task board
-- **REST API** -- full JSON API with 80+ endpoints and OpenAPI docs at `/api/docs/ui` (open `http://localhost:9090/api/docs/ui` with the dashboard running)
+- **REST API** -- full JSON API with 250+ routes and OpenAPI docs at `/api/docs/ui` (open `http://localhost:9090/api/docs/ui` with the dashboard running)
 - **SQLite persistence** -- tasks, proposals, messages, pipelines, skills, and history are stored in `~/.swarm/swarm.db`; YAML is the seed/import format
 - **Resource monitoring** -- memory/swap thresholds with optional auto-suspend of workers on system pressure
 - **In-app feedback** -- a footer button opens a bug / feature / question form; submissions are filed as GitHub issues via the `gh` CLI, with a preview-and-edit step and automatic redaction of sensitive paths
@@ -139,9 +151,11 @@ Installing the PWA is the recommended way to use Swarm -- it gives you a native-
 - **Safari (macOS / iOS):** Share → Add to Home Screen / Add to Dock (limited PWA support — some features may be missing).
 - **Firefox:** desktop PWAs are not supported; use a bookmark instead.
 
-**Offline support:** a service worker caches the app shell. If the server restarts, the app auto-reconnects when it comes back.
+**No offline mode:** Swarm is fully server-rendered and requires a live connection to the daemon. There is no service worker and no cached app shell — `/sw.js` is a kill switch that unregisters itself and clears any cache a previous version left behind. If the server restarts, the app auto-reconnects when it comes back.
 
 **App badge:** the app icon shows a badge with the count of pending proposals (via the PWA Badge API).
+
+**Share target:** the manifest declares a Web Share Target, so Swarm appears in the OS share sheet. Share a screenshot, a link, or selected text to it and the dashboard opens a New Task modal pre-filled with the shared title/text/URL, with any shared files already attached.
 
 ## Web Dashboard
 
@@ -150,7 +164,7 @@ The web dashboard is the primary interface. It auto-starts on boot via systemd (
 **What you get:**
 
 - **Worker sidebar** -- live state indicators (BUZZING/RESTING/WAITING/STUNG), one-click continue/kill/revive
-- **Interactive terminal** -- click "Attach" to open any worker's agent session in an in-browser terminal (full xterm.js PTY). Type commands, approve plans, interact directly.
+- **Interactive terminal** -- click "Attach" to open any worker's agent session in an in-browser terminal (full xterm.js PTY). Type commands, approve plans, interact directly. The terminal uses xterm's WebGL renderer on Windows and Linux and the DOM renderer on macOS/iOS (falling back to the Canvas renderer if the WebGL context is lost).
 - **Task board** -- filterable by status and priority; tasks render as compact rows (click to open the Edit modal); WYSIWYG description editor with formatting toolbar, live preview, and View-source toggle; drag `.eml`/`.msg` / Outlook tiles / Jira URLs to create tasks; Queen proposals banner with approve/reject/approve-all
 - **Config page** -- tabbed editor with sections for General, LLMs, Workers, Automation (drones · Queen · workflows · pipelines), Notifications, Integrations (Microsoft Graph + Jira via OAuth), Security, Usage, Advanced, and Logs (live log viewer with severity filter and a running-daemon log-level dropdown)
 - **Bottom-panel tabs** -- the work surface switches between Tasks, **Decisions** (Queen proposals + decision history), **Pipelines** (multi-step workflow runs), **Playbooks** (procedures synthesized from past successes), **Loops** (standing-loop controls), and **Harness** (improvement digest)
@@ -170,7 +184,15 @@ The web dashboard is the primary interface. It auto-starts on boot via systemd (
 
 ![Harness tab — operator-gated improvement digest with one-click apply for low-risk actions](docs/screenshots/harness-tab.png)
 
-If `api_password` is set in the config (or `SWARM_API_PASSWORD` env var), config mutations require a Bearer token.
+### Login & passkeys
+
+Setting `api_password` in the config (or the `SWARM_API_PASSWORD` env var) turns on the session gate for the **whole** dashboard, not just the config page: every route requires either a signed session cookie or an `Authorization: Bearer <api_password>` header. A handful of paths stay exempt so the app can boot and recover — `/login`, `/logout`, `/ready`, `/static/*`, the PWA manifest and icons, the passkey login endpoints, and the OAuth callbacks.
+
+- **Login page** at `/login` — password sign-in sets the session cookie; sessions expire after 24 hours of inactivity. Repeated failures from one IP lock that IP out for 15 minutes after 5 attempts.
+- **Passkeys (WebAuthn)** — register a passkey from the Config page and sign in with Touch ID / Windows Hello / a security key instead of typing the password. Manage or delete registered passkeys from the same page; the password can be changed there too.
+- **`/mcp` is gated separately** — MCP HTTP endpoints use their own bearer token rather than the dashboard credential, so a worker or an external MCP client never has to hold the dashboard password. Genuine same-machine callers on loopback are trusted; tunnelled traffic is not.
+
+If no password is configured, the gate is skipped entirely — local unprotected installs keep working as before.
 
 ### Keyboard Shortcuts
 
@@ -183,7 +205,11 @@ If `api_password` is set in the config (or `SWARM_API_PASSWORD` env var), config
 | `Alt+K` | Kill worker |
 | `Alt+R` | Revive worker |
 | `Alt+N` | New task |
-| `Alt+X` | Quit |
+| `Alt+X` | Back to the dashboard home (`/`) |
+| `Alt+H` | Kill the whole session |
+| `Ctrl+K` / `Cmd+K` | Global search (command palette over workers, tasks, messages) |
+| `Ctrl+F` / `Cmd+F` | Search the terminal (when a terminal is attached and focused) |
+| `?` | Show the keyboard-shortcut help overlay |
 
 ## Task System
 
@@ -290,10 +316,18 @@ Swarm runs an MCP (Model Context Protocol) server on the same port as the dashbo
 | `swarm_send_message` | Send a finding, warning, dependency, or status to another worker (or broadcast) |
 | `swarm_task_status` | Query the task board (all / pending / assigned / mine); pass `{number: N}` to fetch the full detail of a single task — description, priority, type, tags, deps, jira key, acceptance criteria, context refs, attachments, resolution |
 | `swarm_create_task` | Create a task, optionally targeted at another worker |
+| `swarm_start_task` | Declare that you are now working one of your assigned tasks — this is what moves it to in-progress (the daemon no longer infers it from PTY activity) |
 | `swarm_complete_task` | Mark the currently assigned task done with a resolution |
+| `swarm_edit_task` | Correct the title or description of a task assigned to you, so the next reader sees the truth instead of a correction buried in a message thread |
+| `swarm_archive_task` | Remove one of your own unstarted tasks from the board (filed by mistake, duplicate, throwaway probe). Archived, not destroyed — beats closing it with an invented resolution, since resolutions become learnings |
 | `swarm_park_task` | Hand the current task back to `ASSIGNED` (an intentional set-down, not a blocker) |
 | `swarm_report_progress` | Report phase / percent / narrative status — broadcasts over WebSocket to the dashboard |
 | `swarm_report_blocker` | Declare a task blocked on another task; IdleWatcher skips nudges until the upstream task completes or a new message arrives |
+| `swarm_block_on_operator` | Declare the task blocked on a **human decision** (merge authorization, spend approval, a credential only the operator can rotate) — no upstream task number needed |
+| `swarm_relabel_blocker` | Change *why* one of your blocked tasks is blocked without unblocking it (the upstream shipped, but now a human must decide) |
+| `swarm_unblock_task` | Clear the blocker on your own blocked task and take it back — returns to `ASSIGNED` and stays yours |
+| `swarm_annotate_resolution` | Flag a closed task's resolution as stale or wrong so the next worker served it as a learning sees the caveat; adds a note, never rewrites the original |
+| `swarm_request_jira_ticket` | Request that one of your Swarm tasks be raised as a Jira issue — files a proposal for operator approval, does not create the ticket |
 | `swarm_query_peers` | Read-only snapshot of peer worker state (name, state, current task, context %, idle time, queue depth) to decide whether to hand off — never interrupts a peer |
 | `swarm_note_to_queen` | Send a lightweight side-channel note to the Queen (auto-relays into her PTY; not a formal message) |
 | `swarm_draft_email` | Create a draft email in the operator's Outlook Drafts folder via Microsoft Graph. Draft is never auto-sent — operator reviews + sends manually. Requires the Graph integration to be configured. |
@@ -319,6 +353,9 @@ The interactive Queen has her own, elevated MCP tool surface — separate from t
 | `queen_query_learnings` | Operator corrections from past decisions |
 | `queen_prompt_worker` | Push a prompt into a worker's PTY (elevated: workers cannot do this to each other) |
 | `queen_reassign_task` | Move a task between workers |
+| `queen_edit_task` | Correct any non-terminal task's title, description, or acceptance criteria |
+| `queen_unblock_task` | Clear a blocked task's blocker and hand it back to the **same** worker, still assigned (the owner-preserving exit from `BLOCKED`) |
+| `queen_archive_task` | Remove any task from the board — not just an unstarted one — without completing it; archived, not destroyed (row and history are kept) |
 | `queen_force_complete_task` | Close a task the worker finished but forgot to mark done |
 | `queen_interrupt_worker` | Stop a stuck worker |
 | `queen_post_thread` / `queen_reply` / `queen_update_thread` | Thread conversation with the operator |
@@ -365,7 +402,7 @@ Authentication uses Atlassian OAuth 2.0 (3LO):
 
 1. Register an app at [developer.atlassian.com/console/myapps/](https://developer.atlassian.com/console/myapps/)
 2. Add `http://localhost:9090/auth/jira/callback` as a callback URL
-3. Enable scopes: `read:jira-work`, `write:jira-work`, `offline_access`
+3. Enable scopes: `read:jira-work`, `write:jira-work`, `read:jira-user`, `offline_access` (`read:jira-user` is required to resolve your own account ID, which is how imports are routed)
 4. Configure in swarm.yaml:
 
 ```yaml
@@ -374,20 +411,24 @@ integrations:
     enabled: true
     client_id: "your-atlassian-app-id"
     client_secret: "$JIRA_CLIENT_SECRET"   # plain text or $ENV_VAR reference
-    project: PROJ
+    projects: [PROJ]                       # legacy single `project: PROJ` still migrates
 ```
 
 5. Connect from the Config page in the web dashboard (OAuth flow — tokens auto-refresh)
 
 ### How It Works
 
-- **Import**: pulls issues matching a JQL filter (optionally filtered by label via `import_label`). Deduplicates by Jira key.
+- **Import**: routing is by **assignee**, not by label. The import query is `project IN (...) AND assignee = currentUser() AND statusCategory != Done`, narrowed to the issue types in `issue_types` (Story / Task / Bug / Sub-task by default — Epics are containers, not work). Deduplicates by Jira key. `import_label` and `import_filter` no longer exist; a config still carrying them is reported as a stale key.
 - **Drag-and-drop import**: drop a Jira issue URL (or a bare `KEY-N`) onto the task panel and a single `POST /api/jira/import-by-key` call pulls the issue, comments, and attachments into a new task — no JQL config needed for one-off imports.
 - **ADF → Markdown**: descriptions and comments authored in Atlassian Document Format are converted to Markdown on import (paragraphs, headings, lists, blockquotes, code blocks, inline marks, mentions, emojis, links), so the rendered task description matches what you see in Jira.
 - **Export**: task status changes in Swarm auto-sync back to Jira via transitions and completion comments
 - **Create**: push Swarm tasks to Jira as new issues with mapped type/priority (Bug→Bug, Feature→Story, Chore/Verify→Task)
 - **Sync frequency**: configurable via `sync_interval_minutes` (default `5`). Swarm status changes are always pushed to Jira on the next sync; Swarm does not overwrite Jira-side edits on fields it doesn't manage.
+- **Ticket badge**: a task synced from Jira shows its key (`KEY-N`) as a badge on its row in the task board — click it to open the issue. If Jira is connected but no site URL was recorded (tokens predating that field), the badge still renders, dashed and non-clickable, so provenance is visible rather than silently absent.
+- **Acceptance criteria**: a linked task with no criteria gets them synthesized from the description it already mirrors — on assign, on Queen reassign, and on link (create-then-link assigns before the key exists, so linking is when the Jira context actually arrives). Gated on `drones.verifier_criteria_synthesis` (default on); the verifier default-passes a task with no criteria, which is what this closes.
 - **Tokens**: stored in `~/.swarm/swarm.db` (`secrets` table), auto-refreshed on expiry
+
+Full walkthrough: [`docs/jira-setup.md`](docs/jira-setup.md).
 
 ### Configuration
 
@@ -397,15 +438,21 @@ integrations:
     enabled: true
     client_id: "your-atlassian-app-id"
     client_secret: "$JIRA_CLIENT_SECRET"
-    project: PROJ
+    projects: [PROJ, OTHER]       # sync whole projects; legacy single `project:` still migrates
+    issue_types: [Story, Task, Bug, Sub-task]
     sync_interval_minutes: 5
-    import_label: swarm           # only import tickets with this label (blank = all)
-    import_filter: ""             # custom JQL (overrides project + label defaults)
-    status_map:
-      pending: "To Do"
-      in_progress: "In Progress"
-      completed: Done
-      failed: "To Do"
+    read_only: false              # true = import/discover normally, refuse every write and log it
+    # Status maps are PER PROJECT — workflows differ between projects, so a global
+    # map transitions someone's ticket to a state nobody chose. An unmapped project
+    # is refused rather than guessed.
+    project_status_maps:
+      PROJ:
+        pending: "To Do"
+        in_progress: "In Progress"
+        completed: Done
+        failed: "To Do"
+    # Discovery proposes a map; nothing writes to real tickets until you confirm it.
+    confirmed_projects: [PROJ]
 ```
 
 ## Remote Access
@@ -427,6 +474,10 @@ Claude Code hooks and the cross-task hook script (`~/.swarm/hooks/cross-task-hoo
 - [`docs/multi-llm-providers.md`](docs/multi-llm-providers.md) — architecture reference for the Gemini / Codex / OpenCode worker backends.
 - [`docs/claude-code-insights.md`](docs/claude-code-insights.md) — reference notes on Claude Code internals informing future improvements.
 - [`docs/qa-mobile-findings-2026-05-20.md`](docs/qa-mobile-findings-2026-05-20.md) — mobile-viewport QA findings snapshot.
+- [`docs/jira-setup.md`](docs/jira-setup.md) — end-to-end Jira Cloud setup walkthrough (OAuth app, scopes, connecting, status-map confirmation).
+- [`docs/project-notes.md`](docs/project-notes.md) — working notes for contributors and agents: architecture, conventions, dev-vs-installed version, debugging the dashboard.
+- [`docs/specs/`](docs/specs/) — design specs for in-flight and shipped work (Jira integration v2, playbook synthesis, state-tracker refactor, and others).
+- [`docs/openapi.yaml`](docs/openapi.yaml) — the OpenAPI spec served at `/api/docs` and rendered at `/api/docs/ui`.
 
 ## Service Management
 
@@ -626,12 +677,14 @@ integrations:
     enabled: true
     client_id: "your-atlassian-app-id"
     client_secret: "$JIRA_CLIENT_SECRET"
-    project: PROJ
+    projects: [PROJ]
     sync_interval_minutes: 5
-    import_label: swarm
-    status_map:
-      completed: Done
-      in_progress: "In Progress"
+    read_only: false
+    project_status_maps:
+      PROJ:
+        completed: Done
+        in_progress: "In Progress"
+    confirmed_projects: [PROJ]
 
 custom_llms:
   - name: deepseek
@@ -819,7 +872,8 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | **Coordination** | `GET /api/coordination/ownership` | File ownership map |
 | | `GET /api/coordination/sync` | Auto-pull sync status |
 | **Other** | `GET /api/conflicts` | Active file conflicts |
-| | `GET /api/notifications` | Notification history |
+| | `GET /api/notifications`, `POST /api/notifications` | Notification history / raise a notification |
+| | `POST /api/client-vitals` | Browser heartbeat posted every 30s (heap, WebSocket bytes, terminal/canvas counts, platform, renderer). Diagnostics only — a tab crash leaves evidence behind in the daemon log |
 | **Tunnel** | `POST /api/tunnel/start`, `/stop`, `GET /api/tunnel/status` | Remote access |
 | **Session** | `POST /api/session/kill`, `POST /api/server/stop` | Shutdown |
 | | `POST /api/server/restart` | Restart the server |
@@ -827,13 +881,14 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 | **WebSocket** | `GET /ws` | Live event stream (workers, tasks, drones, proposals) |
 | | `GET /ws/terminal` | Interactive terminal attach (PTY bridge) |
 
-**Auth:** Config-mutating endpoints (`PUT /api/config`, worker/group CRUD) require `Authorization: Bearer <api_password>` when `api_password` is set.
+**Auth:** when `api_password` is set, *every* route requires a session cookie or `Authorization: Bearer <api_password>` — see [Login & passkeys](#login--passkeys) for the exempt paths and the separate `/mcp` token.
 
 ### Security
 
 - All mutating `/api/` endpoints require an `X-Requested-With` header (CSRF protection)
 - Rate limited at 60 requests/minute per client IP
-- `api_password` protects config mutations via Bearer token (`Authorization: Bearer <password>`)
+- `api_password` gates the entire dashboard behind a session cookie or Bearer token, with a login page, WebAuthn passkey sign-in, a 24-hour idle timeout, and per-IP lockout after 5 failed attempts
+- `/mcp`, `/mcp/sse`, and `/mcp/message` use a dedicated MCP bearer token instead of the dashboard credential, since they can trigger code execution in worker PTYs
 
 ## Architecture
 
@@ -855,7 +910,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 │  .eml/.msg import              OAuth · two-way sync      │
 ├─────────────────────────────────────────────────────────┤
 │  MCP Server (/mcp)             Inter-worker Messages     │
-│  16 worker · 15 Queen tools    findings · warnings · etc │
+│  24 worker · 18 Queen tools    findings · warnings · etc │
 │  file claims · learnings       dedup · read tracking     │
 │  playbooks (synthesized)       health-sweep · digests    │
 ├─────────────────────────────────────────────────────────┤
@@ -873,8 +928,8 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 
 **Worker states:**
 - **BUZZING** -- actively working (Claude is processing)
-- **RESTING** -- idle, waiting for input (< 5 min)
-- **SLEEPING** -- idle > 5 min (display-only); drones use `sleeping_poll_interval` (default `30s`) for reduced polling frequency
+- **RESTING** -- idle, waiting for input
+- **SLEEPING** -- idle beyond `drones.sleeping_threshold` (default 15 min; display-only); drones use `sleeping_poll_interval` (default `30s`) for reduced polling frequency. A `Worker` constructed without a config carries a different in-code fallback (`SLEEPING_THRESHOLD = 1200.0`, 20 min) — the configured value is what the daemon uses.
 - **WAITING** -- blocked on a prompt (plan approval, choice menu, user question)
 - **STUNG** -- exited or crashed
 

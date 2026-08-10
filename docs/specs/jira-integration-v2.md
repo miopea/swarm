@@ -1,6 +1,53 @@
+---
+title: "Jira Integration v2 — multi-dev scope and sync semantics"
+status: MOSTLY SHIPPED
+proposed_date: 2026-08-07
+shipped_date: 2026-08-09
+shipped_releases: ["2026.8.8", "2026.8.9"]
+---
+
 # Jira Integration v2 — multi-dev scope and sync semantics
 
-Status: **specified, not built.** Decisions taken with the operator 2026-08-07.
+> **Status: MOSTLY SHIPPED (across `2026.8.8`–`2026.8.9.x`).** Verified against
+> the tree — the "not built" header below was stale. Shipped: assignee-based
+> routing (`build_jql` → `assignee = currentUser()`, `import_filter`/`import_label`
+> deleted), `reconcile_ownership` with positive-check-only release semantics,
+> per-dev OAuth (`auth/jira.py::JiraTokenManager`), multi-project config
+> (`JiraConfig.projects` / `issue_types`), the `swarm_request_jira_ticket` verb +
+> `ProposalType.JIRA_PROMOTION` + its dashboard modal, `PROVENANCE_LABEL` applied
+> only on create, workflow discovery + proposed map + operator confirmation
+> (`integrations/jira_workflow.py`, `/api/jira/discover|plan|confirm|mappings`),
+> dry-run-until-confirmed, per-`(task, target)` refusal suppression, the
+> already-terminal agreement check, `known_jira_keys` surviving archive, polling
+> (no webhooks), the single closing comment, and the `jira_exported_status`
+> column (migration v19).
+>
+> **Three decisions are NOT what the code does — read these before trusting the
+> sections below:**
+>
+> 1. **§2 token storage.** The spec says 1Password. Tokens persist to
+>    `~/.swarm/jira_tokens.json` (`auth/jira.py::_TOKEN_PATH`); there is no `op`
+>    reference anywhere in `src/`.
+> 2. **§13 acceptance criteria.** The spec says parse from the ticket, leave empty
+>    when absent, **never generate**. The code does the opposite: criteria are
+>    LLM-synthesized *specifically for Jira-linked tasks*
+>    (`server/task_coordinator.py::_synthesize_criteria_if_missing`, gated on
+>    `jira_key`; `server/task_manager.py::apply_synthesized_criteria`), behind
+>    `DroneConfig.verifier_criteria_synthesis` which defaults **True**.
+> 3. **§6 mid-flight reassignment.** The spec says the worker finishes, then hands
+>    off. `reconcile_ownership` releases any non-DONE/FAILED task immediately —
+>    including ACTIVE — then applies HOLD, and
+>    `tests/test_jira_ownership.py::test_an_ACTIVE_task_is_taken_off_active` pins
+>    that behaviour.
+>
+> Still open, as the spec itself predicted: **§9's operator-visible surface** for
+> unreachable-transition divergence is log-only (WARNING in `integrations/jira.py`
+> and `server/jira_service.py`) — no notification, proposal, or dashboard row.
+>
+> Shipped beyond scope: `JiraConfig.read_only` (#1342), `sprint_priority_boost`
+> (#1341), `reconcile_blockers`.
+
+Status: ~~**specified, not built.**~~ → MOSTLY SHIPPED, see banner above. Decisions taken with the operator 2026-08-07.
 Supersedes the ad-hoc behaviour described under "Current state" below.
 
 ## Why this exists

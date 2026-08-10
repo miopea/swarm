@@ -101,7 +101,7 @@ Grouped by area. Most refresh-style events carry no payload — they signal the 
 | `conflict_detected` | File conflict detected (ownership / git) | `worker`, `files` |
 | `conflicts_cleared` | Previously reported conflicts cleared | (empty) |
 | `ownership_overlap` | File ownership overlap between workers | `overlaps` array |
-| `jira_import` | Jira sync imported / updated issues | `imported`, `updated` |
+| `jira_import` | Jira sync imported issues (`server/jira_service.py`) | `count` (number of tasks created; `1` for a single import-by-key) |
 | `draft_reply_ok` | Queen-drafted email reply saved to Drafts | `task_id`, `message_id` |
 | `draft_reply_failed` | Draft generation failed | `task_id`, `error` |
 
@@ -152,7 +152,7 @@ Or connect with query param: `/ws/terminal?worker=api`
 ### Connection Lifecycle
 
 1. Client connects and authenticates
-2. Server replays recent terminal buffer (~last 50KB)
+2. Server replays the recent terminal buffer, capped at **256 KB** (`_MAX_REPLAY_BYTES` in `pty/bridge.py`) and cut at a line boundary so xterm never receives a partial ANSI escape sequence
 3. Bidirectional streaming begins
 4. On disconnect, server keeps the PTY running (reconnect resumes)
 

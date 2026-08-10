@@ -18,9 +18,19 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **A Jira integration that is connected but switched off no longer looks like it is working.** A second developer completed the OAuth round-trip, saw a green “✓ Connected — OAuth active” banner, hit “Discover workflow” and got “Jira integration not enabled” — both statements true and contradicting each other on screen. `connected` (an OAuth token exists) and `enabled` (the integration setting every `/api/jira/*` route gates on) are two independent flags, and the banner was rendered from the OAuth payload alone, which never carried `enabled`. The UI *could not* have told her; this was structural, not poor wording.
+
+  `/auth/jira/status` now reports `enabled` alongside `connected`, and the banner renders that case in **amber rather than green** — looking green and working is the failure mode, so it must not borrow the success styling. All seven routes that returned the bare refusal string now share one actionable message naming the setting and where to find it. The refusal itself was always correct; what was missing was a path from the error to the checkbox that fixes it. This is the first wall each new developer hits after a successful OAuth setup, since `docs/jira-setup.md` is written for per-developer onboarding.
+
 ## [2026.8.10.18] - 2026-08-10
 
 ### Features
+
+- **The Queen's card now says what she is doing.** Every worker row carries a state badge with a duration (“BUZZING — 1m”) and, when relevant, an “Awaiting your input” pill; the Queen rendered her name and the static subtitle “operator command center” — the one sidebar entry that never reported its own activity. A coloured border keyed to state existed, but that is readable only once you know the code and answers nothing about *how long*, which is the difference between “deciding” and “stuck since this morning”.
+
+  A rendering gap rather than plumbing: `state`, `state_duration` and `needs_operator_input` were already on the card's dict via `_queen_dict`, so nothing new is computed. The needs-input pill is asserted separately from the state badge on purpose — “thinking” and “blocked on you” are not the same thing and only one of them is the operator's problem.
+
+  **Known wart, flagged rather than hidden:** the state colour mapping is inlined in `queen_card.html` instead of calling `state_color()`, because the macros in `worker_list.html` are not in scope where that partial is included. Inlined copies drift, so a test pins the mapping; hoisting the macros somewhere both partials can import is the real fix.
 
 ### Changes
 
@@ -34,6 +44,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Acceptance-criteria synthesis now fires on both paths that make a Jira-linked task assignable (#1354).** The verifier default-passes a task with no criteria, so a task that becomes assignable without them is unverifiable by construction — with 109 imported tickets waiting on the Queen, that mattered.
+
+  *Gap B, the release gate:* `_handle_reassign_task` assigned through the raw board method, bypassing the coordinator's `assign_task`, which is what writes the ASSIGNED history row **and** fires the synthesis hook. Measured on #1358, a real import: the Queen assigned it and its history contained neither. Both now happen on that path, scoped exactly as the assign hook is. The ASSIGNED row is part of the fix, not bookkeeping — it is the only thing distinguishing “synthesis never fired” from “fired and returned empty”.
+
+  *Gap A, create-then-link:* the assign hook only covers tasks that already carry a `jira_key`, which is right for import and backwards for the dashboard's “create Jira issue” button, where assignment precedes the link. Measured on #1352: assigned at 17:03:19 with no key, synthesis returned nothing at 17:03:26, the link landed at 17:03:31 and nothing retried. Synthesis now runs when the link is **written**, because that is when the Jira context arrives; retrying at assign time would feed it the same pre-Jira description that already came back empty. The assign hook's `jira_key` scoping is deliberately unchanged.
+
+  **Deviation from the approved plan, stated in the code too:** the plan said route through the coordinator rather than duplicate. `board.assign` was kept because this handler is synchronous and uses its boolean to build a precise refusal — routing would mean firing async and reporting success before knowing, trading a real error message for tidier structure.
+
+  **Not closed:** live verification on a fresh fixture and the empty-synthesis rate with its denominator are still outstanding, so #1354 stays open. A complicating finding for its method: every Jira-linked task inspected (#1313, #1314, #1315, #1325) has *zero* `task_history` rows — the import flow writes no history at all — so “no ASSIGNED row = never fired” cannot discriminate on imported tickets until the row this change adds starts appearing.
+
 ## [2026.8.10.16] - 2026-08-10
 
 ### Features
@@ -41,6 +61,10 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ### Changes
 
 ### Fixes
+
+- **Popping out the tasks panel no longer rewrites the operator's collapse preference (#1360).** `popOutTasks` called `setBottomCollapsed(true, true)` and the second argument persists. The visible behaviour looked right — the main panel stayed collapsed across reloads — while the meaning was wrong: closing the pop-out never restored the operator's own choice, so a control labelled “pop out” silently became “minimize this panel forever” and the caret changed behaviour with nothing to explain why. It is now session-only.
+
+  **Deliberately not done:** tracking the pop-out's lifetime, so reloading the main window while the pop-out is open shows the panel again. Closing that properly needs a live cross-window signal — another shared `localStorage` key — and that mechanism has already produced two bugs in this one control (the popped window inheriting a collapsed state and rendering blank, and the popped window writing the preference back). The trade is recorded in the code so the next person does not rediscover it by hitting it.
 
 ## [2026.8.10.15] - 2026-08-10
 
@@ -50,13 +74,23 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The header icon button now sits on its siblings' baseline on mobile (#1359).** `.btn-icon` used `font-size: 0.8rem` with an explicit `line-height: 1.2` while every sibling in that row is `.btn-sm` at `0.75rem`; a taller box in a flex row sits off its neighbours' baseline, which is hidden on desktop where the row has slack and plain on mobile where it does not. Metrics now match `.btn-sm` exactly and the glyph is centred with `inline-flex` rather than resting on a text baseline — that last part is what made a bare arrow read low even once the heights agreed. The regression test **parses both font sizes out of the stylesheet and compares them**, so it keeps holding if either changes rather than pinning a literal that would drift.
+
+  Recorded because the process failure matters: this came from an email with a dashboard link and no body, which was written off as “nothing actionable” in the 2026.8.9.26 commit message and #1359 reported as fully addressed. An empty email is a *missing* requirement, not an absent one — the right move was to ask, as had been done for the other three.
+
 ## [2026.8.10.14] - 2026-08-10
 
 ### Features
 
+- **A Jira-synced task now links back to its ticket.** `jira_key` had been in the task API payload the whole time and was rendered nowhere; the only trace that a task came from Jira was prose under the `--- Jira sync ---` marker in its description. Task rows now show the key as a badge linking to the issue.
+
+  The URL comes from the **server** because the client cannot build it: Swarm reaches Jira via `api.atlassian.com/ex/jira/<cloudId>`, which is not browsable, while the human-facing host is the `url` from the OAuth accessible-resources response, already persisted as `_site_url` at auth time — no new config. The badge stops click propagation, since task rows are themselves clickable and every click would otherwise open both the ticket and the task modal. Tokens predating the site-URL field still render a **dashed badge**: losing the link is acceptable, losing the fact that a task came from Jira is the original complaint returning. The lookup is defensive at every hop and returns empty on failure — a dashboard that will not render because Jira is unconfigured is a far worse bug than a missing hyperlink.
+
 ### Changes
 
 ### Fixes
+
+- **Two self-inflicted breakages caught by the full suite.** The `tojson` filter on `jira_site_url` raised `ChainableUndefined` on any render path that does not pass it — a blank page rather than a missing badge — and now defaults to empty. Separately, a test required `/static/theme.js` inside `sw.js` for an inline offline shell the kill switch removed; since the worker serves nothing and is no longer registered at all (PR #11), that shell cannot exist. It was replaced with an assertion that actually holds — no fetch handler, and if it ever serves content again that content needs the theme — while `/static/offline.html` is still asserted to carry the theme directly.
 
 ## [2026.8.10.13] - 2026-08-10
 
@@ -66,11 +100,23 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Stop re-registering the kill-switch service worker — a self-sustaining navigation loop (PR #11, found by codex).** 2026.8.10.10 turned `/sw.js` into a kill switch whose activate handler unregisters itself and navigates every controlled client, while `base.html` still registered `/sw.js` on every production load. That cannot converge: load → register → activate → unregister + navigate → load. Every iteration is a navigation plus a service-worker registration, both **browser-process SQLite writes** — precisely the 6,677MB of sqlite the operator's own trace measured. Reproduced twice in clean Edge sessions with only Swarm open; one process reached 4,096MB within a minute.
+
+  Registering a worker whose entire purpose is to unregister itself is incoherent, so the registration is removed outright. The page-side cleanup stays — existing registrations are unregistered and `swarm-*` caches deleted — so installs from earlier releases are still cleaned up.
+
+  **What this does not explain:** .10 shipped around 01:35 UTC and the leak began at 21:48 UTC, roughly four hours earlier. This loop accounts for the recent acceleration, not the original growth; the title-flash/app-badge experiment in .12 remains open. Credit to codex for finding it while the author was insisting the page was a bystander and blaming Edge, then extensions.
+
 ## [2026.8.10.12] - 2026-08-10
 
 ### Features
 
 ### Changes
+
+- **Removed two per-event browser-process writes — an experiment, not a proven fix.** Stated plainly because three earlier guesses that evening were each called “found it” and were each wrong. `startTitleFlash` rewrote `document.title` **every second, indefinitely**, while any event went unacknowledged, and each assignment is an IPC the browser process records in its History database; it now sets the count once. `updateAppBadge` became a guarded no-op, since for an installed PWA the badge is persisted by the browser and every call was another browser-process write.
+
+  Measured beforehand: browser process sqlite at 6,677.6 MB against a normal 286.7 MB GPU process and 131.7 MB renderer heap, with growth stopping and slowly dropping when Swarm was closed. Ruled out by measurement: Cache Storage (empty), all storage APIs (0B of a 306GB quota), network looping, the service worker (unregistered, still leaked), notifications (blocked, still leaked), renderer heap, DOM nodes, GPU.
+
+  **Not proven:** that these two calls write that database — the trace reports sqlite in aggregate and will not break it down. They are suspects only because they are per-event browser-process writes on a path that the day's classifier fix turned from near-dormant into continuous. Either outcome is useful: the theory holds or these are exonerated and the search moves on.
 
 ### Fixes
 
@@ -79,6 +125,10 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ### Features
 
 ### Changes
+
+- **The dashboard event socket is now instrumented — the last uninstrumented channel.** Storage was 0B of a 306GB quota, Cache Storage empty, the service worker unregistered, the network tab quiet after ~45 requests at load, and the renderer sitting at 264MB and 0% CPU with 1,639 DOM nodes — while the **browser** process was at 5.2GB and 4.3% sustained CPU. Every counter built that night measured the renderer or the terminal socket; `ws.onmessage` on the main `/ws` connection was never counted, and it is the one remaining place a page can grow the browser process, because frames arriving faster than the handler drains them buffer *there*, not in the renderer — exactly the observed shape. `evMB` and `evMsgs` now report bytes and message count for that socket, so the next heartbeat either names it or clears it.
+
+  The timing points the same way: 2026.8.9.24 at 21:47 fixed the classifier so workers actually change state, the first crash was at 21:48:47, and every state change broadcasts on this socket.
 
 ### Fixes
 
@@ -90,6 +140,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The service worker is removed entirely — both a kill switch and a diagnostic.** With only Swarm open, the operator's Edge **browser process** climbed past 5GB at 4.3% sustained CPU and “very high” power while the Swarm renderer sat at 264MB and 0% CPU. The page is not looping; something between the page and the network/storage layer is, and the service worker is the only Swarm component living there — it intercepts every request and writes Cache Storage, both browser-process work in exactly the process that was growing.
+
+  The previous fix to its fetch handler was real (it had cached `/api/health?_=<timestamp>`, a unique URL per poll, into an unbounded cache; removing that took the browser process from 12,316MB to 88.8MB in a controlled test) but evidently not the whole story. Rather than adjust it a third time, the worker now unregisters itself, deletes every cache it ever created, and navigates open windows so it takes effect without a second reload.
+
+  This answers the question either way: if browser memory and CPU normalise the worker is confirmed and can be restored piece by piece from git history; if they do not it is exonerated outright and the search moves elsewhere. That is worth more than a seventh speculative patch — six hypotheses that night were wrong and one of them caused an 11GB regression of its own. **Cost:** the PWA loses offline support and app-shell precaching; the app is fully server-rendered and does not otherwise depend on the worker.
+
 ## [2026.8.10.9] - 2026-08-10
 
 ### Features
@@ -97,6 +153,10 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ### Changes
 
 ### Fixes
+
+- **Bumped the PWA cache to `swarm-v23` so the already-leaked entries are actually evicted.** 2026.8.10.8 stopped *new* entries being written but did not remove the gigabytes already banked in `swarm-v22` — one permanent Cache Storage entry per `/api/health?_=<timestamp>` poll, which had grown the browser process to 12.3GB. The activate handler already deletes every cache whose name is not `CACHE_NAME`, and `skipWaiting()`/`clients.claim()` were already set, so renaming the cache is what reclaims the space, on the next load and with no manual “clear site data” step for the operator.
+
+  Two tests, deliberately paired: the version must be past the leaking one **and** the eviction that gives the bump its meaning must still exist. They live in different parts of the file, so a bump with the eviction removed would reclaim nothing while looking correct — the same “computed but not connected” shape that produced three separate defects that night.
 
 ## [2026.8.10.8] - 2026-08-10
 
@@ -106,11 +166,23 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The service worker cached every URL — a 14GB browser-process leak.** With all extensions disabled and only Swarm open, memory climbed to 12–14GB and was reclaimed only by fully quitting Edge, never by reloading. `sw.js` put every response into the cache in its catch-all branch, and `cache.put` is keyed by URL — bounded only while the URLs are. They were not: the dashboard polls `/api/health?_=<Date.now()>`, a unique URL every call, so each poll wrote a permanent Cache Storage entry that nothing ever evicted.
+
+  **Why it survived an entire evening of investigation:** Cache Storage lives in the *browser* process, and every instrument built that night measured the *renderer* — JS heap flat at 17MB of a 4192MB limit, ~1,450 DOM nodes, canvases, WebSocket bytes. All flat, all accurate, all irrelevant. It also explains each symptom that kept contradicting the working theories: the renderer stayed tiny, reloads never freed anything (the cache outlives the page), and only a full browser exit reclaimed it. A Task Manager screenshot — Swarm's renderer at 116MB beside a 12,316MB browser process — is what localised it, after five wrong hypotheses; no page-side counter could have produced that reading.
+
+  Only same-origin GETs under `/static/` are now cached, and never with a `_=` cache buster. API responses are live state, so caching them durably was a correctness bug waiting to happen as well as a leak, and the offline **read** fallback is preserved — skipping the write must not skip the read. Existing Cache Storage is not cleared by this change; the operator should clear site data for the PWA once.
+
 ## [2026.8.10.7] - 2026-08-10
 
 ### Features
 
 ### Changes
+
+- **Reverted 2026.8.10.5's blanket disabling of xterm's GPU renderers — it cost 11GB in two minutes.** That release turned off both GPU renderers on the theory that a WebGL crash explained the operator's dead tabs, which dropped xterm to its DOM renderer — one DOM element per character cell. With a full-size terminal and 5000-line scrollback it allocates without bound, and the browser climbed to eleven gigabytes at roughly 1% per second, then twelve.
+
+  **Every counter added so far sat flat while it happened:** heap 20MB, `wsMB` 1MB, canvases 0, two terminal attaches in three minutes, daemon idle. DOM nodes live in C++ memory, so the instrument was blind again — the third distinct memory class this investigation could not see, after the JS heap and array buffers. The `nodes` field added to the heartbeat here is the reading that would have caught it, shipped so the next blind spot is smaller.
+
+  Windows had WebGL→Canvas before and crashed every 6–9 minutes; that is bad and **still open**, but it is far better than 11GB in two minutes, and reverting to known prior behaviour is correct while the true cause is unidentified. Kept from the reverted releases: the `_isMac` fix (a genuine bug — a case-sensitive match never hit “macOS”, which is what `userAgentData` reports and is checked first), the 256KB replay cap and the reconnect-storm fixes (attach rate fell from 99/hour to single digits), and the heartbeat itself, which is what made any of this diagnosable.
 
 ### Fixes
 
@@ -122,6 +194,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Terminal replay is capped at 256KB, and the heartbeat can finally see buffer memory.** The crash dump settled it: Edge exception `0xE0000008`, Chromium's out-of-memory code, on a 2MB allocation — not the GPU crash the previous release assumed from the signature. It also explains the contradiction that had been reasoned past twice: `performance.memory.usedJSHeapSize` counts **only** the JS heap and excludes ArrayBuffer backing stores, and the terminal replay arrives as binary WebSocket frames — exactly that. The instrument was blind to the memory that ran out, and a positive control confirming the metric *can* move would have caught it before two wrong diagnoses.
+
+  Replay drops from 1MB to 256KB, with the cut landing on a **line boundary**: slicing mid-line hands xterm a partial ANSI escape, which it renders as garbage or swallows along with the text after it, and a shorter first screen beats a corrupted one. About 3,000 lines of scrollback survive. The heartbeat now also reports `wsMB` (cumulative bytes delivered over terminal sockets) and `procMB` (`measureUserAgentSpecificMemory` where permitted), so the next buffer-memory problem cannot present as a flat heap and a dead tab.
+
+  **Caught by the negative control, not by writing the test first:** removing the trim's *call site* left the whole suite green, because every test exercised the helper in isolation — the cap could have been deleted invisibly. It is now pinned including ordering, since trimming after `send_bytes` would be a very tidy no-op. That is the third instance in this investigation of the same shape: something computed correctly and then not connected. “Is it correct?” and “is it wired in?” are separate questions.
+
 ## [2026.8.10.5] - 2026-08-10
 
 ### Features
@@ -129,6 +207,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ### Changes
 
 ### Fixes
+
+- **xterm's GPU renderers are disabled on every platform — the tab crash is a GPU crash.** The heartbeat shipped in the previous release made this measurable rather than arguable: five minutes of perfectly flat memory (17–20MB of a 4192MB limit, one terminal, four canvases) followed by instantaneous death with the popped-out window not even open. No climb, no spike — that excludes memory, leaks and the pop-out by measurement. An earlier crash killed both browser windows in the same instant, which is a shared GPU-process crash and nothing else.
+
+  **Platform correction that changes the conclusion:** the previous release fixed the `_isMac` WebGL guard on the belief the operator was on macOS, from a month-old memory note. They are on Windows with Edge, against a daemon on Linux. So `_isMac` was correctly false for them and that fix, while a real latent bug for Mac users, did nothing here — and what it reveals is worse for WebGL: they are on the platform where the code deliberately left it enabled and they get the macOS crash signature anyway. The macOS carve-out was treating a platform-specific symptom of a problem that is not platform-specific.
+
+  The Canvas fallbacks live inside the WebGL branch and are skipped with it, since Canvas is also a GPU path with the same exposure; a test pins that, because hoisting a Canvas fallback “for perf” would silently reopen this. The code's own comment already conceded the trade — “perf is a non-issue for viewing worker output”. The heartbeat now counts **canvases** specifically, replacing a vague `canvas, .xterm` mix that could not tell the renderers apart: xterm's DOM renderer creates zero canvases, so the count is a direct read of whether a GPU path is live, and the verification comes from the operator's browser rather than from inference. The misleading memory note was corrected too — the daemon running on Linux says nothing about the browser, and a month-old note is not evidence about today.
 
 ## [2026.8.10.4] - 2026-08-10
 
@@ -138,6 +222,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The macOS WebGL guard never fired — one missing `/i` behind four tab crashes.** `dashboard.js` already documented this exact failure (“macOS Chromium/Edge crashes the *whole* renderer through xterm's WebGL path on a redraw”) and the guard was correct in intent. It just never matched: `navigator.userAgentData.platform` returns `"macOS"` with a lowercase m and is checked **first**, against a case-sensitive `/Mac|iPhone|iPad|iPod/`; `navigator.platform`'s `"MacIntel"` would have matched but was never reached. So `_isMac` was false on every Mac with `userAgentData`, WebGL loaded, and the guard protected nobody. It is now case-insensitive and matches the spec's closed set of platform values as well as the legacy ones — with `"Chrome OS"` asserted as the trap in the other direction, since a naive `/os/i` would drop Windows-adjacent platforms to the DOM renderer for nothing.
+
+  Diagnosed by a **heartbeat posted to the daemon every 30s** (so it survives the tab), which showed the heap flat at 17–28MB of a 4192MB limit with one cached terminal, and both windows stopping in the same instant — ruling out every memory hypothesis and pointing at a GPU-process crash.
+
+  **The same class of bug, twice in one investigation:** the heartbeat client sent `plat` and `webgl` and the server never logged them, so the first reload after the fix produced a heartbeat that could not confirm the fix — which is the entire point of having one. Both fields now reach the log, with a test.
+
 ## [2026.8.10.3] - 2026-08-10
 
 ### Features
@@ -146,11 +236,23 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The terminal reconnect storm is broken — the retry cap was decorative.** `MAX_TERM_RECONNECT` caps retries at 3 and the per-entry counter honoured it (the console dutifully printed 1/3, 2/3, 3/3), but on exhaustion the code called `destroyTermEntry`, the re-render re-entered `attachInlineTerminal`, and *that* built a new entry with a fresh budget. Connect, fail, retry three times, destroy, re-attach, forever — with every cycle calling `term.reset()` and pulling a new 1MB replay snapshot from the server. Measured in a browser: eleven terminal sockets in eight seconds for one worker, unprompted; in the daemon log, 35–43% of every attach across the whole day lasted under two seconds, up to 99 attaches in a single hour at 1MB each.
+
+  Two independent ways the cap was unenforceable, both closed. A 30s **cooldown** after exhaustion, stamped *before* `destroyTermEntry` since destroy is what triggers the re-entry — an explicit `selectWorker` clears it, because the cooldown must break an automatic loop and never make a terminal unreachable. And the reconnect budget is now earned by **surviving** rather than by connecting: it was zeroed in `onopen`, so a socket that opened and then dropped refunded its budget every time; it now clears only after ten seconds of a live connection. Cache size (10) and the 1MB replay are unchanged — fixing the churn came before trading away scrollback.
+
+  **A correction owed to the record:** the claim that this predated the day's changes, on the grounds that the churn appears in yesterday's logs, was bad reasoning. Churn existing earlier says nothing about what started the crashes; the sub-2s rate was flat all day, but the storm's cost scales with how heavy each cycle is, and 2026.8.9.27 doubled the worker-list swap.
+
 ## [2026.8.10.2] - 2026-08-10
 
 ### Features
 
 ### Changes
+
+- **The worker list is no longer re-rendered into two windows at once.** `partials/worker_list.html` is re-fetched and swapped wholesale on `workers_changed` plus about a dozen other socket events, and the custom selector roughly doubled the cost of every swap — for 16 workers, 12,141 → 25,442 bytes, 147 → 280 elements, 17 → 34 `<img>`. With the tasks panel popped out it was happening in two windows.
+
+  Three guards: the popped-out window no longer fetches it at all (`.worker-list` is `display: none` there, so every swap was pure waste in exactly the window the crash was reported against); bursts coalesce over 120ms, so sixteen workers changing state produce one repaint instead of a flurry of full fetches; and the list is never swapped while the selector is **open** — that surfaced as “Element is not attached to the DOM” in the browser tests, which is the same event a finger hits when a refresh replaces the rows mid-tap. `window.refreshWorkers` is exposed so the coalescing can be driven directly; without a handle the test would call `window.refreshWorkers && …`, silently do nothing, and pass while measuring nothing — how two earlier tests here went green against a broken build. The pop-out guard is likewise asserted by counting the **requests the browser makes**, since a guard that is present but bypassed by another caller reads identically in a source scan.
+
+  **What this does not establish:** that it is the whole cause of the Edge crash. Sustained DOM churn is consistent with a tab dying, but so is memory growth in xterm or a socket leak, and neither was measured. The discriminating question on the next crash is whether it happens with the pop-out closed.
 
 ### Fixes
 
@@ -164,6 +266,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Features
 
+- **Worker state is now a background wash in the worker selector, not just a stripe.** The 3px stripe still made you read a row to place it; a tinted field is what lets a block of sixteen sort itself at arm's length, which is the real ask behind “hard to scan because it all looks the same” (#1359).
+
+  The tint is **mixed into `var(--panel)`** rather than layered over it as `rgba`, so it stays dark in the dark theme and light in the light one without being tuned twice. It is held at 14% (18% for STUNG) on purpose: the row text is already state-coloured and the app targets WCAG 2.1 AA, so a heavier wash starts eating the contrast of the very text it is meant to highlight — raising it is a judgement for the operator looking at a real phone, not a colour value chosen here. Beyond the flat tint, WAITING and STUNG get the only edge treatment (WAITING means “this one needs you”, the stated reason for scanning the list at all, so it must be findable without comparing tints against each other), SLEEPING recedes rather than competing, and the hover/keyboard highlight was strengthened because a wash under every row can swallow the active-row indicator on the brighter states and make the list *harder* to drive.
+
+  **Tested as computed style in a real browser, not as CSS source.** A rule can be present and still lose to a later selector, resolve to the same colour through two different variables, or fail outright if `color-mix` is unsupported — each renders sixteen identical rows while a source scan stays green. This control had already produced three defects that only a browser caught.
+
 ### Changes
 
 ### Fixes
@@ -174,15 +282,31 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Changes
 
+- **Two of the session's own test bugs fixed rather than worked around.** `wait_for_selector` was being used to wait on a `[hidden]` element, and it defaults to waiting for *visible* — a wait that can never succeed. Fixed-size character windows in the source scans went red purely because a function grew; they are now bounded by the function itself, the second time in one session that a guessed character window manufactured a false failure.
+
 ### Fixes
+
+- **The worker selector was clipped to a ~45px row — 14 of 16 workers unreachable at any scroll position.** Two ancestors did the cropping, neither visible from the selector's own markup or CSS: `.panel { overflow: hidden }` (and `.worker-list` *is* a `.panel`), plus `overflow-y: hidden` on the pill scroller `.worker-list > .panel-body`. On mobile that body is a single row, so the absolutely-positioned list was cropped to roughly one option — worse than showing fewer, because nothing on screen indicates the rest exist. It is now un-clipped only while open, via the body class the control already toggles, and raised above sibling panels: escaping the overflow without that just lets it paint underneath the terminal panel, which looks identical to still being clipped.
+
+  **The first two tests written for this could not detect it** — they passed with the fix removed. Ancestor clipping does not change an element's layout box, so `bounding_box()` and `is_visible()` both report a cropped row as present and correct, and the reachability loop called `scroll_into_view_if_needed`, which scrolls the *page* and destroys the measurement it was set up to take. The honest measure is what the browser **paints**: scroll the list through its own range and collect the rows `elementFromPoint` resolves to — sixteen reachable with the fix, one without. Found only because the negative control was run.
+
+- **The selector trigger ignored your tap until the next server render.** Its label is rendered from `selected_worker`, so after choosing a worker it kept reading "Select a worker" until the next partial refresh, making the control look like it had dropped the input. A native `<select>` repaints its selection instantly; a custom one gets nothing for free. The trigger now updates from the chosen row immediately, with the server render confirming rather than supplying it. A regression introduced in the preceding release and caught in the browser.
 
 ## [2026.8.9.27] - 2026-08-09
 
 ### Features
 
+- **A custom worker selector, because a native `<option>` is a structural dead end (#1359).** The operator's diagnosis — "hard to scan because it all looks the same" — was correct about the *limit*, not about styling: an `<option>` holds text and nothing else, no icon, no colour, no second line, and no CSS reaches inside it, so sixteen workers rendered as sixteen identical grey strings. Each row now carries a per-state colour stripe down its left edge, the state bee icon, the name coloured by state, a "needs you" marker for workers awaiting the operator, and the current task; provider is kept but demoted, having been taking equal visual weight for the least useful field.
+
+  **Two things preserved deliberately.** Row order still follows the pill list, honouring the operator's 2026-08-06 decision ("the order should follow the same order that the workers are listed in the UI, that'll help with visual muscle memory") which had already reversed an earlier attempt to sort attention to the top — a custom control makes redoing that quietly very tempting. The guard for it was a blunt scan for `selectattr(` anywhere in the file, which the new trigger label would have tripped for an unrelated reason; it is now scoped to the option list so it measures the guarantee it claims. And open state lives on `<body>`, not on the control: the partial is re-rendered wholesale on every `workers_changed`, so control-local state dies with it and the list slams shut mid-read. Every handler is delegated on `document` for the same reason.
+
+  Accessibility is explicit because this replaces a control that was accessible for free: combobox/listbox roles, `hidden` when collapsed so a screen reader is not read sixteen off-screen workers, full keyboard including Escape, focus held on the listbox with `aria-activedescendant`, and 44px rows per WCAG 2.1 AA.
+
 ### Changes
 
 ### Fixes
+
+- **The first version of the selector hid the entire dashboard.** It closed `.wsel` but not `.worker-switcher`, so the browser reparented the whole rest of the page inside a wrapper that is `display: none` above mobile width — reproducing the exact symptom reported twice before ("the panel is not visible; the popped window is blank"). **All fifteen new source-scan tests passed on that broken markup**: each asks whether a string is present, none asks whether the document parses, and only the real-browser test found it. Tag-balance checks now cover the switcher block and the whole partial, since editing templates by string replacement is precisely how it happened. Bisecting rather than guessing mattered — the first hypothesis was a JS error killing the IIFE, and reverting `dashboard.js` alone did not fix it.
 
 ## [2026.8.9.26] - 2026-08-09
 
@@ -192,6 +316,10 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Saving the config page no longer jumps the document under you (#1359).** `#unsaved-banner` is the first child of `<body>`, above `<header>`, toggled between `display: none` and `block`. A save cycle fires it three times — "Unsaved changes *" on the first keystroke, "Saving…", "✓ Saved" — so a ~30px band was inserted and removed above everything, moving the whole page twice per save. Config autosaves 1.5s after the last change, so this happened unprompted with the operator's eye still on a field. The banner is now floated, matching `.toast-container` on the dashboard so both pages behave the same way, offset below the header rather than over it (floating it across the Dashboard/Config buttons would trade a jump for a misclick), and moved to the bottom under 600px so it is not sitting on the field being edited.
+
+- **The pinned worker chip beside the mobile switcher is gone (#1359).** "It was showing the worker to the right of the drop-down menu which was odd cuz it didn't reflect anything." This reverses an earlier request of the operator's — dropdown *plus* the active worker always visible — at his request, having now seen it in use: a native `<select>` always renders its selected option, so the chip repeated the text a few pixels to its left. The only thing it added was the bee icon and state colour, which belong *inside* a formatted row rather than bolted alongside. The two tests that pinned the chip now assert its absence instead of being deleted, so re-adding it has to be a decision rather than an accident. The fourth email in the batch was a bare dashboard link with no body — recorded as non-actionable rather than invented into a requirement.
+
 ## [2026.8.9.25] - 2026-08-09
 
 ### Features
@@ -200,13 +328,29 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Root cause of the blank popped-out panel, after two reports: it inherits a *minimized* main window.** The collapse preference lives in `localStorage`, which the popped-out window shares with the main one, so a panel minimized in the main window opened the pop-out already collapsed — a bare header and nothing else until a tab was clicked. Adding "popping out collapses the main window" in .24, at the operator's own request, turned that from intermittent into every single time, which is what finally made it reproducible. In the popped window the panel *is* the window, so the stored preference does not apply there, and the pop-out never writes it back either: with one shared key, persisting from the pop-out would silently redefine what the caret means in the main window. The .24 grid fix was a real defect (a `flex-direction` on a grid, doing nothing) but was **not** the cause — recorded so it is not re-litigated.
+
+- **Putting a worker to sleep now survives the daemon.** Carrying `state_since` in the store (.24) was necessary but not sufficient — nothing was writing it. Every other state change goes through the pilot and emits `state_changed`, which is what the publisher persists on; `sleep_worker` assigns the attribute directly, and on an already-RESTING worker there is no transition to emit at all. The backdated timestamp therefore lived only in memory and died with the daemon: "I set several to resting and some to sleep, but on reloading only public-website was resting." The regression test starts its worker RESTING deliberately, so a fix that merely emitted an event on transition still fails it.
+
+- **A `ReferenceError` shipped in .24.** `setBottomCollapsed` lives in the main IIFE and `popOutTasks` in the Command Center one, so the bare cross-IIFE call threw and took the rest of the function with it. Caught by `test_dashboard_no_bare_cross_iife_calls`, which is exactly what it exists for.
+
 ## [2026.8.9.24] - 2026-08-09
 
 ### Features
 
 ### Changes
 
+- **The temporary first-poll content dump is removed** now that it has served its purpose — it was also writing test workers into the real `~/.swarm` during the suite.
+
 ### Fixes
+
+- **Root cause of #1357, and it was never the persistence: a completed turn was being read as a running one.** The restore worked — the rebuild diagnostic shows "16 remembered … 14 left non-BUZZING after restore", and one second later all fourteen read `was=RESTING decided=BUZZING`. The pilot's first poll overwrote correct state, so persisting harder could never have fixed it. `_RE_SUBAGENT_ACTIVE` treats "`<glyph> <verb> for <digits>`" as an active turn, and that shape means two opposite things: mid-turn ("✻ Sautéed for 16m 13s", still working) and turn-over ("✻ Brewed for 1m 58s", Claude Code's completion summary). The second sits above the returned input box on an idle worker, short-circuiting to BUZZING before the RESTING branch was reachable.
+
+  Both meanings are real, so the pattern is **split rather than narrowed**: where a prompt is already visible with no "esc to interrupt", the turn has ended and elapsed time is history, so those three sites use `_RE_SUBAGENT_IN_PROGRESS` (live spinner ellipsis or subagent token counter). The stuck-BUZZING safety net keeps the broad pattern, where a false positive merely holds a busy worker at BUZZING — the safe direction, and the reason the 16m capture put it there. **Measured, not reasoned**: all sixteen first-poll buffers were captured during a real reload and replayed offline, 16/16 BUZZING before and 14 RESTING / 2 BUZZING after, matching the persisted map exactly. Four buffers are kept as fixtures with a positive control asserting the ambiguous shape is still present, so the test cannot quietly stop reproducing the bug.
+
+- **SLEEPING survives a restart.** SLEEPING is not a stored state — `display_state` derives it from how long a worker has been RESTING — and "put to sleep" works by setting RESTING and *backdating* `state_since`. Persisting the state alone threw away the only thing that made it SLEEPING. The store now carries both, reads its own earlier bare-string payload rather than discarding a good map mid-upgrade, and refuses a future timestamp.
+
+- **Popping the panel out now collapses the one left behind.** Operator request: the point is to move the panel off this window, not to run two renderers side by side. The collapse is persisted so it survives a reload the way the caret would, and a blocked popup leaves the panel alone — collapsing then would hide the only copy there is.
 
 ## [2026.8.9.23] - 2026-08-09
 
@@ -214,13 +358,21 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Changes
 
+- **Two diagnostics added for #1357, because the first measurement answered only half the question.** Every worker read `was=BUZZING` at first classification, so the restore did not take effect — contradicting an earlier claim that it ran. But the same log shows workers whose visible tail is plainly idle (a bare `❯`, or `⏸ manual mode on · ? for shortcuts`) *also* deciding BUZZING on the first poll; classification is stateless per poll, so fixing the restore alone would not have fixed the operator's screenshot. Persistence is not the broken half — `save()` is wired and the stored row is fresh and correctly varied. So: a WARNING at the rebuild site counting remembered vs adopted-existing vs adopted-new vs restored, which tells "loaded nothing", "took the existing-worker branch" and "restored then overwritten" apart in one restart; plus a one-shot dump of each worker's full first-poll content to `~/.swarm/first-classification/` so the classifier decision can be replayed offline instead of guessed at from a 160-character tail.
+
 ### Fixes
+
+- **The popped-out panel is now laid out as the grid it actually is.** `.detail-area` is `display: grid`, and the panel-mode rule shipped in .21 set `flex-direction: column` on it — which parsed, applied, and did nothing, so the panel kept the terminal's three grid tracks. Measured live at 1100x800: rows `415.86px 0px 233.94px`, i.e. ~230px of the window given to an empty track, and at shorter heights the track the panel lands in collapses and the window renders blank. It is now collapsed to a single cell with `.bottom-tabbed` placed into it. The pop-out icon also picks up the `margin-left: auto` that `.btn-collapse` used to carry, so the two sit together at the right edge instead of stranding at the end of the left group, styled neutral so it reads as a control rather than a third orange action button. The earlier panel tests asserted what should be **absent** and never that the panel was **present**, which is exactly how a blank window passed them; the new ones assert the property and are negative-controlled.
 
 ## [2026.8.9.22] - 2026-08-09
 
 ### Features
 
 ### Changes
+
+- **Diagnostic logging for what the first classification after a restart decides, and from what (#1357).** 2026.8.9.21 persisted worker state and did **not** fix the reported symptom — the fleet still came up all-BUZZING after a reload, and the store then faithfully recorded that. Already established, so the next step does not re-litigate it: the *save* side works (it tracked three live transitions, 16 BUZZING → 15/1 → 14/2 → 13/3, matching the API at each step), the *restore* runs (`self.workers` starts empty, so every worker takes that branch on a cold start), and the saved map was ~2 minutes old, well inside the 30-minute staleness window. So something overwrites the restored states immediately; the leading hypothesis is that re-attaching to a PTY replays a snapshot of recent output whose activity indicator is classified as live work, which would mean the restore can never win — and fits the original report (4-6 seconds, then correct, all sixteen flipping together).
+
+  This ships evidence rather than a second guess, having already been wrong once on this bug by reasoning from code instead of measuring. For each worker it logs the state going in, the state decided, the content length and a bounded tail of what it decided from. WARNING level because operators run at the default and an INFO diagnostic is invisible — the same mistake the worklog success line made — and bounded to one line per worker per daemon start. **Deliberately temporary**, tagged `[#1357]` so it can be removed in one grep once the cause is known.
 
 ### Fixes
 
@@ -230,7 +382,13 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Changes
 
+- **Toolbar tidy-up.** The "Preview Jira" button is removed as requested, along with its now-unreachable handler — the export dry run still lives on the config setup page, which is where it belongs. The `/api/jira/preview` route is deliberately left in place: removing a working API surface is more than "remove the button". "Pop out" becomes an icon (↗) in the utilities row beside the collapse caret, rather than a bordered button wedged into the tab group where it read as another tab.
+
 ### Fixes
+
+- **Worker state is remembered across restarts (#1357).** Both halves of the operator's screenshot report — "all workers show BUZZING for 4-6 seconds after a reload" and "state is not remembered between reloads" — were one line: `src/swarm/worker/worker.py:190`, `state: WorkerState = WorkerState.BUZZING`. Nothing persisted worker state, so every daemon start constructed all sixteen workers with the dataclass default — and that default is the *most active* state. The dashboard rendered the daemon's belief faithfully until the pilot's first poll classified each worker from its PTY; the screenshot's tell was every worker reading an identical "BUZZING — 4m".
+
+  States are now saved **on change** (one small write per real transition, not one per poll across sixteen workers) and restored when a worker is adopted, stored as a config key rather than a new table — it is one map, rewritten in place, never queried or joined, and a schema migration for data with no relationships and no history is the wrong trade. **Three guards, each with a control**: state older than 30 minutes is discarded, since a daemon down overnight knows nothing useful and stale state shown as current is the quieter version of the bug being fixed; STUNG is never restored, because a crashed worker may well have been revived *by* the restart; and an empty save does not wipe the memory, so a rebuild that momentarily sees no workers cannot erase it. The pilot still re-classifies from the PTY immediately — this only decides what is shown in the meantime.
 
 ## [2026.8.9.20] - 2026-08-09
 
@@ -240,9 +398,19 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Panel mode rendered completely blank.** Opening `/?panel=tasks` gave an empty page: correct title, correct header, nothing else. `.bottom-tabbed` is a *child* of `.detail-area`, and the CSS hid `.detail-area` wholesale — hiding the one panel the mode exists to show. The grid rules were wrong for the same reason: they placed `.bottom-tabbed` at `grid-column 1`, but grid placement applies only to direct children and it is nested a level down. The detail area's *other* children — the terminal panel and its resize handle — are now hidden instead, and the detail area carries the tabbed panel at full height.
+
+  **Every test passed anyway, and that is the part worth recording.** The source scans checked the CSS rules existed; the browser test checked `#tab-tasks` was in the DOM, the sidebar was not visible and the detail area was not visible — all true of a blank page. Nothing asserted the panel was *visible*. Absence was tested and presence never was, so "hid everything including the target" satisfied the suite completely. The browser test now asserts the panel is visible **and** taller than 200px, since a collapsed-to-zero panel is technically present too, and a unit test pins that `.detail-area` is never hidden wholesale again.
+
 ## [2026.8.9.19] - 2026-08-09
 
 ### Features
+
+- **The tasks/decisions panel can be popped out into its own window (#1353).** Task management now lives in that panel — promotion approvals, blocked tasks, the Decisions tab — so it is watched continuously while the worker terminals are used for something else, and on one screen the two compete. **It is the same page**, opened at `/?panel=tasks` with a `panel-mode` body class that hides everything else; deliberately not a second template, because a standalone page would need its own copy of the task renderer, the socket wiring and every element id, and two renderers for one panel *drift* with the server-rendered one winning on load — which already happened to the Jira mappings panel. Reusing the page means one renderer, one reconciler, and every action handler (approve, dismiss, start, complete, and the `X-Requested-With` header they need) works unchanged.
+
+  **The cost that had to be designed around:** `window.open` copies the opener's `sessionStorage`, and the dashboard restores the previously-selected worker from it on load. Unguarded, the popped window would mount an xterm and hold a *second* PTY subscription for a terminal nobody can see — and terminal traffic is the heaviest thing this daemon moves. Both reads of the stored worker are now gated on panel mode, including the one at the top of the IIFE that runs before `init()`. The body class is applied at parse time rather than in `init()`: it is purely presentational, must not depend on all of `init()` completing, and applying it before first paint avoids flashing the full dashboard. The window is **named**, so pressing the button twice focuses the existing one rather than opening a second copy holding its own socket, and the control hides itself inside the popped window.
+
+  One of the four negative controls passed with the fix removed: the scan looked for `_panelMode` within 500 characters of the read and swept up its *declaration* a few lines above. Proximity of a name is not a guard — tightened to 160 characters and cross-checked against the browser test, which fails independently by asserting no xterm is mounted.
 
 ### Changes
 
@@ -256,6 +424,10 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The Jira blocker note is written for the reporter, not the operator.** The same defect as the closing comment on a different surface, found because testing that comment left one on a live ticket reading "Swarm is BLOCKED on this: Closing-comment template needs the 2026.8.9.17 reload before I can test it…". Block reasons are written worker-to-operator; that text landed verbatim on a ticket a reporter reads, and on a service desk it tells a customer nothing except that something internal is happening.
+
+  **The split is drawn by what is safe to say.** `external_blocker_ref` is an artifact by design — `swarm_block_on_external` asks for "npm eslint@^10" or a PR URL — so naming it tells a reader something true and checkable ("Work on this is paused while we wait on: platform release 6.2."). The free-text reason stays inside Swarm where the operator sees it; the operator-decision sentinel reports as "pending a decision from the team" with no reason at all, those being the most internal of the three; and with no artifact it degrades to "waiting on a dependency". "Swarm is BLOCKED on this" is gone too — that is our vocabulary, not the reporter's. Four tests from 2026.8.9.6 asserted the old wording, including that the raw reason appears; they now assert its **absence** with the reason recorded, rather than keeping the old contract alive because tests encoded it.
+
 ## [2026.8.9.17] - 2026-08-09
 
 ### Features
@@ -264,9 +436,17 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Jira-synced content was mutated in memory and never written to the database.** Found live while testing the closing comment: for one linked task the API (daemon memory) showed the synced block present and the database showed it **absent**. `refresh_synced_content` mutates the board's own `SwarmTask` object, and the sweep persisted only when there was *also* a notifiable comment — so a reporter or due-date update, or a ticket whose only new comment is Swarm's own (which 2026.8.9.15 now suppresses), changed memory and never reached the database. It survived until some unrelated board write flushed it incidentally, and was lost on restart. That incidental flush is why it looked fine an hour earlier: one task had blocker activity writing the board on its own, the other had none.
+
+  **Persist on change, notify on news** — two different questions that one condition was answering. The sweep now compares the description before and after, writes when it actually changed, and notifies only when there is something a worker should read. Unconditional writing is equally wrong: this runs every cycle for every open linked task and would churn the board and its broadcasts forever. Both directions have a control. Three older tests mocked `refresh_synced_content` to *report* a change without making one, which resembled nothing once persistence keyed off the real mutation — the mocks now mutate like the code they stand in for, rather than the assertion being loosened to keep them green.
+
 ## [2026.8.9.16] - 2026-08-09
 
 ### Features
+
+- **The Jira closing comment is rewritten in the team's own voice.** The last open question from the v2 interview was to confirm the format against the team's documented standard responses — **there is no such document**, so the house style was measured from the team's own resolved service-desk tickets instead: short, plain, addressed to the reporter, signed off, with org-preferences adding "professional, ministry-oriented". The old template matched none of it — internal jargon ("Task completed in Swarm."), the worker name (internal routing, meaningless to a customer), and the entire technical resolution, up to 3,804 characters on real linked tasks. That last one is wrong **in kind**, not merely in length: resolutions are written for the *next worker* and become learnings, while the person who raised the ticket wanted to know their problem is fixed.
+
+  The replacement greets the reporter by name — possible only because reporter is imported as of 2026.8.9.13 — states the outcome in one plain sentence from the title, and adds the *first paragraph* of the resolution capped at 400 characters with a visible ellipsis, because truncating silently would be its own small lie. It signs off and says plainly that it is automated, the same provenance principle behind the reserved `swarm` label. An unsynced or unlinked task simply gets no greeting rather than an error. Two assertions in the old test pinned the removed behaviour and now assert its absence with the reason. **Still unverified by a human who knows the voice**: the style was inferred from eight real tickets, and if the team prefers different wording this is one string to change.
 
 ### Changes
 
@@ -280,6 +460,10 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Swarm was notifying workers about its own Jira comments.** Found in an inbox during an idle nudge, not by a test: posting a blocker note made the comment sync see "new activity" and message the assigned worker about a comment Swarm had just written — twice, once for the block and once for the clear — and completion comments would have done the same. An echo like that trains workers to ignore the notification, which is exactly when a real stakeholder comment gets missed; it is the same shape as the `labels = "swarm"` echo the provenance decision was designed to prevent, arriving through a different door.
+
+  `_latest_comment` now returns `""` when the newest comment carries a swarm marker, so no message is sent. The comment is **still mirrored** into the description — only the notification is suppressed, because the mirror is what a human reads and Swarm's own note belongs in the thread. The completion comment carried no marker at all, unlike the blocker note and the worklog, so it now appends one; swept rather than pinned per call site, with a test that walks the three comment writers and fails on any that writes to Jira without marking the text as Swarm's. Only the *newest* comment decides, so an older swarm note does not mute everything after it. **Known limitation, stated rather than hidden:** a human comment landing in the same cycle as a swarm note is not notified — the tail still mirrors it, so it is visible on the task, but it raises no message.
+
 ## [2026.8.9.14] - 2026-08-09
 
 ### Features
@@ -288,9 +472,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The scheduled Jira refresh never fetched reporter or due date.** 2026.8.9.13 added both to `_JIRA_ISSUE_FIELDS` and rendered them in the synced block; assigning a real task and waiting five minutes, they never appeared. **The batched sweep asks for its own field list** — `fetch_synced_fields`, added by the batching work in 2026.8.9.10, requested `comment,attachment`, written before reporter and duedate existed. So the two fields reached the *single-task* refresh, which uses the full default set, and never reached the path that actually runs every five minutes. Every unit test passed because they drive `refresh_synced_content` directly with a mocked `get_issue`: two correct changes, each tested, that did not compose — and only running it showed that. One constant, `_SYNC_BLOCK_FIELDS`, is now used by both paths, held together by two tests (the batch must request exactly it, and every field the renderer reads must be in it) so neither can quietly fall behind the other again.
+
 ## [2026.8.9.13] - 2026-08-09
 
 ### Features
+
+- **Reporter and due date are imported for Jira tickets, and nothing else is.** Measured before building, across 50 real tickets on both projects: reporter 100%/100%, duedate 36%/12%, and components, parent, environment, fixVersions and issuelinks **zero on both** — as were descriptions mentioning "acceptance". The never-populated fields are deliberately not requested; importing a field nobody fills is the sprint mistake again. Both fields live in the **regenerated block**, not on `SwarmTask`: a due date moved in Jira updates on the next sync, whereas a stored copy would silently go stale, and neither field is Swarm's to own. No schema change, and a test moves the date and checks the old one is gone. The due date deliberately does **not** touch task priority — it is a fact the worker sees; letting it reorder the board is a separate decision with its own blast radius.
+
+- **Acceptance criteria are synthesised when a linked ticket is assigned — and the real finding is that nothing was doing it at all.** `apply_synthesized_criteria` runs for `swarm_create_task` and `create_task_smart`; the Jira import path never called it. So every imported ticket arrived with no acceptance criteria, and the verifier default-passes a task with none — **every piece of Jira work was unverifiable by construction**. That, not the absence of a parser, was the gap. Criteria are synthesised rather than parsed from the ticket deliberately: zero of fifty tickets mention acceptance criteria, so a parser would import nothing, and criteria parsed at import go stale the moment someone edits the ticket because the refresh is additive and does not touch them. It runs **on assign** rather than on import, because an imported ticket may never be worked and this costs a model call; assignment is also the last point before dispatch, so the criteria reach the worker in its task message, which is why it is awaited rather than backgrounded. Scoped to linked tasks — locally created ones already get criteria at creation.
 
 ### Changes
 
@@ -304,11 +494,21 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The 2026.8.8.16 proposal-expiry fix was applied to the wrong store, so it never ran in production.** That release taught `ProposalStore` to stop expiring a proposal merely because its task is not ASSIGNABLE — a promotion, completion or park always references a task its worker already owns, so checking it against the assignable set expired it within seconds. **The daemon uses `SqliteProposalStore`**, which was never updated, so once the caller began passing the new argument every sweep raised `TypeError: SqliteProposalStore.expire_stale() got an unexpected keyword argument 'assignable_task_ids'` — and expired nothing at all. Every test for that fix built the in-memory store, so all of them passed against code the daemon never runs.
+
+  **It also invalidates an earlier claim**: the expiry fix was reported as "verified live" because a promotion proposal survived the sweep. It survived because the sweep was *crashing*, not because the logic worked — the observation was real, the explanation of it was wrong. `tests/test_proposal_store_parity.py` now runs the same assertions against both stores, parametrised rather than duplicated (a copied test file is exactly what did not get written last time), and pins that the two signatures match. Fixing it surfaced a second defect the in-memory store never had: with an *empty* assignable set the SQL guard skipped the check entirely, leaving stale assignment proposals lingering. Found by the parity test immediately. Both defects were caught by reading the log after a real sync cycle — neither was visible to 6,242 passing tests.
+
+- **`assign_to_me` had never worked on this install.** The token manager resolves the account once at connect time via `/myself`, which 401s with "scope does not match" on any install authorised before `read:jira-user` was requested, so the account id stayed empty forever and `assign_to_me` refused every call. `_my_account_id` already solves exactly this — `/myself`, then deriving the account from `assignee = currentUser()`, which needs only `read:jira-work` — so `assign_to_me` reuses it rather than growing a second fallback that could rot separately.
+
 ## [2026.8.9.11] - 2026-08-09
 
 ### Features
 
 ### Changes
+
+- **A per-developer Jira setup guide, with every mechanical claim pinned by a test.** Each developer is about to point a write-capable integration at a shared tracker, and the safe *order* for doing that existed only in commit messages. `docs/jira-setup.md` walks it: register the OAuth app, **turn read-only on first**, add projects, discover and confirm each workflow, preview the sync plan, then turn read-only off — step 2 sits deliberately before steps 3-5 so a mistake lands on the developer's own screen rather than in the team's ticket queue. It also names the things that surprise people: text above the `--- Jira sync ---` marker is preserved and everything below regenerated, the `swarm` label is reserved provenance, reassigning a ticket in Jira moves the work off your board, Jira owns status, and Swarm never creates a ticket without operator approval. For team rollout it records that per-cycle API cost is bounded rather than proportional to board size (~14 calls/cycle after 2026.8.9.10) and that bulk-filed work should be filed *unassigned* and assigned one at a time — an unassigned ticket is never imported, which is the ordering mechanism, not Jira issue links, which Swarm does not read.
+
+  Every mechanical claim is tested, because documentation drifts silently and is believed anyway: `config.html` told operators for months that tokens lived in `~/.swarm/jira_tokens.json` after they had moved into the database. The tests check the scopes it tells you to grant are the ones actually requested, that the issue types and sync interval match the config, that the sync marker and reserved label it quotes are the real constants, that the verbs it names exist, and that read-only still blocks writes at the client. Prose and judgement are deliberately not tested. All fourteen claims were fact-checked against the code before committing; one was wrong (the marker had moved to `swarm/tasks/task.py`) and was corrected.
 
 ### Fixes
 
@@ -317,6 +517,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ### Features
 
 ### Changes
+
+- **The Jira sync loop no longer scales with the size of the board (#1350).** Measured after shipping, which is the uncomfortable part: the spec flagged API budget as an open question, then two passes were added that are each O(open linked tasks) with a full API call per task per cycle, and nothing was measured until someone asked whether this was production-ready. At 5 open linked tasks it was 23 calls/cycle, at 20 it was 53, at 55 it was 123 — now a flat **14/cycle** at every size. At ten devs on a 55-ticket board that is ~14,760 calls/hour before versus ~1,680 after, with ~55 tickets about to be filed.
+
+  Two fixes. `refresh_linked_tasks` issues **one search** for the whole set (`key IN (…)`, `fields=comment,attachment`) instead of one `get_issue` per task, chunked at 50 because a single JQL cannot carry unbounded keys; keys are *validated*, not escaped, the same guard the ownership check uses, and a task missing from the response is simply not refreshed this cycle — a no-op rather than a truncation. `reconcile_blockers` no longer reads every open ticket's comments to discover nothing, checking a task only when it *is* blocked or is known to carry a note we posted. That costs **one full pass per daemon start**: narrowing purely to "blocked now" would strand a note written by a previous daemon instance, because the known-notes set lives in memory — the honest cost of keeping that state in memory rather than adding a column, bounded to once per restart.
+
+  The tests assert the **shape of the cost**, not just that the code works: twenty tasks must cost one search, 120 keys must be three searches, and an unblocked task with no note must cost nothing in steady state — the failure is invisible on a small board and only bites once Jira is enabled for a team. Three older fixtures built a `JiraService` by hand and mocked the per-task call; they were updated to the batched shape rather than the production code being bent to keep them passing.
 
 ### Fixes
 
@@ -328,6 +534,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **A worklog refused because the project was unconfirmed is now retried instead of lost forever.** `log_work` correctly refuses to write to a ticket whose project the operator has not confirmed — a worklog is a write to a shared tracker — but nothing ever tried again, so every task closed before confirmation forfeited its time permanently. `backfill_worklogs` re-offers recently-closed linked tasks each cycle.
+
+  **Idempotent by reuse, not by new bookkeeping**: `log_work` already reads the ticket's existing worklogs and skips its own marker, so re-offering an already-billed task writes nothing. There is no "already backfilled" flag, which is why it survives a restart or a rebuilt database. Bounded twice — a seven-day window and ten candidates per cycle — because each check costs one worklog read; unbounded, a board with hundreds of closed linked tasks would re-read all of them every five minutes forever. A task whose ACTIVE time cannot be substantiated is skipped rather than filled in with a guess.
+
+- **Correction: the dashboard force-complete path was never missing a worklog.** The earlier record claimed only `fire_completion` was wired; in fact `queen_force_complete_task` and the dashboard route both call `d.complete_task(...)`, with `force` a parameter of that same function, so the side-effects block runs either way. There was nothing to fix — the guarantee is now asserted by test instead, so a future path that bypasses `complete_task` is caught. The duration test was also repointed to `_worked_seconds`, where the history lookup moved when backfill started sharing it; following the call was preferred over loosening the assertion, which would have quietly stopped testing anything.
+
 ## [2026.8.9.8] - 2026-08-09
 
 ### Features
@@ -336,9 +548,19 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Every write to the shared Jira tracker is now visible at the log level operators actually run at.** The worklog success line sat at INFO while the default is WARNING, so nothing in `swarm.log` recorded that a worklog had been written — verifying #1339 meant reading Jira instead, exactly the position an operator would be in.
+
+  Fixed as a class rather than as the one line reported: five write-success logs were invisible — transition, completion comment, assignee, worklog, created issue. Raising only the worklog would have left the log incoherent, since a transition changes someone's ticket and is more consequential than a time entry. The rule is **changing someone else's data**, not volume, so sprint-field discovery, the import count and the already-terminal path stay at INFO — that last one records agreement *without* writing. Pinned by a test that walks the AST over the known write methods and fails on any `_log.info` inside them, with a positive control asserting the name set matches real functions in the module.
+
 ## [2026.8.9.7] - 2026-08-09
 
 ### Features
+
+- **Sprint membership now raises a task's priority — off by default, and the design settled by measurement (#1341).** Probing the operator's real site first changed the shape of the answer: the sprint field exists as `customfield_10020`, but WWD has zero issues carrying one and IS rejects sprint JQL outright. Neither configured project uses sprints, so the acceptance criterion "verified against a real sprint-using project" is not satisfiable here — which is why this ships **off by default** rather than changing import results for teams that cannot be tested against.
+
+  **Restrict or prioritise is settled as prioritise.** Filtering imports to a sprint would hide genuinely assigned work, a surprising way to lose a ticket; sprint membership decides *order*, never membership, and a test asserts in-sprint, out-of-sprint and closed-sprint issues all still import with no sprint clause in the JQL. The boost raises one step and never reaches URGENT — urgent means production is affected, in-sprint means scheduled, and collapsing them would make the signal that wakes people up indistinguishable from planned work.
+
+  **The field is discovered by name, never hardcoded**, because the id differs per site — the same mistake the hardcoded `Done` transition made, right on one project and refused by eleven tickets on another. It is requested only when the feature is on and the site actually has one, since asking Jira for a nonexistent field id rejects the whole search and would take imports down for a feature nobody enabled. Only an ACTIVE sprint counts, in both the modern dict shape and the legacy `state=ACTIVE` string shape, because work that rolls over sits in a closed sprint and the current one at once and history must not raise priority. Config lands across all four layers plus a UI toggle, with the round trip asserted.
 
 ### Changes
 
@@ -348,6 +570,14 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Features
 
+- **A blocked task now says so on its linked Jira ticket (#1340).** When a worker blocked, the ticket said nothing — a PM looking at the board saw idle work with no explanation and the reason lived only inside Swarm. This is the item that most directly makes Swarm legible to people who never open it.
+
+  **A comment, not an issue link — decided, not defaulted.** A Jira `blocks` link can only express a dependency between two tickets, and most Swarm blockers are on things with no ticket at all: another Swarm task, an operator decision, a deploy. The comment covers every case; the link covers a minority and needs per-site link-type discovery, so issue links stay a follow-up.
+
+  **Reconciled, not hooked.** There are four block/unblock call sites (two MCP verbs, the coordinator, the board), and hooking each means the fifth one added later silently does not report; comparing state each cycle also self-heals a note that failed to post, which fire-and-forget cannot. One comment is rewritten in place rather than appended, because on a five-minute loop posting per block and unblock turns a ticket into a changelog nobody reads. Three guards, each with a control: an unchanged blocker writes nothing; clearing rewrites the note rather than leaving a ticket asserting a block after work resumed; and an unblocked task with no prior note says nothing at all.
+
+  Not verified live — it needs a daemon reload to run on the real loop — though the underlying `add_comment`/`update_comment` path is the one verified live on WWD-6717. The two new client writes were picked up automatically by the read-only sweep from 2026.8.9.5, which is what that sweep exists for.
+
 ### Changes
 
 ### Fixes
@@ -355,6 +585,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ## [2026.8.9.5] - 2026-08-09
 
 ### Features
+
+- **Jira read-only mode — try the integration without writing to anyone's tickets (#1342).** With Jira being enabled for every dev, a newcomer's first misconfiguration would otherwise land in the team's ticket queue rather than on their own screen; verifying v2 required creating seven throwaway tickets in a real shared project because there was no alternative. With `read_only` on, imports, workflow discovery and reconciliation run exactly as normal, and every write is refused and logged at WARNING saying what it would have done — silent refusal would make the mode indistinguishable from broken.
+
+  **Enforced at the client**, the only place every Jira write passes through (transition, comment, worklog, assignee, create). Hiding buttons in the UI would not help: the sync loop writes on a timer with nobody watching, which is exactly how 14 real WWD tickets were transitioned on 2026-08-07 by a settings toggle. The durable protection is a **sweep, not five assertions** — a test walks the AST and fails if any method issuing `session.post/put/delete` does not consult the guard. It found `create_issue` unguarded on the first run, because that one returns a dict rather than a bool and did not match the pattern of the others. `create_issue` returns `{}` in read-only mode rather than a fabricated key, so existing callers refuse instead of linking a task to a ticket that does not exist, and no caller had to learn about the mode.
+
+  **Verified live against real Jira, no daemon reload needed:** with `read_only` on, a full cycle read 3 issues and discovered 7 status sets while all five writes refused, and WWD-6718 was checked afterwards and is untouched — same status, same single worklog, no comment. The config field is added across all four layers plus the UI toggle with a round-trip test, because v2 shipped three of the four once already and the UI then reported a setting that vanished on restart.
 
 ### Changes
 
@@ -366,11 +602,21 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Changes
 
+- **Jira's worklog granularity is now measured and recorded rather than guessed at.** Verifying #1339 against WWD-6718 produced a number the code could not explain: a task with a measured 163s ACTIVE span read back from Jira as 120s. Probing rather than assuming — posting 3661s and reading back 3660 — established that Jira **truncates `timeSpentSeconds` down to whole minutes**. The prior comment claimed only that "Jira rounds sub-minute worklogs to zero", a guess that happened to be adjacent to the truth; it now states the measurement with the numbers so nobody re-derives it.
+
+  **Behaviour is unchanged and that is the point.** Swarm sends the true figure and lets Jira truncate rather than rounding up to the nearest minute itself — rounding 163s up to 180s would bill 17 seconds nobody worked. Truncation under-reports, the safe direction for a timesheet, and the 60s floor exists precisely because anything shorter truncates to zero and vanishes. Pinned by a test asserting the sent value is neither adjusted nor rounded up. The probe worklog was deleted from WWD-6718 afterwards.
+
 ### Fixes
 
 ## [2026.8.9.3] - 2026-08-09
 
 ### Features
+
+- **Closing a linked task now posts a worklog to its Jira ticket (#1339).** Swarm already knows how long a task was ACTIVE and devs are measured on time they hate logging by hand. This writes to a shared tracker and it is somebody's timesheet, so the refusals matter more than the happy path.
+
+  **Duration is reconstructed from history, not from `completed_at - started_at`.** `SwarmTask.activate` resets `started_at` every time, so that subtraction reports only the final stretch — a task worked three hours, parked, then resumed for five minutes would bill five minutes. `swarm/tasks/worklog.py` walks the task's events and sums the STARTED → (COMPLETED|FAILED|UNASSIGNED|BLOCKED) intervals; time parked on a blocker is not work and is not counted. It returns `None`, **not `0.0`**, when it cannot tell, and the caller then logs nothing — "no record of work" and "worked for no time" are different claims and only the second is safe to write. An unclosed interval is ignored rather than assumed to run to now.
+
+  **Idempotence by comparison, not by memory.** Each entry carries a marker keyed on (task number, completion time); before writing, Swarm reads the ticket's existing worklogs and skips if its own marker is there, so it survives a daemon restart or a rebuilt database in a way a local "already sent" flag would not. Keying on the completion rather than the task alone is deliberate: a task reopened and genuinely worked again *should* get a second entry. If the existing worklogs cannot be read, nothing is written — "I cannot tell whether I already billed this" must not resolve to "bill it again". Unconfirmed projects are refused with a WARNING naming what would fix it, the same gate as the export sweep.
 
 ### Changes
 
@@ -384,13 +630,27 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Worker findings appended to a task description landed below the Jira sync marker and were deleted five minutes later.** Found on real data against WWD-6717: findings appended to task #1334 were gone after one sync cycle, falsifying the previous release's claim that the refresh "has no path by which it can remove any" information.
+
+  **Two features, each correct alone.** #1289 added `append_description` precisely so that adding to a description cannot lose it; the Jira sync owns everything after the `--- Jira sync ---` marker and rebuilds it. But append put the text at the end of the *string*, and once a task has synced, the end of the string is inside the block the sync regenerates — together they deleted exactly what `append_description` exists to protect. The addition now goes before the marker and the generated tail is re-attached unchanged, and the marker constant moved to `swarm/tasks/task.py` because it is a contract between two unrelated writers rather than a Jira detail.
+
+  **Why the tests said this was impossible**: `test_worker_authored_description_text_survives` passed and proved nothing — its fixture had no existing sync tail, so the appended text landed above the marker. The real sequence is import → sync → worker appends → sync again, and only by the second sync does the description end with generated content. Demonstrated rather than asserted: with the naive append restored the two new tests fail while the original still passes. Swept for other appenders — `_edit.py` is the only one, so this is the whole blast radius.
+
 ## [2026.8.9] - 2026-08-09
 
 ### Features
 
+- **Linked tasks keep receiving Jira comments after import.** `import_issues` dedupes on `jira_key` and skips tasks that already exist, so comments and attachments were mirrored exactly once — at creation — and never again. On a service desk the comment thread *is* the requirement: a stakeholder writes "actually the customer needs X" and the worker never saw it, because nothing ever looked again.
+
+  **Why the obvious fix is destructive**, and most of the new test file exists to hold this line: `refresh_task` already existed for the manual button and re-derives the description from the Jira body while *replacing* `task.attachments`. On a timer that would silently delete, every five minutes, everything a worker wrote into the description and every attachment Swarm added itself. So `refresh_synced_content` is additive by construction — it rebuilds only the region below the `--- Jira sync ---` marker and merges attachments, and a failed fetch is a no-op rather than a rebuild from an empty payload. Change is detected by comparing the **derived tail**, not by counting comments: the tail is size-capped so counting undercounts, and an edited comment changes no count at all.
+
+  The worker is then **messaged**, because mirroring a comment into a description nobody re-reads is half an answer. A message lands in their inbox rather than cutting across whatever they are mid-way through saying, and carries the latest comment itself — "Larissa: do X instead" is the thing they needed, not "the ticket was updated". Only open tasks this swarm still owns are refreshed.
+
 ### Changes
 
 ### Fixes
+
+- **Three broken callers of `MessageStore.send`, found by copying the pattern and watching it do nothing.** `send()` takes `(sender, recipient, msg_type, content)`; all three passed a `Message` object as the first positional with the other required arguments missing, so every call raised `TypeError` straight into a surrounding `except`. The daemon's Queen CLAUDE.md-drift notification logged at DEBUG and was invisible at the operator's default level — the Queen has never once received it. The `task_coordinator` verifier-drone warning logs at WARNING but has zero occurrences in the log: that path had never fired, so it was latent. Pinned with a repo-wide sweep rather than a test per call site, because one of these was wrong for months and a signature test would not catch it — the bad call type-checks fine at import.
 
 ## [2026.8.8.17] - 2026-08-08
 
@@ -400,6 +660,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Ownership is now established before anything is written to a ticket.** Observed live on WWD-6715: the export sweep ran at 23:43:21 and wrote to the ticket, and ownership reconciliation discovered at 23:43:23 that the ticket was no longer ours — two seconds apart, in the wrong sequence. Swarm wrote to a ticket and then found out it had been taken off it. Ownership now runs first; the defect is in neither sweep but in their order, so the order is what the test asserts.
+
+- **A released task is no longer export-reconciled forever.** Releasing changes the task's status, which by itself creates an export divergence — so the sweep would push Swarm's status onto a ticket the swarm no longer owns, every cycle, and could genuinely transition someone else's work. UNASSIGNED + on hold + no owner is now excluded from the export sweep. That shape is also an ordinary parked backlog item, which is equally not ours to be reporting into Jira.
+
+  Live verification of the ownership feature itself on WWD-6715: the ticket was unassigned in Jira (chosen over handing it to a colleague — same code path, nobody's queue disturbed), after which #1330 went UNASSIGNED with owner `None`, tags `["hold"]` and its `jira_key` retained, while Jira itself was untouched — still To Do, still labelled swarm, nothing written. The log line also confirms the status is captured *before* the release; it read "It was unassigned" until 2026.8.8.15 fixed it reporting its own effect.
+
 ## [2026.8.8.16] - 2026-08-08
 
 ### Features
@@ -408,13 +674,25 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **A proposal about a task you already own was expired seconds after it was raised.** `expire_stale` validated every pending proposal's task against `available_tasks` — UNASSIGNED and not on hold. A `jira_promotion` proposal always references a task assigned to the worker that requested it, so it could never be in that set and was expired on the very next sweep. Nothing failed and nothing logged; the request simply vanished from the operator's surface, the worst shape for an approval queue, which then looks like oversight while quietly dropping what it was asked to hold. The first live test survived only because approval happened inside the sweep window.
+
+  **Two different questions were conflated.** "Does this task still exist and is it open?" is the right test for a proposal about a task the worker already owns; "could the auto-assigner still take it?" is only meaningful for an *assignment* proposal, where an owned task genuinely makes it moot. Fixed as a rule rather than a special case, because it was never only about Jira — COMPLETION and PARK proposals reference ACTIVE tasks and were exposed to the same premature expiry. `assignable_task_ids` defaults to `valid_task_ids`, so existing callers keep their behaviour. One control passed with the fix removed for the sixth time in this work, always the same shape: three tests exercised the store while the defect was in what the manager passed it, so a test now drives `ProposalManager.expire_stale` against a real board.
+
 ## [2026.8.8.15] - 2026-08-08
 
 ### Features
 
+- **A ticket reassigned in Jira stops being this swarm's work.** Routing is `assignee = currentUser()`, the whole reason Jira can be enabled for every dev without them colliding — but nothing re-checked it after import, so handing a ticket over left *both* swarms holding the task: the new owner's imports it, the old owner's keeps working it, and they race to transition the same ticket.
+
+  **The detection is the design, and the obvious implementation is dangerous.** "It fell out of the import query" is not evidence of reassignment — a ticket disappears from that query when it is reassigned, closed, moved, deleted, when permissions change, and when the call simply fails and returns fewer rows. Inferring from absence would release every linked task the first time Jira errored. `find_reassigned` instead asks Jira what the assignee actually *is*, in one batched JQL for all open linked tasks, and acts only on a definite mismatch; a key missing from the response is reported as nothing at all. Three guards each carry a test and a control: an unresolvable account releases nothing (reachable — it is what the `read:jira-user` scope gap produced), a failed query releases nothing, and keys are validated rather than escaped so a malformed `jira_key` never reaches the JQL.
+
+  The task is **released and put on hold**, not deleted or completed: the work is not done and the link is still true, so it stays visible and traceable while belonging to nobody. HOLD is not decoration — a bare release returns it to UNASSIGNED where the auto-assign drone hands it to another worker in *this* swarm, the same wrong answer with a different name. Existing tags survive, since `update(tags=...)` replaces the list. Nothing is written to Jira: ownership moved there already, and Swarm's job is to stop working the ticket, not to argue with the person who took it.
+
 ### Changes
 
 ### Fixes
+
+- **The release log line reported its own effect.** It read `task.status.value` *after* the release, so every message said "It was unassigned" instead of naming the status the operator needed to know.
 
 ## [2026.8.8.14] - 2026-08-08
 
@@ -424,6 +702,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **A comparison is not a write, so the confirmation gate no longer blocks it.** MTR-11806 is done in Swarm and already `Done` in Jira, but sits in a project that is neither in the sync scope nor confirmed — so the sweep dropped it at the confirmation gate *before* the agreement check and warned about it every five minutes, permanently, over a divergence that does not exist. The gate exists to stop an unattended sweep bulk-writing to a shared tracker; recording that Jira already agrees writes nothing, so gating a comparison behind write-confirmation buys no safety and costs real noise. Unconfirmed tasks now get the read-only agreement check while the gate itself is unchanged — a ticket that genuinely needs a transition in an unconfirmed project is still refused, with a test for exactly that.
+
+  Verified live first: after the 2026.8.8.13 reload the 20:45 sweep cleared all 10 IS tickets, and a read-back confirms all 10 are **still `Resolved`** in Jira. That second half is what mattered — their only available transition was `Waiting for support`, which reopens, so a fix that wrote instead of compared would have reopened ten resolved service-desk tickets.
+
+- **The saved-mappings panel hid the one project that mattered.** It listed projects from `projects` and from stored maps, so MTR — the project the board was already entangled with — was the only one the operator could not see. The endpoint now derives rows from linked tasks too and reports a per-project linked count. One negative control passed when it should have failed, for the third time in this work and always the same shape: the test called `_record_existing_agreement` directly, so deleting its call site in the sweep left it green. Replaced with one that drives `reconcile_exports` itself — the wiring is what breaks, so the wiring is what needs the test.
+
 ## [2026.8.8.13] - 2026-08-08
 
 ### Features
@@ -431,6 +715,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ### Changes
 
 ### Fixes
+
+- **A ticket already finished in Jira is agreement, not a failed export**, closing the last open Jira v2 item — and measuring first dissolved the decision it was waiting on. The spec filed this as an operator decision needing 11 judgement calls; checking the tickets against live Jira showed all 10 (not 11 — the repeated figure was wrong) were already `Resolved`, statusCategory `done`, offering only a `Waiting for support` transition, which reopens. Nothing to remap, nothing to unlink: Jira was right and Swarm had simply never recorded it. The cost was a reconciler retrying an impossible transition every sync interval forever, two WARNING lines each, with the refused-set held in memory so every restart tried the whole set again.
+
+  `export_status` now asks whether the ticket is already terminal **before** reporting failure, and records agreement without writing. Name equality was the wrong test — this project calls finished `Resolved`, the confirmed map targets `Done`, and both mean the work is over; `statusCategory` is universal across every Jira workflow, so it answers "is this finished?" with no per-project discovery. Each asymmetry has a test: only for terminal Swarm statuses (a done-category ticket while Swarm says ACTIVE is real divergence); only when a transition could not be found (a movable ticket should be moved, and the happy path pays no extra API call); an unreadable ticket does *not* claim agreement; and it never writes, because reopening a resolved ticket to close it again would be destructive on a shared service desk.
+
+- **`input-field` was used on a real `<input>` in the approval-rule modal and defined in no stylesheet** — the other three inputs in that file use `modal-input`, which is defined. Fixed. Deliberately **not** fixed and recorded so the next pass does not "fix" them: `muted` is a phantom of the scan's tokenizer (every real use is `text-muted`) and `local-time` is a JS hook for timestamp formatting that carries `text-muted text-xs` for its appearance. Both had been reported as likely typos; that was speculation and it was wrong. `config.html` also claimed Jira tokens live in `~/.swarm/jira_tokens.json`; they are in the secrets table of `swarm.db`, now corrected.
 
 ## [2026.8.8.12] - 2026-08-08
 
@@ -440,6 +730,14 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Task ownership now lands before the reply, closing a create-then-act race that was never Jira-specific.** `swarm_create_task` returns as soon as the row exists, while the assignment rode a background coroutine that first awaited Outcomes-criteria synthesis — an LLM call taking seconds. Any verb reading ownership straight after creating a task saw it UNASSIGNED for that whole window; it surfaced as `swarm_request_jira_ticket` reporting "#1326 is not assigned to you" about a task just routed to the caller.
+
+  The synthesize-then-dispatch order is deliberate and **stays** that way when there is a dispatch, because the criteria have to be in the message the target worker receives. With `start=False` no message is ever sent, so that path now assigns first and synthesizes after, and ownership lands on the next loop tick instead of behind the model. The refusal text now separates "never yours" from "not yours *yet*", rather than describing a sub-second window as a permanent condition and sending the caller hunting a routing bug that is not there.
+
+- **The Jira approval modal rendered unstyled**, written with `queen-section`, `queen-section-label`, `queen-section-body` and `queen-actions` — four classes that exist in no stylesheet. Every section came out as a flat run of lines while the escalation and completion cards beside it looked right, and nothing failed. It now uses the existing vocabulary (`queen-text-block`, `modal-footer`) rather than inventing more.
+
+  `tests/test_mobile_ui_1291.py` already existed for this defect class — a class used but never defined, which fails silently and looks like a layout bug — but it pinned only `.text-center`, the one instance #1291 happened to hit, which is why the class kept recurring. It now sweeps the `queen-*` namespace. Scoped to `queen-*` on purpose: a repo-wide sweep flags JS hook classes such as `view-proposal-btn` and `msg-select-cb` that exist to be queried rather than styled, and a test that cries wolf gets suppressed instead of read — measured before choosing, at 11 undefined classes repo-wide, all hooks except three worth a separate look.
+
 ## [2026.8.8.11] - 2026-08-08
 
 ### Features
@@ -448,13 +746,31 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The new MCP verb 500'd in production while 6092 tests passed.** `handle_tool_call` invokes handlers *without* awaiting them — every existing handler is `def`, this one was `async def`. The dispatcher stored a coroutine that was never run and the failure happened on the next line, outside the try/except: a bare 500 with no traceback in the log. The unit tests passed because they called the handler directly and awaited it; nothing went through the dispatcher, the seam where the contract lives. The handler is now synchronous (a promotion request has nothing to await; the Jira call happens at approval), with a test asserting every registered handler is sync, because the next person to add a verb will reach for async too.
+
+- **Every promoted ticket was created unassigned.** `/rest/api/3/myself` returned 401 "Unauthorized; scope does not match" while create and search succeeded on the same token — the OAuth app requested only `read:jira-work` and `write:jira-work`. An unassigned ticket does not route back to the swarm that raised it, which is the entire point of assignee routing, so the feature created tickets that looked right and silently did not work. `read:jira-user` is now requested, but that alone was insufficient: existing tokens keep the scopes they were granted, so every dev who authorized earlier would have kept producing unassigned tickets until they happened to reconnect. `_my_account_id` therefore falls back to deriving the accountId from `assignee = currentUser()` — the same query imports already use, needing only `read:jira-work` — and it resolves against the operator's real, un-reconnected token.
+
+  Verified in real Jira rather than by test: WWD-6712 (before) carried labels `['swarm']` and was unassigned; WWD-6713 (after) carried the same label and was assigned to the operator. Both were created in WWD resolved from `projects` rather than the legacy field, and both transitioned back to Done via the real export path, exercising the confirmed WWD status map.
+
+- **The account-id fallback would have silently never worked.** The default search field set does not include `assignee`, so it would have received issues without it and read the absence as "no assigned issues" — indistinguishable from the failure it exists to fix. `search_issues` now takes an explicit `fields` override and the caller asks for what it needs.
+
 ## [2026.8.8.10] - 2026-08-08
 
 ### Features
 
+- **Workers can now request that a Swarm task be raised as a Jira ticket, via the new `swarm_request_jira_ticket` MCP verb.** They cannot create one: Jira is a shared tracker, an agent-raised ticket is visible to a whole team and cannot be un-seen, so the operator approves. It rides the **existing proposals surface** rather than a second inbox — that surface already has an operator UI, notifications and an autonomous-window concept, and a second queue is a thing that eventually goes unwatched, which is worse than none because it looks like oversight while providing none.
+
+  **The property this turns on: every refusal is re-checked at approval time**, not trusted from request time. A proposal waits for a human and the world moves while it waits — the task can be finished, archived, or linked by someone else in between — and validating only at request time makes approval a rubber stamp on a fact that has stopped being true, the same class as the empty-`jira_exported_status` default that transitioned 14 real tickets. Refused at approval: already linked, done or failed ("never for closed work", one rule covering both the ~1235 historical closed tasks and the short-lived ones), and Jira disconnected. A create returning no issue key raises rather than reporting a promotion that did not happen.
+
+- **`swarm` is now reserved provenance, auto-applied to tickets Swarm created and to nothing else.** It means exactly one thing: an agent raised this. Swarm does not label tickets it merely transitions — that would write to other people's tickets on every sync. The trap this avoids: the old import filter was `labels = "swarm"`, so had created tickets carried that label while it still drove routing, Swarm would re-import its own output as a new task. Separating "came from Swarm" (provenance) from "route to Swarm" (assignee) makes the echo loop impossible rather than merely deduped against.
+
 ### Changes
 
+- **The promotion proposal gets its own badge and modal.** Without them it fell through to the assignment renderer and showed an "ASSIGN" badge — the operator would have believed they were approving a task assignment while authorising a team-visible ticket. The modal states the consequence: what is created, where, assigned to whom, labelled how, and that nothing happens unless they approve. `get_jira` is injected as a **callable, not a reference**, because the daemon builds the proposal manager before it builds `self.jira` and rebuilds `self.jira` on every config reload — a captured reference would be `None` at construction and would pin a stale service across a reconnect.
+
 ### Fixes
+
+- **The existing Jira create path used the legacy single-project field and set no assignee.** `self._config.project` is empty on a v2 config that only sets `projects`, which Jira rejects, and on a multi-project config it silently pinned creation to whichever project was in the old field; creation now resolves from `projects` and refuses rather than posting an empty key. A created ticket is also assigned to the dev whose swarm raised it, so the outbound rule and the assignee-routing rule agree and it round-trips home — an unresolvable account is deliberately *not* fatal, because an unassigned ticket that exists is recoverable while a promotion lost to a failed identity lookup is just gone.
 
 ## [2026.8.8.9] - 2026-08-08
 
@@ -464,6 +780,14 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The global Jira `status_map` fallback is removed — it was silently mapping every unconfigured project.** The per-project maps landed but the global map stayed, both stored and consulted (`status_map_for()` returned `project_status_maps[key] or status_map`); removing its textarea made it invisible, not harmless. What made it worse than a leftover field is that `status_map` had a **non-empty default**, so the fallback never returned empty and every project without a confirmed map silently received the hardcoded `done -> "Done"`, on every install including fresh ones that had never configured Jira. The docstring justified the fallback as v1 upgrade safety, but the default defeated that reasoning: "genuine v1 config" and "nobody ever touched this" were indistinguishable.
+
+  The IS refusal was the **lucky** failure mode — those 11 tickets failed loudly because that workflow has no Done transition. Where an inherited status name *does* exist in the target project, and most workflows have a "Done", the export succeeds and moves someone's ticket to a state nobody chose while reporting success. `status_map_for()` is now strict: an unmapped project returns `{}` and the export is refused, applying the module's own rule one level up — an absent mapping means "we do not know" and can be refused honestly, while a wrong mapping transitions a real ticket and looks like success. The field is deleted from model, loader, serializer and applier, and joins the REMOVED key set so an existing config reports it as gone rather than as a typo.
+
+- **A refused export is no longer invisible.** Strictness alone would have made the silence worse: the refusal logged at DEBUG, meaning a task moved in Swarm while its ticket silently did not move in Jira, with nothing an operator running at default WARNING would ever see. It is now WARNING, naming the project, the ticket and what to do, suppressed to once per (project, status) because a discovered map legitimately omits states it could not justify. It also no longer calls `get_transitions` first, so a misconfiguration costs no API calls.
+
+  **Upgrade consequence, stated rather than buried:** an install with projects that were never discovered will stop exporting those projects instead of using the inherited map. That is the intended change — verified against the operator's live config, where WWD and IS are both mapped and confirmed, so the blast radius there is zero.
+
 ## [2026.8.8.8] - 2026-08-08
 
 ### Features
@@ -472,41 +796,93 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The saved-mappings panel updates without a page refresh** — operator-reported: "after I save discover the map list doesn't update. I have to refresh the page." The panel was a Jinja loop, so the table was built once at page load; confirming a workflow updated the config, saved it, and wrote a success line into a different element, with no path at all from "config changed" to "panel re-renders".
+
+  Fixed the way the task board was fixed, not the way it was first patched: the panel is not handed a delta after confirm, it **re-reads the authority** via a new `GET /api/jira/mappings` — on load, on every visit to the Integrations tab, and after each confirm. A view that can re-derive its state recovers from updates nobody thought to send, which is the whole difference between the two approaches. The Jinja block is deleted rather than kept alongside, because two renderers for one panel drift and the server-rendered one wins at load. Verified against the operator's live config: the rendered table matches the stored WWD and IS maps exactly, both confirmed.
+
+- **The panel now shows what a user actually needs to see.** One row per *configured* project, not per mapped project — a project listed in step 1 with no map imports issues and silently exports nothing, and was previously absent from the table entirely, indistinguishable from not being configured. Unmapped states are named in amber, since `export_status` refuses a transition whose target is missing and omitting it made "not mapped" look like "not shown". A stored map for a project no longer in sync scope is still listed and marked as such, because the map applies again the moment the key is re-added. The project field is datalist-backed by the configured keys so nobody retypes WWD, still free text because a project must be discoverable before it is added to step 1. And a failed read says so instead of sitting on "Loading" forever, which reads as "nothing configured" rather than "I could not tell you".
+
+  One negative control initially passed when it should have failed: with the endpoint unregistered the panel renders "Could not read saved mappings", which is neither "Loading" nor empty, so the error branch satisfied the assertion — and the browser fixture's daemon has no `jira` attribute at all, so the working and broken paths produced identical-looking empty states. The test now wires a real `JiraSyncService` over a real `JiraConfig` and asserts the actual rows, and both controls bite.
+
 ## [2026.8.8.7] - 2026-08-08
 
 ### Features
 
+- **Saved Jira mappings are rendered from stored config rather than from the last Discover click.** Before this, a reload erased the only view of what a project was confirmed as. Each row now shows its confirmation state and a Re-discover button, and an unconfirmed project says plainly that the sync will report and write nothing. The section is numbered 1-2-3 (projects, workflow mapping, cadence) with the routing model stated where the decision is actually made.
+
 ### Changes
 
+- **Three dead Jira settings are removed from every layer, not just greyed out on the screen.** `import_filter` and `import_label` routed imports by label, which assignee routing replaced; `lookback_days` was read by no query in the codebase. Leaving them disabled was the worse state — a greyed-out input still reads as configuration, and a field the operator can see but cannot affect is the UI telling them something untrue. They are gone from the model, serializer, loader, applier and config page.
+
+  Because an existing `swarm.yaml` still carries all three keys, they move to a REMOVED set that warns **by name**. Previously the single legacy-key message told the operator to fix `lookback_days` by switching to OAuth — remediation advice for an entirely different group of keys.
+
+- **The raw `status_map` JSON textarea is gone.** Hand-typed JSON is how a map targeting "Done" got saved for a project whose workflow has no Done transition, which 11 real IS tickets then refused every sync interval. The dropdowns built from the project's discovered vocabulary are now the only way in.
+
 ### Fixes
+
+- **Two element-id defects that would have aborted the *entire* config save — not just the Jira section — were caught by the id sweep during this change.** Removing the `status_map` textarea left a `getElementById(...).value` dereference on it in the save payload, and restructuring the block dropped the sync-interval input while the payload still read it. Same class as the earlier `cfg-jira-project` rename.
 
 ## [2026.8.8.6] - 2026-08-08
 
 ### Features
 
+- **Saved Jira mappings are visible after the fact, rendered from stored config rather than from the last Discover click.** Previously the mapping existed on screen only in the moments after discovering; a reload left no way to see what a project was confirmed as, or whether it was confirmed at all. Projects with a discovered-but-unconfirmed map are shown as such, and when nothing is confirmed the page says plainly that the reconcile sweep will not converge.
+
 ### Changes
 
+- **Jira settings that no longer make sense are addressed rather than left to confuse.** `lookback_days` is dead — plumbed through loader, applier and known-keys but read by no query since imports became assignee-routed — so it is disabled and labelled LEGACY. `status_map` is still live as a *fallback* for projects with no confirmed mapping, so it stays editable, but the hint now says so and names the seven real Swarm statuses; the operator's stored map contained `completed`/`in_progress`/`pending`, which are not statuses this system has and can never match.
+
+- **`apply_jira` exceeded the C901 complexity gate once the new fields landed, so the handling was extracted to a helper** rather than the gate being raised.
+
 ### Fixes
+
+- **The Jira v2 config never persisted — silent data loss across three fields.** `projects`, `project_status_maps` and `confirmed_projects` were added to the dataclass and wired into *neither* the serializer, *nor* the loader, *nor* the config applier. The projects box never saved and the operator watched their input revert with no error; confirming a project updated memory only, so the confirmation vanished on the next restart and the sweep would refuse a project already approved; and the serializer wrote keys the known-key validator did not recognise, so every load logged "unrecognized key 'projects' (typo?)" for a key the system itself writes — a warning that trains operators to ignore warnings.
+
+  Adding a field to a config model is **four** changes, not one: model, serializer, loader, applier. A test now asserts the whole round trip rather than any single leg, and each leg carries its own control.
 
 ## [2026.8.8.5] - 2026-08-08
 
 ### Features
 
+- **Status mapping is a dropdown of the project's real statuses, grouped by status category, replacing free text.** Typing a status the project does not have produces an export Jira refuses — the precise failure this phase exists to prevent — and there was no way to know which names were legal. Every Swarm status gets a row *including the ones discovery could not map*, since omitting them hides exactly the case that failed silently; a blank "not mapped" option makes "leave this deliberately unset" expressible, and unmatched rows are flagged amber. Labels are human ("Waiting for an owner" rather than `unassigned -> Reopened`), with the Swarm key kept in muted text beside them. The dropdown behaviour is asserted in a real browser against the operator's actual IS vocabulary, not in the template source.
+
 ### Changes
 
 ### Fixes
+
+- **Workflow discovery stopped matching status hints inside other words.** Against a real IS project, discovery proposed backlog, assigned *and* unassigned → "Reopened": the hint `open` substring-matched inside "Re-**open**-ed", so new work was proposed to land in a reopened state, and the hint `to do` failed against a status literally named "ToDo" purely because of the space, so the better candidate never won. Matching is now three tiers — normalised exact (`ToDo` == `to do`), then **whole-word** containment (`waiting` still matches "Waiting for customer"; `open` no longer matches "Reopened"), then the single-candidate fallback. The real workflow now proposes backlog/assigned/unassigned → ToDo, active → In Progress, done → Done, failed → Canceled.
+
+  A control exposed a weak test: restoring substring matching left all 17 tests green, because on that workflow normalisation finds "ToDo" before the whole-word tier is ever consulted — so those cases were evidence for normalisation only. A case with "Reopened" and no To Do status, where nothing short-circuits, makes the whole-word rule independently load-bearing.
 
 ## [2026.8.8.4] - 2026-08-08
 
 ### Features
 
+- **The Jira setup screen — discover a project's workflow, preview, confirm (v2 phase 3 UI).** The plumbing shipped in 2026.8.8.3 but you had to curl it. Three controls now sit in the integrations tab: **Discover workflow** (proposes a mapping, each row editable), **Preview sync plan** (the dry run — what a sweep *would* change, nothing written), and **Confirm**, which posts back exactly what is on screen including edits. Re-deriving at confirm time would let what is stored differ from what was approved.
+
+  It replaces a `status_map` textarea you typed JSON into — a map that was hardcoded and global, refused by 11 real tickets on 2026-08-07 whose workflow offered only "Waiting for support" while working fine for another project, and the artefact that silently rots when a Jira admin edits a workflow. Statuses the project offers no target for are shown in amber *before* anything is confirmed, rather than discovered later when an export is refused.
+
+  The legacy routing fields are now **disabled and labelled LEGACY** rather than quietly ignored, and `project` becomes `projects`, comma-separated. Browser tests — not source scans — assert the block renders, is reachable via the tab, the legacy inputs really are disabled, and that clicking Discover with an empty project does not hit the Jira API.
+
 ### Changes
 
 ### Fixes
 
+- **A field rename would have silently broken saving *every* config section, and now a test sweep prevents it.** Renaming the input to `cfg-jira-projects` left `saveSettings` calling `getElementById('cfg-jira-project').value` — `null.value`, a TypeError that aborts the save before any section is written, so renaming one Jira field would have broken saving workers, LLMs, approval rules, everything. `tests/test_config_element_ids.py` now sweeps every id the page *dereferences* against every id it *renders*, counting three sources of rendered ids: literal `id=`, Jinja macro arguments (which render an id with no literal `id=` anywhere), and `base.html`.
+
+  The sweep is deliberately scoped to **unguarded** dereferences: `var el = getElementById(x); if (el)` is harmless, and `config.html` has one such dangling reference (`tool-buttons-list`, a drag-reorder list that no longer exists) which is dead code, not a defect — flagging it would have meant a false failure or deleting an unrelated line to make a test pass.
+
 ## [2026.8.8.3] - 2026-08-08
 
 ### Features
+
+- **A dry-run plan and a per-project go-ahead before any bulk Jira write (v2 phase 3).** On 2026-08-07 a schema migration added `jira_exported_status` with an empty default, so all 25 linked tasks read as "never acknowledged", and the reconciler ran on its own five-minute schedule and transitioned **14 real WWD tickets** before anyone had looked. Nothing broke — those tickets were already done — but the blast radius of a settings toggle was other people's tickets.
+
+  The gate draws one distinction, and it is the whole design: an **individual** export is the direct consequence of something a person or worker just did, and gating those would break a working integration on upgrade. The **reconcile sweep** is a bulk convergence that runs unattended on a timer and can move many tickets at once. Only the sweep is gated, per project, on the operator having confirmed that project's discovered workflow — and it reports how many it skipped and why rather than going quiet.
+
+  `plan_exports()` is the dry run: task, ticket, the status Jira last acknowledged, the status it would move to, and whether the project is confirmed. It is a pure read — a "preview" that writes is worse than no preview, because it teaches the operator the button is safe. New endpoints `GET /api/jira/discover`, `GET /api/jira/plan` and `POST /api/jira/confirm` back the setup flow, with confirm the only writer, storing the mapping the operator actually approved rather than re-deriving it.
+
+  **Upgrade safety:** a pre-v2 config object has no `is_confirmed`, and treating that as "unconfirmed" would silently stop a working integration, so such an install is not gated and a test pins it.
 
 ### Changes
 
@@ -516,6 +892,14 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Features
 
+- **Each Jira project's workflow is discovered rather than assumed (v2 phase 2).** The status map was hardcoded *and* global: it worked for WWD and was refused by all 11 IS tickets, whose service-desk workflow has no Done transition (`no transition to 'Done' found for IS-10278 (available: ['Waiting for support'])`). Nothing could see that until an export failed, and then it repeated every sync interval.
+
+  `get_project_statuses` reads the project's real vocabulary and `jira_workflow.propose_status_map` proposes a mapping from it, asked at **project** level rather than per issue — `get_transitions` only reports transitions available from one issue's *current* state, which is how a map can look complete while being wrong for every ticket not in that state. `status_map_for(project)` then resolves by the ticket's own project key, since "what does done look like here" has no global answer; a project with no confirmed map falls back to the global one so a v1 install keeps working on upgrade.
+
+  **The heuristic is category-first, name-second.** `statusCategory` (new / indeterminate / done) is universal across every Jira workflow while names are arbitrary — a status literally called "Done" sitting in the To Do category must not be chosen to mean finished, because trusting the name is how an export marks a ticket done by moving it backwards. Name hints only break ties *within* a category.
+
+  **An unmappable status is omitted, not guessed.** Two equally plausible candidates with no hint match produce no mapping at all; an absent mapping means "we do not know" and can be refused honestly, whereas a wrong one transitions someone's ticket and reports success. `discover_workflow` returns the unmapped list explicitly rather than as an absence. Discovery writes and confirms nothing — Done / Resolved / Closed are rarely interchangeable, so confirmation is tracked separately from the map. The pure mapping logic lives in its own module needing no network, token or sample ticket.
+
 ### Changes
 
 ### Fixes
@@ -524,9 +908,19 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Features
 
+- **Jira imports route by assignee, not by label (v2 phase 1).** Jira is being enabled for every dev, each running their own Swarm, and the previous `labels = "swarm"` query does not survive that: every swarm imports the same tickets, creates a duplicate task per dev for one issue, and races to transition it. Routing is now `assignee = currentUser()` scoped to configured projects — one answer to "who owns this" in both systems, using semantics Jira already has, with no per-dev labelling ritual whose failure mode is a ticket nobody's swarm picks up, silently.
+
+  `statusCategory` is the terminal test deliberately: it is a universal three-value field valid in any workflow, so "not finished" needs no per-project discovery. Discovery is still required for the *export* transition map — import and export need different mechanisms, and conflating them is what made the hardcoded map look adequate.
+
+  Also: multiple projects via `projects` (the legacy single `project` migrated by `active_projects()` rather than rewriting the operator's config); configurable issue types defaulting to Story/Task/Bug/Sub-task and **not Epic**, which is a container a worker cannot finish and would sit open for months; and no configured project now imports **nothing** rather than everything, because the alternative puts a whole Jira site on one dev's board.
+
 ### Changes
 
+- **Legacy `import_filter`/`import_label` no longer route, and say so once at WARNING.** Silently ignoring configuration the operator can still see in the UI turns a setting into a lie about what the system is doing; warning every sync would bury real signal, which is the noise problem that made the export reconciler retry 11 tickets forever. Two obsolete test classes were replaced rather than adapted, with the reasoning recorded in their docstrings — the behaviour they pinned is gone, not changed.
+
 ### Fixes
+
+- **A client-side label filter would have made the new routing import nothing while appearing to run** — caught by a failing old test that the JQL change alone would have shipped past. Beyond the query, code dropped any issue lacking `import_label`; under assignee routing that net catches everything, since the query returns this dev's assigned work, almost none of it labelled. Removed, with a regression test that an unlabelled assigned ticket is still imported.
 
 ## [2026.8.7.14] - 2026-08-07
 
@@ -536,6 +930,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The export reconciler stopped retrying transitions Jira will never accept.** Found against the operator's real Jira minutes after shipping the reconciler, and a flaw in what shipped rather than in his instance: on reload it found 25 linked tasks outstanding, repaired 14 (real transitions on real WWD tickets) and was refused on 11 — tickets that are **already closed** in Jira, with nothing diverged. The empty default on `jira_exported_status` made every historical task look unacknowledged, and the reconciler treated a stable property of the ticket's workflow as a transient error worth repeating, so 11 tickets were re-exported every 5 minutes forever at two WARNING lines each. That hammers the API and buries genuine divergence in noise — the exact failure this feature's own test already asserted against for tasks with no `jira_key`.
+
+  A refused `(task, target status)` pair is now recorded and skipped on later cycles, with one INFO line naming how many were skipped. Keyed on the **pair**, not the task, so a genuine status change retries — a ticket that cannot go to Done may well accept In Progress. Held in memory deliberately: one retry per daemon start recovers from a workflow or permission change without another column or another migration. Refusals are still reported loudly the first time.
+
+  **What this does not do:** it does not mark those tickets acknowledged. "Jira refused the transition" is not evidence that Jira is in the desired state, and recording an acknowledgement nobody gave would be exactly the lie this column exists to prevent — they stay visibly outstanding.
+
 ## [2026.8.7.13] - 2026-08-07
 
 ### Features
@@ -543,6 +943,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ### Changes
 
 ### Fixes
+
+- **Jira exports are reconciled instead of fired and forgotten (Jira blocker 2).** Two failures, one completely silent: `fire_jira` created a background task, caught exceptions — and *ignored the boolean return*, so an export that ran and did not take produced no exception, no log and no record. And `sync_loop` only imported, so nothing compared the two systems afterwards: a single dropped export left Jira showing a ticket open while the swarm had it done, permanently, because nothing looked again. The operator has hit precisely that. Same architecture as the task panel that only reacted to a pushed frame, failing the same way for the same reason — reacting optimises *latency*; correctness needs a comparable fact.
+
+  `tasks.jira_exported_status` (migration v19) records what Jira **acknowledged**; the task's own status is the desired state, and the difference between them means the export is outstanding whatever the cause — exception, `False` return, restart mid-flight, Jira being down. `reconcile_exports()` re-exports every task where they differ and runs each cycle of `sync_loop` alongside the import, logging the divergence it repairs, so a lost export costs one sync interval instead of lasting until someone notices Jira is wrong. `fire_jira` now binds and inspects the awaited result. `record_jira_export` is deliberately separate from `update()` because it records a fact about the *other* system and must not masquerade as an operator edit, and the empty column default is deliberate so the first reconcile brings existing links up to date rather than assuming a state nobody recorded.
+
+  **Not claimed:** none of this proves the Jira credentials work or that a real Atlassian instance accepts a transition. It proves divergence is detected and retried, which is the property that was missing. Needs a reload (migration v19).
 
 ## [2026.8.7.12] - 2026-08-07
 
@@ -552,11 +958,21 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Jira imports now dedupe against archived rows too (Jira blocker 3).** Archiving is a soft delete — the row survives so its history survives — but `load()` hides archived rows from the board, so anything deriving uniqueness from the board is blind to identifiers those rows still own. That class already caused a live outage the same day via task numbers; `jira_key` is the same fact in different clothes, found by looking rather than by breaking. `JiraService` deduped against `all_tasks`, so archiving a Jira-linked task and re-running the import would create a **second** task pointing at the same issue — worse than the number case in one respect, because no constraint stops it, so it fails silently and leaves two tasks tracking one ticket. Keeping `jira_key` on archived rows (2026.8.7.7) is what made it reachable.
+
+  Fixed the same way as the number: `SqliteTaskStore.jira_keys()` answers for every row it holds, `TaskBoard.known_jira_keys()` unions that with what it can see, and **both** import paths use it — the scheduled sweep and the drag-one-issue path, because fixing one and leaving the other is how #1270/#1281/#1286 became three tickets for one class. An archived-but-known key returns a duplicate marker with `archived=True` instead of `None`, since `None` reads as "nothing happened" in the UI and would leave the operator re-importing an issue that was deliberately archived. Tested across a restart, which is what makes it catch the real bug — the in-memory set hides the problem until the board is rebuilt from the store.
+
 ## [2026.8.7.11] - 2026-08-07
 
 ### Features
 
 ### Changes
+
+- **The status-transition grid is lifted out of the web route (Jira blocker 1).** The entire ruleset lived in `src/swarm/web/routes/tasks.py` with exactly two references — its definition and its single caller — so arbitrary status changes were a **dashboard-only capability**. A Jira sync is fundamentally a status-transition consumer ("Done in Jira, close the task"), and with the grid inside a route it would have had to duplicate it or import from a route module, becoming the fourth copy of a rule whose every previous divergence was a bug: #1280 (BLOCKED had no dashboard exit), #1288 (In Progress selectable but unimplemented), and the 2026-08-07 un-parking.
+
+  The **rule** goes to `swarm/tasks/policy.py` beside the assignment rule — `_LEGAL_TRANSITIONS` plus `status_transition_refusal`, which returns the operator-facing reason so wording cannot drift from the check that produces it (#939's failure mode). The **execution** goes to `TaskCoordinator.change_status`, reachable by any surface rather than sitting behind an HTTP handler; the route keeps a named thin adapter. `_leave_blocked` and the #529 blocker-row obligation moved with it, and `clear_blocker_rows` is now public on the coordinator because the assign route releases a BLOCKED task too and owes the identical cleanup.
+
+  The 42-pair sweep still passes through the same entry point, but its fixture and `test_operator_blocked_hold_surface`'s now carry a **real** `TaskCoordinator` — they had MagicMock daemons, so after the move every call returned a truthy mock and the sweep asserted nothing. The policy is also tested directly, callable without a daemon, a board or a mock, which is what makes it usable from a Jira sync.
 
 ### Fixes
 
@@ -568,19 +984,35 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The Tile controls no longer float in the middle of the detail header.** `.panel-header` is `justify-content: space-between` and the header had three loose children — title, Tile button, size select — so the button sat in the middle with gaps on both sides. The two controls are now one flex child, which is the actual fix. It was never noticed because the Tile button's reveal was dead code until 2026.8.6.24 (#1292): a decorator captured `window.selectWorker` before it was defined and was then overwritten, so the button shipped with `display:none` and nothing ever cleared it — the alignment bug is as old as the button and became visible the moment the feature started working.
+
+  The test is a **geometry assertion** in the browser harness, checking both that the controls are adjacent and that they sit at the right of the header, since either alone is satisfiable by a layout that still looks wrong. Its first version did not reproduce the bug and its control caught that: with tile mode off the size select is hidden, leaving two children, and space-between right-aligns two children anyway — it now clicks the real Tile button first. `margin-left:auto` on the wrapper is explicitly **defensive, not load-bearing**, and the CSS comment says so, since no control can distinguish its presence today.
+
 ## [2026.8.7.9] - 2026-08-07
 
 ### Features
 
+- **A real browser drives the dashboard in tests (item 3).** Every other client-side test here scans `dashboard.js` as text — and those were green throughout every dashboard bug of the last two days, because they were green *while production was broken*. This runs the real app, loads the real page in Chromium, executes the real JavaScript and asserts what the DOM actually shows. The `browser` marker is registered in `pyproject` so the warnings-as-errors rule accepts it; deselect with `-m "not browser"`.
+
+  A control also found a worse bug in the new test itself: the reconciliation case closed the socket from inside the page, which silently did nothing because the main socket is a closure variable, not `window.ws` — so the test proved the *push* worked and stayed green when a control removed the reconciler's re-render entirely. It now severs the push server-side by clearing the hub's clients and asserts the page was connected first.
+
 ### Changes
 
 ### Fixes
+
+- **The task editor save now sends only what changed (item 4).** The edit route treats a field's *presence* as an instruction to overwrite (`if field in body`), so submitting every field on every save let a field the modal got wrong silently destroy good data — exactly how `target_worker` was wiped on #1301-#1303, where the select could not hold an off-list worker, reported `""`, and the save posted that over a real value. Fetching the task fixed the *display*; sending a diff removes the *mechanism*, since a field the modal cannot represent is simply not mentioned. `status` already worked this way and carried a comment explaining why; this extends the same discipline to the other eleven fields. Per-field `.trim()` is preserved exactly so the value reaching the server does not change as a side effect, and a missing snapshot falls back to **sending** (an unnecessary write) rather than skipping (a silently dropped edit).
+
+- **The initial full-page render never stamped `board_version`** — only the htmx partial handler did — so every page load started at version 0, the reconciler saw instant drift and burned a wasted refresh. Both the template and the partial handler were individually correct; only rendering the actual page in a browser could show it.
 
 ## [2026.8.7.8] - 2026-08-07
 
 ### Features
 
 ### Changes
+
+- **The assignability rule is stated once, in `swarm/tasks/policy.py` (item 1 of four).** "Can this task be assigned?" was answered independently in **three** places — `TaskBoard.assign`, `TaskCoordinator.assign_task`, and `/action/task/assign`, which normalised the status first so the other two would accept it. Every divergence between those copies has been a bug, and three landed in one evening: #894/#1281, where `is_available` ("the auto-assign *drone* may take this") was used to gate an **operator's** explicit routing so nobody could assign a HOLD task; the route working around that gate by calling `approve()` on a BACKLOG task, which un-parked it; and relaxing the board's copy without the coordinator's, turning "silently un-parks" into "409, cannot assign". `task_coordinator` already carried a comment saying its check had to be edited in lockstep with the board's — a rule that must be edited in lockstep across layers should be written down once.
+
+  **It returns the reason, not a boolean,** so refusal text cannot drift from the check it explains. #939 cost the Queen an hour on the theory that the target worker's load mattered — the target is never consulted — because one layer's message said only "(not available)". Every refusal now names the task's own status and what would resolve it (#1057), asserted as a property across every refusal the policy can produce rather than per-message. A second test asserts the consolidation itself as a property: no layer may pair an `is_available` check with a hold/status special case, so a fourth caller — a Jira sync, say — cannot quietly add a fifth copy. `is_available` stays legitimate for the drone's own selection, which is a different question.
 
 ### Fixes
 
@@ -592,6 +1024,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **One archive write path, and blocker rows cleared in *both* directions.** Three surfaces archive a task — the dashboard x, `swarm_archive_task` and `queen_archive_task` — and each did its own board call plus its own history entry. The blocker-row obligation was missing from all three, because there was nowhere shared for it to live: `BlockerStore.clear_for_task` only ever removed rows where the task is BLOCKED, and nothing removed rows where it is the BLOCKER. So archiving a task others were waiting on left them blocked on something that had left the board — invisible, unclearable, and nudged about forever by the IdleWatcher. That is #529's shape, made reachable again by a feature shipped four hours earlier.
+
+  The fix is the consolidation, not another copy of the rule: `TaskManager.archive_task` is the single write path (board archive, both blocker directions, history, drone log), the two MCP verbs and the dashboard route all call it, and a test asserts the **property** — no surface may call `board.archive` directly — so a fourth surface that skips the obligation fails a test instead of stranding a worker. `BlockerStore.clear_blocking` is the new mirror of `clear_for_task`, and the store is injected into `TaskManager` rather than reached through the daemon so the path that owns the obligation owns the dependency; when it is absent the archive still succeeds and **logs** that the rows were not cleared rather than pretending.
+
+  **Deliberately not cleared:** `jira_key` and the cross-project fields. Those record where a task came from, which stays true after it leaves the board, and an external system may still reference it — pinned by a test so a future "tidy up on archive" is a decision rather than a side effect.
+
 ## [2026.8.7.6] - 2026-08-07
 
 ### Features
@@ -599,6 +1037,10 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ### Changes
 
 ### Fixes
+
+- **Archiving the highest-numbered task broke *all* task creation via number reuse.** A live outage: `swarm_create_task` began failing outright with `UNIQUE constraint failed: tasks.number`. Archiving keeps the row — including its unique `number` — but `load()` deliberately excludes archived rows and `TaskBoard.__init__` derives `_next_number` from the loaded tasks, so the counter is blind to exactly the rows that still hold numbers. After archiving #1305 the DB's max was 1305 while the max among live rows was 1304, and the board handed 1305 out again. The archive design deliberately keeps rows so history survives; the consequence that a hidden row still owns a unique number was not followed through.
+
+  `SqliteTaskStore.max_number()` now reports the high-water mark across all rows, archived included, and the board seeds its counter from `max(visible, high_water)`. The tests assert it **across a restart**, which is what makes them catch the real bug — the in-memory counter hides the reuse until the board is rebuilt from the store, so a same-process test would have passed while production failed on the next reload. Both were written red first, failing with `IntegrityError`. Needs a reload: the running daemon still holds the bad counter in memory.
 
 ## [2026.8.7.5] - 2026-08-07
 
@@ -608,6 +1050,14 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The task view converges on server state instead of reacting to a push — the structural fix rather than a fifth patch.** The operator saved #1300 and #1301 repeatedly, saw nothing change, and concluded the assignment was not sticking; `task_history` showed all three saves had **succeeded** and both rows already held the values he wanted. He was re-saving work that had already worked, because the view never told him.
+
+  **Root cause 1 — two sources of truth for a task.** The editor was built from ~17 `data-*` attributes baked into the row at render time, so a row that had not re-rendered made the modal display stale values *and write them back on save* — the mechanism that silently wiped `target_worker` on #1301-#1303. Every edit path now goes through `showTaskEditorById`, which fetches `/api/tasks/{id}`; the 17-argument DOM-sourced opener is **deleted rather than shimmed** so it cannot quietly come back, and a test asserts the detail payload carries every field the save writes back, since a field the editor does not load opens blank and is posted blank.
+
+  **Root cause 2 — no way to detect drift.** Reacting to a pushed frame optimises latency; correctness needs reconciliation. Four fixes had already shipped for four ways the push can be lost (a stranded debounce timer #1294, a reconnect that skipped the resync, a frame dropped with no running loop, a filter-restore swallowed by an empty catch) — each real, none of which could have been the last, because a design that only reacts cannot notice it missed something. The board now carries a monotonic version bumped in `_notify`, the single choke point every mutating verb already passes through, so a mutation cannot change the version without broadcasting nor broadcast without advancing it. Renders are stamped with it, `GET /api/tasks/version` is a one-integer probe, and the client compares every 15s while visible, logging the drift it repairs.
+
+  The backstop deliberately does **not** check socket health first: every failure it exists to catch presents as a perfectly healthy connection from the browser, so gating on that would switch it off in exactly the cases that need it. Needs a reload.
+
 ## [2026.8.7.4] - 2026-08-07
 
 ### Features
@@ -616,11 +1066,27 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Assigning through the dashboard un-parked a Backlog task.** "Which holds fine" was the clue in the operator's report: the board layer was already correct from 2026.8.7.3, since `SwarmTask.assign` preserves BACKLOG, so the promotion had to be coming from somewhere else. `/action/task/assign` **normalised** the task to UNASSIGNED before assigning, calling `existing.approve()` on a BACKLOG one — which existed purely so the old `is_available` gate would accept the assign, and un-parked the task as a side effect *before* `board.assign` ever ran. The previous fix could not possibly have helped him; it was one layer below the thing that broke.
+
+  Two more layers went in the same pass. `auto_start` defaults to true, so once a task legitimately stays BACKLOG through assignment that branch would hand an idle worker the very task the operator took out of play — strictly worse than the reported bug — and it is now guarded on the status **read back** from the board after assignment, not the pre-assign snapshot. And `TaskCoordinator.assign_task` has its own `is_available` gate; removing the route's normalisation without widening that one would have turned "silently un-parks" into "409, cannot assign", the same bug in different clothes.
+
+  Tests are driven through the **real route**, not the board: every board-level test from 2026.8.7.3 passed while this was broken, which is the whole lesson — a fix verified one layer below the reported symptom is not verified. A control caught a weak test too, where stubbing `start_task` with a non-idle fixture worker meant the start branch never ran and the test passed even with the guard deleted.
+
 ## [2026.8.7.3] - 2026-08-07
 
 ### Features
 
+- **A Backlog task can now carry an owner — "this is sculpt-studio's, later".** The operator set a task to Backlog, assigned it, and the assignment was dropped on save; Backlog is meant to park work, not to strip its routing. The existing answer was ASSIGNED plus a `hold` tag (`auto_start_next_assigned` skips `is_on_hold`), but the direct route is provably safe, so Backlog carries an owner.
+
+  **Three obstacles stood in the way, and fixing any one alone would have *looked* like a fix while still failing:** `SwarmTask.demote_to_backlog` dropped the owner — deliberate and documented, on a rationale about *display* which is rewritten rather than deleted; `TaskBoard.assign` gated on `is_available`, which requires UNASSIGNED, so the call just returned `False` (the same shape as #894/#1281, where a drone-selection question is used to refuse an operator's explicit routing); and `SwarmTask.assign` forced `status = ASSIGNED`, so even once permitted, assigning a parked task would have un-parked it.
+
+  **The safety half of the old rationale is untouched and now asserted rather than assumed.** Every dispatch gate keys on status — `is_available` needs UNASSIGNED, `auto_start_next_assigned` and the state tracker need ASSIGNED, the Queen selects only from `available_tasks` — so nothing dispatches on `assigned_worker` alone and an owned Backlog task is inert. Tests assert that directly, because "safe by construction" is exactly the claim that rots when a new dispatch path appears; a control that makes BACKLOG drone-available fails.
+
 ### Changes
+
+- **Fallout from Backlog-with-an-owner, all deliberate.** `queen_reassign_task` no longer refuses a Backlog task — the danger swaps sides, so a test pins that routing parked work does *not* un-park it — and that handler's hardcoded "(ASSIGNED, not started)" reply became a lie the moment assignment stopped implying that status, so it now reads the status back from the board (#1268's AC). Three pinned assertions in `test_operator_blocked_hold_surface.py` that asserted the owner was dropped were updated with the reasoning recorded, and rewritten to preserve *whatever* the owner was rather than hardcoding one. Two #939 refusal tests used a Backlog task as their "cannot be reassigned" fixture and were retargeted to a terminal task, since what they protect is #939's guarantee (name the reason, never imply the target is at fault), not the status that triggers it.
+
+  **Not changed:** `reopen` still drops the owner. Reopening finished work is a different act from parking live work and was not part of the decision — pinned so it stays a decision rather than becoming an oversight.
 
 ### Fixes
 
@@ -632,6 +1098,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Editing a cross-project task silently wiped its target worker, and the CROSS badge outlived the routing it described.** Two operator-reported bugs from a single edit that only added a tag, and they compose: the first empties the routing, the second keeps the badge. That is how #1301-#1303 reached `is_cross_project=1` with both `source_worker` and `target_worker` empty — a state unreachable on purpose and un-fixable through the UI.
+
+  **Bug 1 was silent data loss, entirely in the browser.** The modal's worker `<select>` options are built from the workers rendered on the page, but a cross-project task can legitimately target a worker that is not one of them (another project's, a renamed one, a decommissioned one — #1301-#1303 targeted `claude-team-config`). Assigning `select.value = x` with no matching `<option>` is a **silent no-op**: the select stays on "—" and reports `value === ""`, `submitTaskModal` then unconditionally posts `target_worker=""`, and the edit route passes the present key straight through. An off-list value now gets its own labelled option so the round trip is lossless.
+
+  **Bug 2 was a one-way latch**, the same shape as #1294's debounce: `if source_worker or target_worker: task.is_cross_project = True` could only ever *set* the flag and nothing cleared it, while `task_list.html` gates the CROSS badge purely on it. It is now recomputed from the post-assignment state, and only when the edit actually touched one of the two fields (`is not None`, not truthiness), so an unrelated edit cannot silently reclassify a task.
+
+  **Two of the new tests were weak and the negative controls caught them** — both would have shipped as false assurance. The JS region helper used a fixed 1400-character window that ran past the function into a neighbouring loop with its own `sel.appendChild(opt)`, so deleting the real line still matched (same mistake as #1292's classifier); it is now bounded by the closing brace. And the "tags-only edit must not reclassify" test used a *normal* cross task, where a correct recompute and an over-broad one agree — it passed against a deliberately broken `if True:`. It is now seeded in the exact #1301 state (flag set, routing already empty), the only state where the two disagree. Five negative controls, each failing exactly one test.
+
+  **Not touched, and recorded rather than swept in:** the assigned-worker select has the same display flaw but *not* the data loss — its save fires only when the value is non-empty and changed, so an off-list assignee is never cleared.
+
 ## [2026.8.7] - 2026-08-07
 
 ### Features
@@ -640,9 +1116,27 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The CROSS badge was invisible in *both* themes because `.type-cross` had no background rule.** Operator-reported as "doesn't show in light mode either" and then "even worse in dark mode, seems like they are inverted" — and "inverted" is the precise description. `.type-badge` sets `color: var(--canvas)`, text the colour of the *page background*, which is readable only on top of a coloured badge, so every sibling must supply one: `.type-bug` has poppy, `.type-feature` lavender, `.type-verify` leaf, `.type-cross` had nothing. The label rendered as canvas-coloured text on a transparent row — near-white on white, near-black on dark — always the one colour that cannot be read against the row behind it. Given amber, which no other `type-*` badge claims.
+
+  This is #1291 item 5 recurring exactly (`.text-center` used 8 times, defined nowhere). **The guard from that ticket could not have caught it**: `test_utility_classes_used_by_config_are_defined` checks a hardcoded list of four names in one file, and a guard that enumerates the instances already known cannot catch the next one — which is the entire failure mode of this class. The new sweep collects every `type-*` class from every template and asserts each is defined, so a badge added to markup without a rule fails a test instead of presenting to the operator as an invisible label.
+
+  **Two scan bugs found and fixed while writing it, both the kind that make a green test meaningless.** The file glob was `(_WEB / "templates")` when `_WEB` already points at `templates/`, so it scanned a non-existent directory and found zero classes — caught only because the positive control asserts the scan finds real ones; without it the sweep would have passed vacuously forever. And `\btype-` matched the *tail* of `.pb-event-type-applied`, because a hyphen is a word boundary, reporting seven perfectly-defined playbook classes as missing; now `(?<![\w-])type-`. Negative controls include adding a **new** undefined badge to `task_list.html`, which proves the guard catches a future badge rather than only this one.
+
+  **Not touched:** `.type-chore` and `.type-tag` are defined in `base.html` and used by no template and no JS. Dead, but deleting them is not this bug.
+
 ## [2026.8.6.30] - 2026-08-06
 
 ### Features
+
+- **Archive a task from every surface, and stop deletion destroying its history (#1298).** Deleting a task was reachable from the dashboard and nowhere else — 0 of 22 worker verbs, 0 of 17 Queen verbs, 0 CLI actions, against a `DELETE /api/tasks/{id}` route that had existed all along. A worker that filed a task by mistake, in duplicate, or as a throwaway probe could only close it with a resolution that is a lie or leave it on the board, and resolutions become learnings that are re-served to future workers as advice.
+
+  **The silent data loss underneath it is the more serious half and was not in the ticket.** `task_history.task_id` is `REFERENCES tasks(id) ON DELETE CASCADE` with `PRAGMA foreign_keys=ON` applied per connection, so the dashboard's x destroyed every history entry for the task — the audit trail `swarm_get_learnings` and playbook synthesis read. Worse, `TaskManager.remove_task` appended its REMOVED event *after* the delete, so the one row guaranteed to be missing was the record of the removal itself.
+
+  **The design touches very little on purpose.** An archived task is stamped with `tasks.archived_at` (schema v18) and dropped from the board's in-memory dict while the SQLite row stays. Every query reads that dict, so roughly 40 `all_tasks` call sites exclude archived work with none of them changed. Two store reads are the whole trick: `load()` skips archived rows so a restart cannot resurrect them, and `save()` scopes its which-rows-disappeared query to live rows — unscoped it classifies every archived task as removed and hard-deletes it on the next persist, cascading the history away and defeating the mechanism entirely. `board.archive()` stamps *before* dropping from memory for the same reason.
+
+  **Surfaces per the operator's decisions:** `swarm_archive_task` (own, unstarted only) and `queen_archive_task` (unrestricted). The worker's two preconditions are deliberate — erasing another worker's work is not a capability any worker needs, ACTIVE is refused because archiving live work loses that it was under way, and CLOSED is refused because a resolution may already have been served as a learning (correct those with `swarm_annotate_resolution`, #1274). **Not one verb with a role check**: authority that depends on the caller is how #1281's `is_available` ended up gating two different questions with one predicate. `board.remove()` stays a hard delete for the test harness, whose tasks have no history worth keeping.
+
+  17 tests, including the property that a hard delete really *would* have lost the history (so the archive assertion is not vacuous), that a restart does not resurrect, and that a later persist does not hard-delete the archived row. AC-5's cross-surface property is asserted over the **registries** rather than as "the two verbs I added exist", so a future surface added without archiving fails here instead of being found by the operator — which is how #1270/#1281/#1286 became three tickets for one class. Six negative controls, injection verified applied each time. Needs a daemon reload: migration v18 plus two new MCP verbs.
 
 ### Changes
 
@@ -656,6 +1150,14 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **A stranded debounce silently killed `tasks_changed` for the life of the process (#1294).** `broadcast()` debounces `tasks_changed` by putting a `TimerHandle` in `_broadcast_pending` and returning; the only thing that ever removed an entry was `_flush_broadcast`, which runs when the handle *fires*. Schedule one on a loop that stops before the 100 ms elapses and the entry is never removed, so every later `tasks_changed` found the key present, scheduled nothing, and returned — the frame type dead for the whole life of the process. No exception, no warning, and not even the no-running-loop branch, because there *is* a running loop at that point.
+
+  **What identified it was two facts from the operator's screenshots.** The stale summary line ("2 blocked, 1247 done") is rendered by the same `/partials/tasks` fetch as the rows, so the whole partial had not re-fetched — never a row-rendering problem. And the Activity badge incremented 3 → 5 between shots, so the WebSocket was alive and delivering. A live socket with one frame type dead is only explicable if that type is handled differently, and it is: `tasks_changed` and `worker_changed` are debounced, Activity/buzz frames are not. Clicking a chip issues a plain HTTP fetch that never touches the hub, which is why the board was right the instant he interacted and never before.
+
+  **The fix stores the loop alongside the handle**, since `TimerHandle` exposes no public way to ask which loop it belongs to. Before trusting a pending entry it must belong to the currently running loop, the loop must be open, and the handle must not be cancelled; anything else is stranded — cancelled, dropped, re-scheduled, and logged at WARNING, because a stranded debounce means frames of that type have been dropped since the moment it stranded. The reproduction was written first and failed on the old code.
+
+  **Not yet confirmed on the operator's daemon.** This is a real defect producing his exact symptom and it is now impossible by construction, but what stranded the handle in his process is unidentified — the obvious `asyncio.run` site in `mcp/handlers/_email.py` is only the no-loop fallback. After a reload the new WARNING names the stranding if it recurs, which is the evidence that was missing every previous round.
+
 ## [2026.8.6.28] - 2026-08-06
 
 ### Features
@@ -664,11 +1166,23 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **A failed filter-restore was swallowed by an empty `catch`, and the client half of the #1294 contract is now guarded (AC-4).** Every guard added for this bug class asserts the *server* emitted a frame — the change event for all 11 verbs (2026.8.6.10), and a real client receiving it over a real socket (2026.8.6.27). All of them stay green if the frame arrives and changes nothing on screen, which is the operator's actual report.
+
+  **The mechanism reproduces the report exactly and is invisible to every server-side test.** `refreshTasks` builds `status=` from `activeTaskFilters`; send no status param and the server returns the *unfiltered* list, which includes DONE — so with the operator's chips (Backlog + Unassigned + Assigned + In Progress + Blocked, Done off) a closed task is re-rendered rather than removed, and clicking any chip then filters it away. Frame delivered, refresh performed, nothing appears to happen. The path where that can happen is the restore-saved-filters IIFE, which populated `activeTaskFilters` from localStorage inside `try { ... } catch(e) {}`: a part-way failure left the Set empty while the chips still read as active. That catch now logs to `console.error` and names the consequence — an empty catch around state restoration is not defensive, it is a symptom with the evidence deleted.
+
+  **Not claimed as the cause**: the operator's screenshot shows five chips active, consistent with the Set having been populated, so this is demonstrated-possible rather than confirmed. `tests/test_task_panel_client_contract.py` covers the three silent ways a delivered frame changes nothing — an htmx swap into an id no template defines (checked for all four targets), the `tasks_changed` case no longer calling `refreshTasks`, and `refreshTasks` losing the status param — plus that the chip handler and the refresher read the **same** filter state, asserted as a conjunction because an `or` would pass on merely finding the handler and the two halves disagreeing *is* the bug. Comment-only lines are stripped before scanning: the comment added with this fix names both `status=` and `activeTaskFilters`, and a scan that reads comments reports a fix as the defect it fixed (fourth time in this repo).
+
 ## [2026.8.6.27] - 2026-08-06
 
 ### Features
 
 ### Changes
+
+- **An MCP-originated completion is now proven to reach a real WebSocket client (#1294).** The emit chain had been hand-traced correct three times while the symptom kept recurring, and `tests/test_task_board_broadcasts.py` drives `StatePublisher` directly — it proves the middle of the chain and cannot fail for either end, since it never goes through the MCP tool handler that mutated the task and never puts a frame on a real socket. The new test asserts both ends: real MCP handler → real daemon → real `BroadcastHub` → real aiohttp `/ws` → client. **The frame does arrive**: closing a task through `_handle_complete_task` pushes `tasks_changed` to a connected authenticated client, a UI-path status change behaves identically on the same daemon (AC-2's direct comparison), and the closed task does leave the operator's exact five-chip filter.
+
+  **The false reproduction is the more useful half.** The first version of this test showed *no* frame on *either* path and was one step from being reported as #1294 reproduced. The cause was entirely the fixture: `conftest.py:244` sets `d.broadcast_ws = MagicMock()` and `StatePublisher` captures it at construction, so `on_task_board_changed` ran, called the mock, raised nothing and reported success while no frame reached the hub. Third MagicMock false result in this investigation, and in the direction that matters most — mocks do not only make broken code look fine, they make correct code look broken.
+
+  Two controls exist so neither trap can return silently: one asserts the broadcast seam is real *before* any conclusion is drawn from a missing frame, and one asserts `task_board.on_change` is actually subscribed, since `make_daemon` skips `__init__` and therefore skips `_wire_task_board`. Both are established by rebinding production's own functions rather than re-implementing the wiring in the test — a substitute would test the substitute. No production code changed; #1294 stays open because delivery across the tunnel to the operator's browser is still unproven.
 
 ### Fixes
 
@@ -677,6 +1191,10 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ### Features
 
 ### Changes
+
+- **What the task partial returns per filter is now pinned, and a wrong theory about #1294 is recorded as dead.** The proposal was that "the finished task didn't disappear" might not be a stale panel at all: the unfiltered view returns finished tasks, so a successful refresh would re-render the completed row rather than remove it. Mechanism real, conclusion wrong — the operator's screenshot shows his chips are Backlog + Unassigned + Assigned + In Progress + Blocked with Done and Failed off, so #1292 left his filtered set the moment it closed and a real refresh *would* have dropped the row. #1294 is a genuine live-update failure. The theory lives in the test docstring rather than being deleted, because the lesson is that a plausible mechanism found by reading code is not evidence about what the operator was looking at.
+
+  Three tests appended to the existing file for this surface rather than a new one: the unfiltered view returns finished tasks (pinned so hiding them by default would have to be deliberate); an open-status-only filter *does* exclude them, which is the property that makes the observation a bug rather than correct behaviour; and `_display_sort` orders finished work by priority before recency, so a just-closed normal task sorts below older high/urgent ones — on the live board that put #1292 at row 26 of 1249. Negative controls: hiding finished by default fails 3, leaking finished into an open-status filter fails 1, sorting finished by recency fails 1. No production code changed.
 
 ### Fixes
 
@@ -688,6 +1206,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **A reconnect never resynced on the two paths that need it most.** `ws.onopen` re-fetches all four panels after a reconnect, because events that arrived while the socket was down are gone for good — but that block was gated on `reconnectDelay > 1000`, a proxy for "we retried at least once" that is true only when the reconnect came through `onclose`'s backoff doubling. `forceReconnectMainWs()` sets `reconnectDelay = 1000` itself before connecting, and the restart watchdog makes `onclose` return *before* the doubling and then calls `ensureMainWsConnected()`. Both reach `onopen` with the delay still 1000, so `1000 > 1000` was false: green connection dot, four stale panels, no toast, no log. Now gated on a `hasConnectedBefore` flag, which asks the actual question instead of inferring it from a backoff value, and is set *after* the guard reads it so a fresh page load still does not re-fetch what the server just rendered.
+
+  **A broadcast owed to connected clients was dropped in silence.** `broadcast()` and `_send_ws_now()` both bail with a bare `return` when there is no running event loop — right in CLI and test contexts where nobody is listening, but when `ws_clients` is non-empty a real frame is thrown away leaving no evidence of any kind, which is precisely why this class cannot be diagnosed after the fact. Now WARNING with `stack_info`, gated on `ws_clients` being non-empty so test and CLI broadcasts stay quiet rather than training everyone to ignore it. Operators run at default WARNING, so that is the level that reaches them.
+
+  Neither is confirmed to be the cause of the operator's recurrence of #1275 (a task completed over MCP stayed in the panel until he clicked a filter chip) — the investigation continues as #1294 and #1275 is annotated stale — but both are real, both were provable by reading, and both are the same shape as the report: the state change is real and durable and nothing can see it. **Ruled out for #1294 so it is not re-traced a fourth time:** the emit chain is wired and covered for all 11 verbs, MCP transport is HTTP to the same process that serves the dashboard so there is no two-daemon split, there is no executor in the MCP dispatch path, the normal reload path ends in a full page reload, and `onAppFocus` already refreshes on visibility return. 9 cases in `tests/test_reconnect_resync.py`, each negative control asserting the injection applied first.
+
 ## [2026.8.6.24] - 2026-08-06
 
 ### Features
@@ -695,6 +1219,10 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ### Changes
 
 ### Fixes
+
+- **Tile view was unreachable because a `selectWorker` decorator was dead twice over (#1292).** `dashboard.js` carried a decorator on `window.selectWorker` about 130 lines *above* the base definition: it captured `window.selectWorker` before anything had assigned it, so its captured original was `undefined`, and the base definition below then overwrote the wrapper outright so it never ran. Net effect — `#tile-mode-btn` ships with `style="display:none"` and nothing ever cleared it, while both the markup and the JS read as fully implemented. The wrapper is deleted and the reveal moved into the base itself, at the top before any early return, which removes the ordering hazard rather than relocating it.
+
+  `tests/test_select_worker_ordering.py` pins the shape: exactly one base definition, no capture of `window.selectWorker` before it, the reveal inside the base, and every call to the surviving Command Center decorator's captured original keeping its if-guard. **Three of that test's own iterations were wrong first, all in ways that would have let the bug back in silently** — classifying bodies by a fixed 1200-character window and by whether they *mention* `_origSelectWorker`, which matched the comment explaining the removal so the fix read as the defect (third time a scan here has matched its own prose); stripping comments with a DOTALL `/\*.*?\*/` over the whole file, which pairs a `/*` inside a string literal with the next `*/` downstream and ate one of the two assignments the test exists to count; and searching an 800-character window for the guard when there are two guarded calls in it, so deleting one guard left the other for the substring to find (same first-match false negative as #1291's D-pad test). Now bounded by the next assignment, keyed on a call, line-based comment blanking that preserves line numbers, and per call site.
 
 ## [2026.8.6.23] - 2026-08-06
 
@@ -704,6 +1232,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The d-pad's blanket transparency is reverted.** Operator, after seeing 2026.8.6.22 on the phone: "now it is natively transparent on light mode. How it looked colour wise on the last pass was good." Idling the whole pad at 0.55 opacity so transcript text showed through was the wrong trade and undid the previous fix — dimming the pad dims the *arrows* as well as the background, which is the light-mode contrast complaint that opened item 6 in the first place. Readability of the control beats readability of what is behind it. The per-button rgba background is as see-through as this should get, and the layering rule already handles the case that actually mattered (the pad covering an open menu with a red destructive item).
+
+  **The Queen card and worker switcher now share one row, 25/75**, on the operator's request for "more real estate on mobile": they were two stacked full-width rows, so two rows of vertical space went before any transcript appeared. 75% to the switcher because it carries the long text (state + name + provider), 25% to the Queen, which only needs to stay tappable and identifiable. **"Queen Dashboard" is renamed to "Queen"** in the card and in `dashboard.html` — at 25% width the longer label would not have fitted, so the rename and the layout change are one fix rather than two.
+
+  **A false-negative test caught by its own control, and this is the part worth keeping.** The new test asserted "no opacity on `.term-dpad`" using `re.search`, which inspects only the *first* matching rule — re-adding a second `.term-dpad { opacity: .55 }` later in the stylesheet passed all 23 tests. Now it checks every `.term-dpad` rule via `findall`. A test that cannot detect the regression it guards is worse than no test because it reads as coverage, and CSS is especially prone to this since a later duplicate rule silently wins.
+
 ## [2026.8.6.22] - 2026-08-06
 
 ### Features
@@ -712,9 +1246,23 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The mobile worker switcher now follows the pill list's order, reversing what shipped an hour earlier.** WAITING/BUZZING had been sorted to the top on the theory that the attention-needing worker should come first; the decisive fact that reasoning missed is that the pill list is **drag-to-reorder**, so its order is the operator's own arrangement. Re-sorting the dropdown silently overrode a choice he had made by hand, and position stability is the entire point of muscle memory. Iterating the list untouched also deletes a hazard the sorted version needed a fallback loop to cover: with no filtering and no sorting, no worker can be dropped from what is the only way to reach one on mobile.
+
+  **The d-pad now stands down while an overflow menu is open — completing item 6 and #1291.** Evidence 084202 showed the d-pad painting on top of the open menu, obscuring items including a red destructive one. **Not fixed with a z-index bump, and that is the interesting part**: the menu is already z-index 100 and the d-pad only 11, so raising the menu changes nothing — the d-pad's container establishes a stacking context that outranks the header's, so the two values are never compared in the same context, and a test asserting z-index numbers would have passed while the bug remained. Instead `body:has(.mobile-overflow-menu.open) .term-dpad { display: none }`: it cannot lose a stacking-context argument it is not having, and arrow keys are useless while a menu is up. Untangling the contexts would mean re-parenting the terminal chrome — large and risky for a small symptom.
+
+  Test count was checked before and after the edit (21 collected → 20: two obsolete order tests removed, one replacement added), deliberate arithmetic because in #1287 a careless region-rewrite silently deleted 7 tests and the suite still passed at a lower count. **One deviation from #1291's written acceptance criteria, recorded rather than quietly claimed as met**: AC-5 says the Focus button should be toggleable from the Action Buttons config; the operator chose removal instead once it was explained what the button did.
+
 ## [2026.8.6.21] - 2026-08-06
 
 ### Features
+
+- **A mobile worker switcher replaces the scrolling worker strip (#1291 item 1).** The operator's top complaint was "I find myself scrolling left and right all the time to find active workers"; the evidence screenshots show the strip clipping mid-word ("sculpt-studio (cla…") and, with 16 workers, the active one sitting entirely off-screen. A scroller's cost grows with worker count and a dropdown's does not. The affordance was chosen by the operator in interview: a dropdown for switching **plus** the active worker pinned beside it, so switching never loses sight of who you are looking at.
+
+  **Rendered inside `partials/worker_list.html` on purpose** — that partial re-renders on every `workers_changed` swap, so the dropdown stays in sync with worker state for free rather than through a second sync path that could drift from the pills. Ordered by an **explicit state list** rather than `sort(attribute='state')`, because alphabetical would put WAITING last and WAITING is the state that needs the operator most; the order is WAITING, BUZZING, STUNG, RESTING, SLEEPING, with a fallback loop for any state not in the list — on mobile the dropdown is the only way to reach a worker once the pills are hidden, so a dropped worker is an unreachable worker. The change handler is **delegated on document**, since a listener bound directly to the `<select>` would be discarded by the first htmx swap and present as an intermittently dead dropdown rather than a broken one.
+
+  **Pills are hidden on mobile, not deleted**: desktop still uses them and they are the drag-to-reorder surface there. The `.worker-list::after` scroll fade goes with them — it exists only because the row scrolled (#543, where #515/#540/#541 all chased the wrong element) and leaving it would paint a gradient over the new switcher. A deliberate removal of a hard-won rule, scoped to mobile only.
+
+  **A near-miss worth recording.** The first render check used MagicMock workers and showed the dropdown listing only one worker, with every normal one missing — one step from "fixing" the template. The cause was the harness: Jinja's `selectattr('state','equalto',X)` returns zero matches against MagicMock while working correctly on dicts and real objects, and production passes plain dicts from `_worker_dicts`. This is the mirror of #1281, where a MagicMock board made a genuinely broken fix look fine — mocks can fail in both directions, so the render test now asserts against dicts and says why.
 
 ### Changes
 
@@ -728,6 +1276,10 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The task panel is readable at 390px (#1291 item 7).** The operator, pointing at screenshot 084114: "on mobile the task panel looks terrible" — titles came out one or two words per line. **The cause is not bad wrapping**: the row is a single flex line carrying about ten children (status icon, number, status badge, target, title, worker, age, blocked/verify badges, then Edit/Unassign/Log/x), and only `.task-title` has `flex:1`, so it is the only child that can shrink while the fixed-size ones consume the whole 390px first. The title was starved, not mis-wrapped — which is also why every other element in the screenshot looked fine. The row now wraps: number and status badge stay on line 1 (they are what you scan by), the title takes full width on line 2, meta and buttons fall to line 3, and the buttons keep `flex:0 0 auto` so they wrap as a group instead of squeezing the title back down.
+
+  **What was deliberately not touched is the more useful half.** The same screenshot shows the bottom tab strip and the filter chip row clipped, and #1291 listed both as part of the defect — but `.filter-bar` and `.bottom-tabbed .tab-group` already carry `overflow-x:auto` on mobile, added with a recorded rationale after a tab was rendered at x=647 in a 414px window, "permanently off-screen with nothing to scroll it into view". The clipping is that affordance working, and overriding it would have undone a documented fix to a worse bug — exactly what the ticket's own instruction 3 warns about. Left alone and pinned by a test so a later pass does not "fix" it.
+
 ## [2026.8.6.19] - 2026-08-06
 
 ### Features
@@ -735,6 +1287,16 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ### Changes
 
 ### Fixes
+
+- **Items 2-6 of the #1291 mobile UI report, a cross-project handoff from sculpt-studio.** All nine screenshots were opened and described before any code, and every item was interviewed with the reasoning stated first, per the ticket's standing instruction that nothing should be assumed.
+
+  **Item 5's root cause was a missing CSS class, not a layout bug.** `.text-center` appeared 8 times in `config.html` and was defined nowhere, so every use was a silent no-op. The visible symptom was the notification event-filter matrix: Desktop/Terminal/Email/Webhook headers appeared offset right of their checkbox columns, and the offset grew with the header word's length (Email ~15px, Webhook ~36px) — because header and checkbox both start at their grid column's left edge and only the header is wide. That prediction is what identified the cause; defining the utility fixes the matrix and the other seven dead usages.
+
+  **Item 4's right-alignment was deliberate and is scoped rather than reversed.** `base.html` sets `text-align:right` on `.config-input` on purpose and ships two opt-out classes alongside it; it is coherent on desktop where the input is 550px in a label-left/value-right row, and wrong at 390px where the input goes full-width and the value drifts from its label. Confined to mobile by a media query with the rationale comment rewritten rather than deleted. **Item 3**: the page must never scroll sideways — screenshots 084423/084512 show content clipped at the *left* with empty space at the right, meaning part of the page was unreachable. Causes in order were fixed 550px inputs inside content-sized flex rows and `.approval-rule-row` packing six controls into one line; wide tables turned out *not* to be a page-level cause, because the Per-Worker Breakdown is already wrapped in `.overflow-x-auto` — and unlike `.text-center`, that utility is defined. Rule adopted: wide content scrolls inside its own container, the page never does.
+
+  **Item 2 — Focus mode removed, the operator's choice over making it configurable.** `toggleFocusMode` added `.focus-mode` to `.detail-area`, collapsing the bottom panel so the transcript filled the viewport, persisted in `sessionStorage`, and could not be turned off because it was hardcoded markup rather than one of the config-driven Action Buttons. Removed in full — button, CSS, dispatch entry, both functions, the `switchTab` side effect, and the on-load restore IIFE — because a half-removal would strand anyone who had it enabled in a collapsed layout with no button to get out. **Item 6's contrast half**, raised during the interview rather than in the original report: the d-pad is a dark translucent pad with a leaf-green glyph, so in light mode the arrows are nearly invisible; a light-theme override keyed off both `data-theme` and `prefers-color-scheme` was added, leaving the dark appearance untouched.
+
+  **The tests pin the class of defect, not the pixels** — these are visual claims and the ticket rightly says a browser at 390px is the judge. What *is* testable is a utility that is used but never defined, which is how item 5 happened and which nothing in 5849 existing tests could have caught. Also pinned: that the Focus removal is complete rather than partial, and that the stylesheet is still brace-balanced, since the focus-mode rules were nested inside a media query and a careless cut would have silently broken every rule after it.
 
 ## [2026.8.6.18] - 2026-08-06
 
@@ -744,6 +1306,14 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **`swarm_edit_task` can append, and it now reports the character delta (#1289).** The author caused this and measured it: working #1274 they appended AC-1 findings to a 3,819-character description, produced 6,124 characters in a staging file, then called `swarm_edit_task` by retyping the text — a later read returned 3,950 characters, with roughly 2,200 characters of verified findings gone. **The call reported success**, and the loss was noticed hours later by accident because a length looked wrong. Two properties made it dangerous rather than annoying: the failure is silent and reports success (#1159's shape), and it scales with the value of the record — the longer and more carefully built the description, the more one edit destroys and the less likely anyone notices.
+
+  **The delta is the fix**, and it is the half that protects callers who change nothing: the reply now reads `description 3950 -> 1750 chars (-2200)`, so a shortening is visible at the moment it happens whether or not the caller intended to replace. `append_description` is the second half — text to *add*, blank-line separated, so the caller supplies only what is new. A named parameter rather than an `append=true` flag on `description`, because a flag is forgettable and forgetting it performs a full replace, the exact loss this prevents. Supplying both is **refused** rather than resolved by preference, since silently preferring one is how a caller who meant append loses everything. `_describe_edit` records the same delta in history alongside the preview: the preview alone shows the head of the *old* value and looks identical whether a line was corrected or a third of the text dropped, which is why #1274's loss left no hint in its history entry.
+
+  **The failure mode here is a success message, which dictated how the tests are written** — a test asserting "updated" in the reply would have passed throughout the incident, so the load-bearing assertions are on character counts and the reproduction uses the real 3950 → 1750 magnitude rather than a synthetic pair. AC-3 held without change: the terminal guard runs before any description resolution, so the new parameter is not a route around it, and a closed task's resolution stays structurally unreachable (`TaskBoard.update` has no `resolution` parameter).
+
+  **Deliberately not done, recorded rather than left as an oversight:** `queen_edit_task` does not get `append_description` — the delta is the safety property and belongs everywhere, but the append is ergonomics for the caller who hit the problem, and a second append path would double the surface for a use nobody has reported. No `allow_shrink` refusal gate either, since with the delta visible a shrink is observable and a refusal path would make legitimate rewrites annoying. And no previous-text-in-history: recoverable beats detectable, but storing full prior descriptions is a size question that has not been measured.
+
 ## [2026.8.6.17] - 2026-08-06
 
 ### Features
@@ -752,11 +1322,29 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The operator can set a task In Progress, and the whole transition grid is now swept (#1288).** Setting #1255 to In Progress failed because sculpt-studio was working it but had not asserted ACTIVE — diagnosed from one log line, the WARNING that 2026.8.6.14 had added an hour earlier. Root cause: `_apply_status_change` had **no branch where the target was `active`**. The dropdown offered "In Progress" and nothing implemented it — the same selectable-but-unreachable shape as BLOCKED in #1280, one cell over; #1280 fixed its own cell and did not sweep, and this was the cell it missed.
+
+  A new `daemon.mark_task_in_progress` routes through `task_coordinator._activate_with_history` rather than `board.activate`, so **no new `activate()` caller is added** — the property-(f) test pins that count at 2, because a caller that activates without writing history is what made #1159 undiagnosable. The wrapper writes the STARTED row, logs any INV-1 demotions, and fires the Jira export. **Deliberately not `start_task`**, the other route to ACTIVE: that one also sends the task into the worker's PTY, and sculpt-studio was already working #1255, so re-dispatching would paste the prompt a second time. This corrects the board, not the work, and a test asserts nothing reaches `send_to_worker`. ASSIGNED is the only accepted source, because ACTIVE means "this worker is working it" and an ownerless ACTIVE task is a claim about nobody. This does **not** relax worker-asserted ACTIVE (#1282) — that design forbids the *daemon* from inferring which task a worker is on; an operator stating it explicitly is an assertion by the party entitled to make it.
+
+  **The real deliverable is the sweep, because fixing cells one at a time is how this happened twice.** `tests/test_status_transition_matrix.py` enumerates all 42 ordered (current, target) pairs the dropdown can request against an explicit grid — each is supported or expected to refuse, so a behaviour change has to edit the table deliberately — and it reads the option list out of the **markup**, so a new dropdown entry cannot slip past. **It immediately found a third instance**: the dropdown offers `blocked` as a target and nothing reaches it. That one should *not* become settable — blocking requires a reason and the form has nowhere to collect one, and #1287 showed a blocker with an unrecorded cause lands in no operator batch at all — so it stays display-only (the option must exist or a blocked task's own status cannot be shown) and is now a named exemption in the grid with that reasoning, not a loosened assertion.
+
+  **Refusals now say what to do** (#1057). `_unsupported_reason` replaces "X -> Y is not a supported transition" with the resolving fact: selecting Blocked names `swarm_block_on_external`/`swarm_block_on_operator`, In Progress from a non-ASSIGNED status says to assign it first, and → assigned points at the 'Assign to' picker.
+
 ## [2026.8.6.16] - 2026-08-06
 
 ### Features
 
+- **`swarm_annotate_resolution` — mark a stale or wrong resolution without rewriting it (#1274, partial).** A resolution is not an archived note: it becomes `task.learnings`, and learnings are recalled into future dispatches by `recall_learnings_for_task`, so a stale one is actively **re-served as advice**, carrying a completed task's authority, to a worker with no way to know it aged out. AC-1 was verified before any code against a throwaway closed task on a *copy* of the live DB: `swarm_complete_task`, `swarm_edit_task` and `queen_edit_task` all refuse a closed task, and `queen_save_learning` only appends, so a stale learning could be supplemented but never corrected and a reader saw both with nothing saying which wins.
+
+  **A fifth finding changed the design**: resolutions are immutable *structurally*, not by policy — `TaskBoard.update` does not accept a `resolution` kwarg at all. AC-4 was therefore already satisfied by construction, and its test asserts the **absent parameter** rather than a refusal message someone could later soften. Unlike #1270's HOLD-class gap where the fix was to *allow* an edit, an edit here would be wrong: rewriting a closed resolution destroys the record of what was actually believed and done at the time. So this annotates alongside — two new columns (v17 migration), `board.annotate_resolution`, and the worker-surface verb. `'stale'` (was true, expired) and `'wrong'` (never true) stay distinct all the way to the reader, rendering as NO LONGER TRUE vs WAS NEVER CORRECT; collapsing them would either impugn correct original work or understate a real error.
+
+  **AC-3 is the load-bearing one and it is done at the reader's end, not the writer's**: the caveat renders *inside* the recalled entry rather than after the block, because the failure mode is a reader who takes one entry at face value and a footnote at the bottom is read after the damage. Demonstrated by injecting a known-stale learning of #1174's exact shape and asserting the caveat appears in the block pasted into the next worker's PTY. **Cheaper than the whole feature and applying to every learning**: each recalled learning now carries ", closed YYYY-MM-DD" — #1174's text reached #1267 with no timestamp, so nothing prompted the reader to ask how old the advice was, and a date alone would have prevented the incident.
+
+  **Any worker may annotate any closed task, deliberately**: whoever was just served the bad advice is who discovers it, and gating on ownership would put the correction path behind the worker least likely to be looking — the exact composition trap #1270 documents. Verified rather than assumed that `learnings` is still the live recall path (1062 tasks carry it, the most recent written that day), and the v17 migration was run against a copy of the real 1244-task DB including its WAL, preserving 1244 tasks / 1222 resolutions / 1062 learnings — a migration that only works on fresh DBs is the dangerous kind.
+
 ### Changes
+
+- **AC-6 is not done and deliberately not faked.** Annotating #1174 needs two things that were unavailable: the daemon must reload onto v17 before the verb exists (a direct DB write would be clobbered by the running daemon's in-memory board), and *what* made the claim stale could not be established — #1274's text says #1267 found it wrong, but #1267 is about the `--delete-branch` CLI flag closing dependent stacked PRs, a different thing from the repo setting `delete_branch_on_merge`. Writing "no longer true because X" without establishing X would create a stale annotation on day one, the exact failure this feature exists to prevent.
 
 ### Fixes
 
@@ -768,6 +1356,14 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **`block_for_operator` now enters the operator's ask batch (#1287).** The verb *named* for operator blocking called `task.block(reason)` with no `external_ref`, so `external_blocker_ref` stayed empty and `is_awaiting_operator` was false — it produced tasks that were operator-blocked in substance and appeared in **no batch at all**, so the operator was never asked. That is the same failure #1070 created `AWAITING_OPERATOR_REF` to fix, on a different entry point. Both callers match the operator's two cases exactly: `server/proposals.py:368`, an operator-approved park proposal ("me telling the queen"), and `server/daemon.py:1436`, the #762 token-ceiling governor, which already fires a notification but left the task out of the batch ("I need to know").
+
+  **The two are deliberately not kept distinguishable.** #1287 asked whether "the Queen parked a stalled worker" should stay separable from "a worker asked a question"; the operator's reasoning collapses them, since both need the same outcome, which is reaching him. Recorded in the test as well as the task, because the test is where someone would try to re-split them. Volume was measured before deciding, since the objection was that this changes what the operator is shown: 39 TASK_PARKED and 46 PARK_PROPOSED entries across a 1243-task board — a trickle, not a flood.
+
+  **AC-3's audit was answered by measurement rather than by reading**: the behaviour was changed and the full suite run, and exactly two tests failed — both the pinning tests written in 2026.8.6.13 for this specific purpose, one of which asserted the old behaviour precisely so that changing it would have to be a decision rather than a drift. Nothing else in 5770 tests depended on the old value. Both were rewritten, the second replaced by its reverse: an autopark re-labelled to an artifact wait must *leave* the batch, or the operator keeps being asked about something he already settled.
+
+  **A mistake made and caught, recorded because a green run hides it:** rewriting those two tests truncated the file and silently deleted the 7 MCP-surface tests that followed — including the reachability guard that exists because #1268 shipped a board verb with zero callers. The suite still passed, at 13 tests. Caught by comparing the test count before and after (20 → 13) and restored from the committed version.
+
 ## [2026.8.6.14] - 2026-08-06
 
 ### Features
@@ -776,11 +1372,25 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **Refused status changes are now logged, and the error names the task.** The operator reported that moving #1255 out of blocked failed and he had to go unassigned, then assigned. **The report could not be reproduced and this commit does not claim to fix it** — verified against a *copy* of the live DB on current code: `_apply_status_change(blocked -> assigned)` returns True with the owner preserved; the full `handle_action_edit_task` with his own form payload returns HTTP 200 and moves the task blocked → assigned with the owner kept; `board.unblock` requires only BLOCKED status and no owner; and the JS only sends `status` when it differs from the select's recorded original and only fires the assign action when the worker changed. #1255's history corroborates the report without explaining it — EDITED rows at 12:36:51 and 12:37:08 with no status transition, then ASSIGNED at 12:37:16, which is the workaround he described.
+
+  **So the actual deliverable is diagnosability, not a guess-fix.** The refusal existed only in an HTTP 409 his browser threw away; nothing reached `~/.swarm/swarm.log`, so there was no forensic trace to read. Now the refusal logs at WARNING with the task number and the exact from → to pair (WARNING because operators run at WARNING and this is a forensic anchor rather than a debug aid — #1263's lesson), and the error text names the task number so the toast is self-identifying when several tasks are open. A test asserts the handler both returns 409 **and** logs it, since asserting only the return value would leave the log gap exactly as it was.
+
+  **A hole in the first reproduction, recorded because it nearly stopped the investigation early:** `d.edit_task` was substituted with a `board.update` wrapper, which mocked out the very code that could be raising — the real `task_manager.edit_task` also runs `require_task`, `_describe_edit` and a history append. Driving the real handler still passed, but the first result was worth less than it looked.
+
 ## [2026.8.6.13] - 2026-08-06
 
 ### Features
 
+- **`swarm_relabel_blocker` — a BLOCKED task can move between its two causes without leaving the hold (#1269).** BLOCKED is reachable either by waiting on an upstream artifact (`block_on_external`) or by an operator ask (`external_blocker_ref == AWAITING_OPERATOR_REF`, which is what `is_awaiting_operator` keys off and what the Queen batches into one set of operator questions). A task whose cause *changed* stayed described by whichever cause was recorded first, so the operator was either asked about something that was no longer his call or never asked at all. Closes the last failing property, (d), from the #1104 audit.
+
+  **One verb in place, deliberately not exit-and-re-enter via #1268's unblock.** Re-entry is not available in both directions — `unblock` lands in ASSIGNED while `block_for_operator` requires ACTIVE — so re-labelling toward an operator ask would need unblock → activate → block, passing through two states the task was never in, minting a spurious STARTED history row and briefly making it the worker's one ACTIVE task. The cause is one field; a verb that rewrites one field is honest about what happened. The binding and `block_reason` move together, because a machine-readable cause disagreeing with its human explanation is worse than either being stale alone, and the history detail names **both** ends (`stopped waiting on platform#234 and became an operator ask`) under a new `SystemAction.TASK_BLOCKER_RELABELLED` — neither TASK_PARKED nor TASK_UNBLOCKED happened.
+
+  Wired to the worker MCP surface rather than left as a board method, and a test asserts it appears in `TOOLS` and `_HANDLERS` — #1268's lesson was that `board.unblock` existed, worked, was tested, and had zero callers. `block_for_operator`'s ACTIVE-only precondition is untouched and asserted in two places, because the tempting implementation relaxes it and that would break the Queen's auto-park semantics where "no longer ACTIVE" legitimately means the stall resolved.
+
 ### Changes
+
+- **Two defects caught while building the re-label verb, recorded rather than papered over.** `SystemAction.TASK_BLOCKED` does not exist — the audit helper is wrapped in try/except, so the `AttributeError` would have been swallowed and logged as a warning, shipping a verb whose history row silently never wrote. And `board.block_for_operator`, the verb *named* for operator blocking, calls `task.block(reason)` with no external ref and therefore leaves `is_awaiting_operator` **False**; the sentinel is set only by the worker-facing `swarm_block_on_operator`, so the Queen's auto-park path produces tasks that are operator-blocked in substance but absent from the batch that exists to collect exactly those. Not fixed here — it changes which tasks the Queen surfaces to the operator — but pinned by a test that documents current behaviour and fails if someone changes it.
 
 ### Fixes
 
@@ -790,7 +1400,15 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Changes
 
+- **A sweep now requires every "re-call" refusal in the MCP surface to name a parameter, value or other verb**, generalising the #1286 fix past its one instance. Getting there took two wrong turns worth recording: a regex over raw source produced 5 false positives (it matched a comment quoting the old bad text, and real messages put `with task_number=<n>` on a following line), and flattening whitespace to fix that made it *worse* — the window bled past the string into surrounding code, which always contains an `=`, so it passed against a deliberately planted bad refusal. It is now built on `ast`, reading string literals as the reader receives them, with comments excluded for free, and verified by asserting the injection **applied** before the control was trusted.
+
 ### Fixes
+
+- **`swarm_start_task`'s parked refusal named an action that did not exist (#1286).** Found trying to start #1269: the refusal read "Starting it will un-park it — re-call this to resume it deliberately", and re-calling produced the identical refusal. `_start.py` returned it whenever `target.is_on_hold`, with no confirmation token, no parameter and no state that could make a second call differ — and no code path ever removed the hold tag, so even a caller who got past the refusal would have left a parked task in progress. The task could not be started through the sanctioned verb at all.
+
+  This is worse than #1057's shape, which the module's own docstring cites: #1057 *withheld* the resolving fact, this *stated a false one*, and a caller who trusts it retries forever — an agent caller did exactly that. It is also the third instance of hold-class unreachability on a third verb, after #1270 (edit) and #1281 (assign).
+
+  The fix is an explicit `unpark=true` parameter, chosen over auto-unparking because HOLD exists precisely to stop work starting by accident (#894) — the deliberate step is the feature — and over a bare refusal because the caller then has nowhere to go. Hold tags are cleared *before* `activate`, so what the message promises is what happens, and the parameter is registered in the input schema with an example rather than merely implemented (#1282 was exactly the failure of shipping an undiscoverable capability). **The test is the two-call sequence, not a string check**: asserting the refusal merely *mentions* `unpark` would pass even if `unpark` did nothing — the precise defect being fixed. Also pinned: a bare retry still refuses (persistence is not consent), non-hold tags survive unparking, and an unstarted parked task stays out of `board.available_tasks`.
 
 ## [2026.8.6.11] - 2026-08-06
 
@@ -800,6 +1418,14 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The test suite was writing into the operator's production `~/.swarm/swarm.log` (#1285).** Found while trying to establish whether the running daemon had reloaded onto current code — the log was the only usable evidence, since Reload uses `os.execv` and therefore preserves both PID and start time — and it held 3400 lines of test output: `/tmp/pytest-of-*` socket paths and `unittest/mock.py` tracebacks interleaved with real daemon entries, from roughly a dozen full-suite runs.
+
+  The existing guard patched `setup_logging` in two namespaces and cleared the swarm logger **once**, at session start. The leaked lines were INFO, which a WARNING logger cannot emit, so something re-configured logging mid-session; running the offending tests in isolation is completely clean, which is exactly why it survived — no single test file reproduces it, only an ordering within a full session does. The new guard is therefore **behavioural rather than a list of known call sites**: a per-test autouse fixture strips any handler whose `baseFilename` is the production log before and after every test, and `pytest_sessionfinish` names the tests that attached one. `_DEFAULT_LOG_FILE` is redirected as a second layer, since anything reaching the real function with `log_file=None` would otherwise land on the production log.
+
+  **Measured by attribution, not size.** The live daemon appends to the same file continuously, so an earlier size-based check showed +328 bytes that were entirely the daemon's own term-trace and would have read as "still polluting". Counting lines matching `pytest-of`/`unittest`/`mock.py` instead: a full 5743-test run adds 0. The control matters as much as the fix — "no pollution appeared" is equally consistent with the guard working and with nothing having tried to pollute — so a test attaches a real production handler and asserts the guard removes it, with `delay=True` so proving the strip does not itself write to the operator's log.
+
+  The 3400 lines already in the log are **left alone**: it is the operator's forensic record, rewriting it would destroy the evidence this bug existed, and the file is at the 5MB rotation threshold so it will age out on its own. Production logging is untouched — the daemon still writes WARNING+ there, so #1263's observability is intact.
+
 ## [2026.8.6.10] - 2026-08-06
 
 ### Features
@@ -808,11 +1434,21 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **`TaskBoard.reassign_worker` persisted without notifying, so a worker rename moved every one of its tasks with no event at all (#1275 partial).** The whole path was traced first and found correctly wired — board mutation → `_notify()` → `emit("change")` → `daemon._on_task_board_changed` → `publisher.on_task_board_changed` → `tasks_changed` frame → `refreshTasks()`/`refreshWorkers()` — then every mutating board verb was swept rather than guessed at, and exactly one hole turned up: `reassign_worker` persisted and never notified, while its immediate sibling `unassign_worker` does both, and the `tasks_changed` handler in `dashboard.js` carries a comment *assuming* reassignment fires it. Persisting without notifying is precisely "the change is real and durable and nothing can see it". The notify is conditional on having actually moved something, since every connected dashboard re-fetches on `tasks_changed`.
+
+  **What this is not:** every status transition the edit modal can request already notified, so this is almost certainly *not* the operator's reported cause — his symptom was ordinary status changes and worker rename is rare. #1275 stays open; its AC-2 requires the refresh demonstrated in a browser. Guards ship with the fix: a test asserts the change event fires for all 11 dashboard-reachable verbs (deliberately not "did the board mutate", which would pass on every path that cannot refresh the UI), a sweep fails any future verb calling `_persist()` without `_notify()`, and an end-to-end check drives the real `StatePublisher` and asserts a `tasks_changed` frame arrives — so if staleness persists, the remaining fault is client-side. Both sweeps carry positive controls.
+
 ## [2026.8.6.9] - 2026-08-06
 
 ### Features
 
 ### Changes
+
+- **`TaskBoard.active_tasks` is renamed `assigned_or_active_tasks` (#1284).** The property returned ASSIGNED **or** ACTIVE and its docstring always said so; the name said otherwise, and six operator-visible bugs came from reading the name instead of the docstring — #1277, #1278, #1279, the worker title bar (2026.8.6.6), the idle nudge (2026.8.6.7) and `summary()` reading "4 in progress" with one ACTIVE task (#1283). Each was fixed at its own call site while the generator stayed put; six instances is a naming problem, not six independent mistakes. Verbose on purpose — the test was "could a reader plausibly think it means ACTIVE-only", and a name listing both statuses cannot fail it. `claimed_tasks` was rejected (a BLOCKED task is also "claimed" by its owner while this predicate excludes it, so it invites a *new* misreading) and so was `open_tasks` (`_OPEN_STATUSES` already defines "open" as including BACKLOG and BLOCKED).
+
+  **The predicate is unchanged, which is the point.** IdleWatcher, directives, `poll_dispatcher` and `task_lifecycle` all genuinely need ASSIGNED as well as ACTIVE, and since #1282 made ACTIVE worker-asserted, ASSIGNED is the normal resting state of a dispatched-but-unasserted task — narrowing it to match the old name would have silenced the idle nudge for the common case. The rename was applied longer-token-first with word-boundary anchors (so `_bucket_active_tasks_by_worker` survived) followed by a zero-survivors grep, across 40 files; it was then *proved* mechanical by re-applying it to the original tree and diffing — 34 files are exactly the rename, 3 differ only by parentheses ruff added when the identifier crossed 100 chars, 3 are deliberate. The suite moved 5719 → 5720, the +1 being the new test.
+
+  **Recorded decision: no ACTIVE-only accessor.** Only two callers want in-progress-only work and each is one line; adding `in_progress_tasks` would double the surface a reader must keep straight in a family whose too-similar names just caused six bugs. Write `t.status == TaskStatus.ACTIVE` at the call site. Revisit at four such callers.
 
 ### Fixes
 
@@ -824,13 +1460,25 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **`board.summary()` summed ASSIGNED and ACTIVE into one "in progress" figure (#1283).** Sixth surface of one conflation, and the operator's complaint nearly verbatim: "if it's not set to in progress, assigned just means it's a pending task for that worker." The live board read "4 in progress" with exactly one ACTIVE task; it now reads "1239 tasks: 1 unassigned, 3 queued, 1 in progress, 1234 done" — measured on the live board, and it adds up.
+
+  **Both existing assertions were encoding the bug.** `test_board.py` and `test_tasks.py` each created a task, called `assign()` without activating, and asserted "1 in progress"; read before changing, neither meant ACTIVE, so both now assert "1 queued" plus an explicit "not in progress". A test that asserts the defect is how the defect survives a rewrite. Lanes are now **derived from `TaskStatus`**, one per status: #1279 was BLOCKED having no category at all, and the sum-equals-total test caught it only because a blocked task happened to exist — a status with zero instances would have slipped through. Building the lanes from the enum makes the omission impossible rather than merely detectable. The stray space in "1233 done , 2 blocked", left out of scope by #1279, is fixed by joining parts in one pass instead of appending them pre-punctuated. Negative control: re-lumping ASSIGNED into the in-progress lane fails 3 tests.
+
 ## [2026.8.6.7] - 2026-08-06
 
 ### Features
 
+- **Workers are now taught `swarm_start_task`, the verb that was shipped and never delivered (#1282).** 2026.8.5.5 made ACTIVE worker-asserted and removed the guessing promoter — then nothing told workers the verb existed. Measured across `src/`, it appeared only in its own arg-type docstring, two comments in `state_tracker.py`, and `swarm_unblock_task`'s success text, while `server/messages.py` appended a block to *every* dispatch teaching the **closing** verb with no counterpart for starting, and all five executable `WORKFLOW_TEMPLATES` ended with a closing step while none opened with marking work in progress. So "tasks stuck in ASSIGNED" was never evidence against the design — it was evidence the mechanism it depends on was undiscoverable. The dispatch block now teaches both ends of the lifecycle (`_COMPLETION_INSTRUCTIONS` → `_LIFECYCLE_INSTRUCTIONS`), the five executable templates gain a leading step, and the existing idle nudge carries the hint.
+
+  **The wording is conditional on purpose.** "Always call this" would move the deleted promoter's inference into the worker rather than removing it — a worker asserting ACTIVE on a task it is not working reproduces #1159 one layer up — so a test asserts the instruction stays scoped to work actually underway, and another asserts it says a freshly dispatched task is already in progress so the call does not read as noise. The OPERATOR template is deliberately excluded and pinned by test: it says DO NOT EXECUTE, and telling a worker to start a task no worker may perform would contradict the only instruction it exists to give.
+
+  **Recorded decision, correcting the filing task's own recommendation:** automatic promotion when unambiguous is *not* restored. `docs/specs/worker-asserted-active.md` already rejects it — "verb preferred, hook as backstop" is two paths to one transition, the thing #1104 exists to audit, and owning exactly one assigned task removes ambiguity about *which* task, not about *whether* the worker is on a task at all. No new `activate()` caller: the property-(f) test still asserts exactly 2, and that it needed no change is the evidence this did not touch the state machine. Accepted limitation, recorded in the spec: a worker may still not comply, which is not fixable by prompt alone — poor compliance **measured** is what would justify revisiting automatic promotion, not assumed.
+
 ### Changes
 
 ### Fixes
+
+- **The idle nudge stopped misreporting status.** It buckets from `task_board.active_tasks` — ASSIGNED **or** ACTIVE — and called them all "active", the same conflation that put queued tasks in the worker title bar in 2026.8.6.6. They are now called "open".
 
 ## [2026.8.6.6] - 2026-08-06
 
@@ -840,17 +1488,35 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The worker title bar named merely-queued work as though the worker were doing it.** Operator-reported: "if it's not set to in progress, assigned just means it's a pending task for that worker." Both display sites built the worker-to-task map from `task_board.active_tasks`, whose docstring is "Tasks currently assigned or in progress" — a claim about what a worker is doing right now, derived from a fact about what it has been given. Measured at the time of the report: 4 ASSIGNED and 0 ACTIVE on the live board, so every title shown was pending and none was in progress.
+
+  `active_tasks` is deliberately **not** narrowed — IdleWatcher and the directive drone both need ASSIGNED as well as ACTIVE, since a worker with queued work is not idle-with-nothing-to-do, so narrowing the predicate would have broken nudge logic to fix a label. A test pins that it still includes ASSIGNED; the conflation was in the display, not the predicate. Both sites had the same four lines duplicated and now share `_worker_task_titles` in `web/app.py`, because fixing one and missing the other would have left the initial page render and every subsequent htmx swap disagreeing — a discrepancy that reads as a flicker rather than a bug, so nobody files it.
+
+  This also answers the operator's related question about task progression: exactly two callers set ACTIVE — `swarm_start_task` (the worker asserting its own start) and `task_coordinator.start_task` (dispatch) — so a task that is merely queued correctly stays ASSIGNED, and "only sometimes" was the display treating those two as one thing. One real gap is left unfixed and filed separately: `swarm_start_task` appears in no worker prompt anywhere in the tree, so a worker resuming parked work has nothing telling it to assert ACTIVE.
+
 ## [2026.8.6.5] - 2026-08-06
 
 ### Features
 
 ### Changes
 
+- **Every exit from BLOCKED now delegates to one `_leave_blocked` helper** inside `_apply_status_change`, so the #529 blocker-row obligation lives in a single place instead of being repeated per target and forgotten on one. The per-target version had already grown three copies of the same two lines, and adding the backlog target tripped the complexity gate — which was the right signal rather than something to squeeze past.
+
 ### Fixes
+
+- **A task could not be parked back to BACKLOG (operator-reported).** "When I change a task to backlog I get an 'error' that says it saved but it doesn't save." The error text was accurate — the transition genuinely was unsupported — but the real gap is that BACKLOG had **no way in** for an open task: it was entered only by task creation and by `reopen()`. Every open lane could be promoted *out* of backlog via `approve()`; none could be parked back, and parking something as not-ready is an ordinary operator action. This was silent before 2026.8.6.3 added the 409, which is why it went unnoticed — the status simply did not change while the modal said "Task updated". The 409 did not cause the defect, it revealed it.
+
+  `SwarmTask.demote_to_backlog()` and `TaskBoard.demote_to_backlog()` are the missing inverse of `approve()`. They drop the owner, as `reopen()` does, because leaving a parked task owned would claim a worker holds work that is out of play. **Safe with respect to dispatch by construction**: BACKLOG is excluded from `is_available` (only UNASSIGNED qualifies), so the transition can only ever make a task *less* dispatchable — asserted rather than assumed. DONE/FAILED are still refused and routed through `reopen_task`, which also clears the resolution; sending them here would park a task with a completed resolution still attached, and a test pins that the resolution survives.
 
 ## [2026.8.6.4] - 2026-08-06
 
 ### Features
+
+- **`swarm_edit_task` can now reach HOLD tasks, which no worker could ever correct (#1270).** Follow-up 3 of 3 from the #1104 audit, closing failing property (g): a precondition that is structurally unsatisfiable for a whole task *class* is the same defect as a missing verb. Neither verb was individually wrong, which is why auditing either alone never surfaced it — HOLD tasks are UNASSIGNED by design (that is what stops the auto-assign drone, #894, after a HOLD item was auto-dispatched to wifi-portal), and `swarm_edit_task` required assignment because it exists so a worker corrects its *own* task. Composed, no worker could correct any HOLD task's description; verified live on 2 of 2 attempted (#1104, #1018).
+
+  The HOLD class is exempted from the ownership rule, because for this class the rule has no owner to protect — an unassigned HOLD task has no other worker whose work could be rewritten, so the check was guarding nothing and only blocking. A separate verb was rejected (doubles discovery cost and invites drift between two implementations of one correction path) and so was routing through the Queen (the status quo, a round trip per correction, and it leaves the asymmetry that made #1270 itself uneditable by its owner).
+
+  **Two edits, and the second is the one that would have been missed:** the unassigned refusal is now conditional on "not on hold", but the owner-match branch below it compares `assigned_worker` against the caller, and an unassigned HOLD task has no `assigned_worker` — so it would have re-closed the class through the next branch down and the fix would have *looked* applied while changing nothing. Editing does not adopt: the task stays UNASSIGNED, keeps its hold tag, and stays out of `board.available_tasks`, asserted directly, because "can edit" must not leak into "can start". The tool description documents the exception — a capability the model cannot discover is not reachable either — and the exemption is asserted to key on `is_on_hold` rather than an incidental condition, since this exact gap already recurred on a second verb (#1281).
 
 ### Changes
 
@@ -864,6 +1530,14 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **The operator can move a task out of BLOCKED from the dashboard (#1280).** "I see 5 blocked tasks but no way to change their status from blocked." Three layers, each independently sufficient: the `#tm-status` select offered no "blocked" option, so a blocked task's status could not even be represented (`selectedIndex=-1`, an empty value submitted, and the `if new_status` guard skipped the change); `_apply_status_change` had no branch whose *current* status was blocked, so any target chosen fell through and did nothing; and `handle_action_edit_task` returned `{"status": "updated"}` regardless, so the no-op reported success and the UI said "Task updated" — #1159's shape, where a verb that succeeds and does nothing is worse than one that refuses, because the caller stops looking.
+
+  Fixed by adding the option, wiring blocked→assigned via `board.unblock` (owner-preserving per #1268; `release` would drop the owner) and blocked→unassigned via `board.release`, returning a bool, and answering **409** with what did and did not happen. blocked→done stays unsupported: that is `force_complete`, recording a completion for work that is still open. Leaving BLOCKED clears the `BlockerStore` rows (#529) — the board has no handle on that store, so the caller owns them, and skipping it would have reproduced #529 on this surface only. This is the #1104 audit's property (b) on the one surface the audit never covered: #1268 wired the owner-preserving exit to the worker and Queen MCP surfaces and the operator's own surface got neither.
+
+- **A HOLD task could not be assigned by the operator, because the drone's own guard was answering the wrong question (#1281).** Assigning #1270 failed with "not available (unassigned)". `task.is_available` means "the **auto-assign drone** may take this" and #894 excludes HOLD from it — but both `TaskCoordinator.assign_task` and `TaskBoard.assign` used that predicate to answer a different question, may this caller route it *deliberately*, so the mechanism that stops the drone also stopped the operator and HOLD became a trap. Two layers, which is why a one-line fix would have looked right and still failed; a test driving the real board caught it where the mock-only version passed against a fix that did not work.
+
+  `override_hold` is threaded `board.assign` → coordinator → daemon and passed `True` only from the operator's `/action/task/assign` route. **Opt-in on purpose**: defaulting it `True` would hand the capability to the Queen's directive path, the proposal coordinator and the worker create-with-target path, trading a routing defect for the auto-dispatch of parked work that #894 exists to prevent — a test pins the default at `False`. BLOCKED had no normalisation branch either, so reassigning a blocked task 409'd identically; added. Verified against a **copy** of the live DB using the real tasks: #1270 refused under the old gate and allowed with the override, #915 unblocked with owner `platform` preserved and no completion recorded, and a fresh HOLD task re-checked in the same run is still absent from `available_tasks` — #894 intact. The irony is load-bearing: the task he could not assign was #1270, whose subject is HOLD tasks being unreachable because a precondition is unsatisfiable for the whole class.
+
 ## [2026.8.6.2] - 2026-08-06
 
 ### Features
@@ -872,6 +1546,10 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+- **`board.summary()` counted BLOCKED tasks in `total` and in no category (#1279).** Third defect of the same class as #1277/#1278, on a third surface, and the one that produced the number the operator actually quoted: the string did not add up, and the dashboard renders it verbatim into `#task-summary`, so he was reading a count that silently excluded blocked work. This reconciles his "I see 6" — reconstructed from `task_history`, 1233 tasks existed, 9 were open, and `summary()` counted 6 because the three BLOCKED were counted nowhere. The Queen's arithmetic 9 − 3 = 6 was the correct explanation rather than the coincidence it was first called; her mechanism was right in substance and only the location she named was wrong, and killing the whole lead threw away the sound half. Her "three blocked" was also not stale — the board moved between her look and the measurement.
+
+  Guarded by a **completeness invariant** — the category counts must sum to `total` — rather than an assertion that the word "blocked" appears. A blocked-specific check would pass while the next status added without a category vanished identically, and a status with no category is how both this and the missing filter chip happened. The test drives each status through the real board verbs and carries a positive control asserting a blocked task is actually present, so it cannot pass by testing nothing. The new part is conditional, matching backlog and failed, so a board with nothing blocked reads exactly as before. Counting a blocked task does not make it dispatchable (#1270).
+
 ## [2026.8.6] - 2026-08-06
 
 ### Features
@@ -879,6 +1557,10 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 ### Changes
 
 ### Fixes
+
+- **The default task view silently truncated 1000 of 1235 tasks, discarding exactly the newest open work (#1277).** `_paginate` keeps the first `MAX_QUERY_LIMIT` items and `board.all_tasks` sorts by (priority, created_at) **ascending**; with 1226 of 1235 tasks DONE those two combined to drop #1275, #1274, #1270, #1269 and blocked #1255 out of the rendered window entirely. `_paginate`'s own docstring records this shipping once before at limit 100, and the fix then was to raise the ceiling to 1000 — which recurred the moment the board crossed 1000. So the ceiling is **not** raised again. A new `_display_sort` (`server/helpers.py`) orders unfinished work before finished work, then priority, then newest first, applied *before* paginating, so a ceiling can only ever discard completed tasks. The sort lives in the web layer and is display-only: `all_tasks` has ~40 call sites and reordering it would change which task a worker picks up — visible must not become startable (#1270). `handle_partial_tasks` already computed `task_total` and `task_has_more` and the template used neither, so dropping 235 tasks looked identical to having 1000; it now renders "Showing N of M". A truncation nobody can observe is the defect; the limit's value is not.
+
+- **No BLOCKED filter chip existed, so blocked tasks were reachable only under "All" (#1278).** The chips send `status=<csv>` to the server and the selection persists in `localStorage`, so any operator who had ever picked a subset carried a durable filter in which no blocked task could appear — and composed with #1277's truncation under "All", #1255 was visible in no reachable filter state at all. Neither defect was an edit-permission problem: `task_manager.edit_task` has no status or assignment guard and `task_list.html` has no `show=false` rule for the edit action, so the Edit button renders for every status. The rows were simply never rendered. Verified by rendering the real template against the live 1235-task board; negative control: un-wiring `_display_sort` drops exactly the five tasks the operator named. Killed lead recorded: `queen_view_task_board`'s "open" filter was **not** the cause — `_OPEN_STATUSES` does include blocked, only its tool description is wrong, and the dashboard never uses an "open" concept at all.
 
 ## [2026.8.5.8] - 2026-08-05
 
@@ -5683,7 +6365,11 @@ Triage of the 2026-06-09 Claude Code Insights report → three Queen/dispatch im
 
 ### Changes
 
+- **The `TaskStatus` enum is renamed to the operator-facing vocabulary** — BACKLOG / UNASSIGNED / ASSIGNED / ACTIVE / DONE / FAILED, replacing PROPOSED / PENDING / IN_PROGRESS / COMPLETED — completing a v9 cleanup whose call sites had already been pushed ahead of the definition. A v8→v9 SQLite migration (`_migrate_v9_status_rename`) rewrites legacy status values at daemon startup, idempotently, so existing databases upgrade in place with no wipe, and a `_LEGACY_STATUS_MAP` shim covers legacy `tasks.json` imports. Call sites across `drones/`, `queen/`, `server/`, `web/` and `tasks/` were updated in the same pass along with templates and the CLAUDE.md narrative, with new coverage for the value rewrite, its idempotency, the status label map and the task-list partial.
+
 ### Fixes
+
+- **A fresh install from git crashed the daemon at startup with `AttributeError: type object 'TaskStatus' has no attribute 'ACTIVE'`.** Prior releases had pushed call sites referencing the new status names while `tasks/task.py` still defined the old ones, so anyone installing from `git+https://github.com/bschleifer/swarm.git` hit the error whenever the tasks table contained an assigned row.
 
 ## [2026.5.8.6] - 2026-05-08
 
@@ -5845,6 +6531,10 @@ Triage of the 2026-06-09 Claude Code Insights report → three Queen/dispatch im
 ### Changes
 
 ### Fixes
+
+- **The Queen's redirects are now gated on operator engagement and must cite a contradiction (#340)**, so she stops interrupting a worker on the strength of an inference she cannot point at.
+
+- **Auto-assignment gained a deterministic project-affinity gate (#341).** Shipped together with the redirect gate as one release because both target the same incident loop — mis-route, operator redirect, drift flag, operator interruption.
 
 ## [2026.5.7] - 2026-05-07
 
@@ -6029,6 +6719,8 @@ Triage of the 2026-06-09 Claude Code Insights report → three Queen/dispatch im
 ### Changes
 
 ### Fixes
+
+- **The Logs tab's content leaked into the Advanced tab.** The `tabGroups` map still merged the logs section into Advanced after Logs got its own dedicated tab button, so clicking Advanced showed Coordination, Terminal, Server, buttons, test *and* Debug Log — with the log viewer rendering in two places. `logs` is dropped from the advanced group; the Logs tab is now the only place it renders.
 
 ## [2026.5.5.4] - 2026-05-05
 
@@ -6428,9 +7120,23 @@ Triage of the 2026-06-09 Claude Code Insights report → three Queen/dispatch im
 
 ### Features
 
+- **The interactive Queen, foundation pass.** The Queen now spawns as a PTY-managed worker with `kind="queen"`, and task assignment, SLEEPING and broadcast helpers all skip her. A new `queen_chat_store` plus a v6 schema migration back threads, messages and learnings with 30-day retention; `/api/queen/health` and a `queen.health` WebSocket event report her state; chat API routes list, create, post to and resolve threads; and she gets a dedicated sidebar card with a bee icon and state-aware honey-lavender styling, visually distinct from the worker list. Her first-pass system prompt lives at `~/.swarm/queen/workdir/CLAUDE.md`.
+
+- **Queen MCP tooling across read, conversation and write surfaces.** Read-only: `queen_view_worker_state`, `queen_view_task_board`, `queen_view_messages`, `queen_view_buzz_log`, `queen_view_drone_actions`, `queen_query_learnings`. Conversation: `queen_post_thread`, `queen_reply`, `queen_update_thread`, `queen_save_learning`. Write-side: `queen_reassign_task`, `queen_interrupt_worker`, `queen_force_complete_task`, and `queen_prompt_worker`, which injects prompts directly into worker PTYs (Claude queues BUZZING targets to the next turn). Every `queen_*` handler is gated on `worker_name == "queen"`.
+
+- **A rebuilt Usage tab.** Usage got its own tab with a time-window filter (24h, 7d, 30d, last month, this month, all), worker-name search, a minimum-cost threshold and a hide-zero toggle, and errors now surface inline instead of leaving the panel blank.
+
 ### Changes
 
+- **The C901 complexity threshold moved 10 → 12** in `pyproject.toml` with a rationale comment, and one pre-existing `# noqa: C901` was removed.
+
 ### Fixes
+
+- **The PTY terminal showed a stale frame after a daemon reload — a day-1 bug.** The browser xterm instance is now reset before the first post-reconnect frame, so pre-reload content no longer overlays the holder's replay snapshot. No more 1-3 reload retries to get a clean terminal.
+
+- **`swarm_send_message` wildcard broadcasts silently dropped messages.** A single `recipient='*'` row was first-reader-wins; a new `MessageStore.broadcast()` fans out one row per recipient, with the handler and HTTP route updated and the recipient count surfaced in the response.
+
+- **Three usage and state-detection defects.** Claude's monitor-in-background was misclassified as RESTING — the provider now recognises "N monitor still running" / "auto mode on · N monitor" in the tail and returns BUZZING. Usage blanked on every daemon restart because `find_active_session` filtered by `mtime >= start_time`; that filter is gone. And Queen usage was double-counted — `/api/usage` now skips her in the worker loop, since the PTY Queen is the authoritative source. Her `project_dir` encoding also replaces `.` as well as `/`, matching Claude Code.
 
 ## [2026.4.19] - 2026-04-19
 
@@ -6469,6 +7175,8 @@ Triage of the 2026-06-09 Claude Code Insights report → three Queen/dispatch im
 ### Changes
 
 ### Fixes
+
+- **`swarm_task_status` pagination and ordering overhaul (#142)**, bundled into this release from commit `a730919`. Workers can now see their newer task assignments and look up any task by number. The release commit itself carries only the version bump; the detail is in the bundled commit.
 
 ## [2026.4.17.2] - 2026-04-17
 

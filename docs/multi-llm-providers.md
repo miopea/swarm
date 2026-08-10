@@ -58,7 +58,17 @@ The old `src/swarm/worker/state.py` monolith is gone.
 
 ### 2.3 Drone Auto-Approval Rules (1 key pattern — MEDIUM effort)
 
-`src/swarm/drones/rules.py` — `_BUILTIN_SAFE_PATTERNS` matches Claude Code tool names.
+Two distinct mechanisms, and they are easy to confuse:
+
+- `src/swarm/drones/rules.py` — `_SAFE_TOOL_NAMES`, a `frozenset` of
+  `{"Glob", "Grep", "Read", "WebSearch", "WebFetch"}`. Used by
+  `_is_safe_tool_event()` against a structured `tool_call` event. This is a
+  **set-membership test, not a regex**, and it is provider-neutral because the
+  event carries a parsed `tool_name`.
+- `src/swarm/providers/claude.py` — `_BUILTIN_SAFE_PATTERNS`, the regex fallback
+  for scraped PTY text (`Bash(...)` / `Bash command` / `Glob(` / `Read file` …),
+  returned by `ClaudeProvider.safe_tool_patterns()`. Claude-specific by
+  construction; other providers supply their own.
 
 ### 2.4 Queen / Headless Invocations (30 references — HARD)
 
@@ -176,12 +186,21 @@ sandbox:
   settings_overrides:
     allow_network: false
     denied_tools: ["Bash"]
-
-test:
-  # Pins the model identifier recorded in every swarm test run's
-  # InfraSnapshot. Not a runtime override — only affects reporting.
-  pin_model: claude-opus-4-7
 ```
+
+`test.pin_model` belongs in **neither** of the blocks above and is **not a
+`swarm.yaml` key**. It is a field on `TestConfig`
+(`src/swarm/testing/config.py`), and `config/loader.py` does not read it out of
+the YAML `test:` section — it is absent from `_KNOWN_TEST_KEYS`, so writing it
+there earns an unknown-key warning and no effect. Set it per run:
+
+```bash
+swarm test --pin-model=claude-opus-4-7
+```
+
+It pins the model identifier recorded in every `swarm test` run's
+`InfraSnapshot`. Not a runtime override — it only affects reporting. (The config
+API can also set it, via the `test` applier's generic dataclass dispatch.)
 
 ---
 

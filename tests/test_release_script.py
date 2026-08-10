@@ -18,7 +18,13 @@ import pytest
 _SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
 sys.path.insert(0, str(_SCRIPTS))
 
-from release import compute_next_version, promote_changelog, update_version_files  # noqa: E402
+from release import (  # noqa: E402
+    EmptyUnreleasedError,
+    apply_release,
+    compute_next_version,
+    promote_changelog,
+    update_version_files,
+)
 
 
 class TestComputeNextVersion:
@@ -93,21 +99,35 @@ Initial release.
         idx_v1 = promoted.index("## v1.0.0")
         assert idx_unreleased < idx_dated < idx_v1
 
-    def test_empty_unreleased_produces_empty_dated_section(self) -> None:
-        """When operator has nothing queued, still record the release —
-        calver bumps are routine, and an empty section preserves the
-        chronology. The section has the skeleton so editors can fill
-        it in later if a belated note comes in."""
+    def test_empty_unreleased_refuses(self) -> None:
+        """An Unreleased body with only the sub-headings records nothing,
+        so promoting it produces a dated heading that says nothing. The
+        script used to do exactly that, and 108 consecutive releases
+        (2026.8.6 → 2026.8.10.19) shipped hollow. It now refuses."""
         empty_body = "\n\n### Features\n\n### Changes\n\n### Fixes\n\n"
-        promoted = promote_changelog(self._changelog(empty_body), "2026.4.17.2", "2026-04-17")
+        with pytest.raises(EmptyUnreleasedError, match="no '- ' bullets"):
+            promote_changelog(self._changelog(empty_body), "2026.4.17.2", "2026-04-17")
 
-        assert "## [2026.4.17.2] - 2026-04-17" in promoted
-        # Unreleased is back to clean skeleton
-        assert promoted.count("## Unreleased") == 1
+    def test_whitespace_only_unreleased_refuses(self) -> None:
+        with pytest.raises(EmptyUnreleasedError):
+            promote_changelog(self._changelog("   \n   \n"), "2026.4.17", "2026-04-17")
 
-    def test_whitespace_only_unreleased_is_treated_as_empty(self) -> None:
-        promoted = promote_changelog(self._changelog("   \n   \n"), "2026.4.17", "2026-04-17")
-        # Still promoted — empty dated section
+    def test_bare_dash_is_not_a_bullet(self) -> None:
+        """A dash with nothing after it is a typo, not a release note —
+        the refusal must not be satisfiable by punctuation alone."""
+        with pytest.raises(EmptyUnreleasedError):
+            promote_changelog(self._changelog("\n### Fixes\n-\n"), "2026.4.17", "2026-04-17")
+
+    def test_refusal_subclasses_value_error(self) -> None:
+        """Callers written against the older ``ValueError`` contract still
+        catch the new refusal."""
+        assert issubclass(EmptyUnreleasedError, ValueError)
+
+    def test_indented_bullet_counts(self) -> None:
+        """Nested bullets under a heading are still content."""
+        promoted = promote_changelog(
+            self._changelog("\n### Fixes\n  - a nested note\n"), "2026.4.17", "2026-04-17"
+        )
         assert "## [2026.4.17] - 2026-04-17" in promoted
 
     def test_missing_unreleased_section_raises(self) -> None:
@@ -124,15 +144,80 @@ Initial release.
         # historical v1.0.0 block must survive.
         assert "\n---\n" in promoted
 
-    def test_idempotent_on_empty_subsequent_run(self) -> None:
-        """Running the script twice in a row (second run has already-
-        empty Unreleased) should still produce a valid CHANGELOG without
-        stacking duplicate dated headers."""
-        empty_body = "\n\n### Features\n\n### Changes\n\n### Fixes\n\n"
-        first = promote_changelog(self._changelog(empty_body), "2026.4.17", "2026-04-17")
-        second = promote_changelog(first, "2026.4.17.2", "2026-04-17")
+    def test_idempotent_on_populated_successive_runs(self) -> None:
+        """Two real releases back to back stack one dated header each —
+        no duplicates, and the first release's notes stay under the first
+        heading rather than being re-promoted into the second."""
+        first = promote_changelog(
+            self._changelog("\n### Fixes\n- first fix\n"), "2026.4.17", "2026-04-17"
+        )
+        assert first.count("## Unreleased") == 1
+        # Second release: the operator writes a new note into the reset skeleton.
+        with_new_note = first.replace(
+            "## Unreleased\n\n### Features\n",
+            "## Unreleased\n\n### Features\n- second thing\n",
+            1,
+        )
+        second = promote_changelog(with_new_note, "2026.4.17.2", "2026-04-17")
         assert second.count("## [2026.4.17] - 2026-04-17") == 1
         assert second.count("## [2026.4.17.2] - 2026-04-17") == 1
+        assert second.count("- first fix") == 1
+        assert second.count("- second thing") == 1
+        assert second.count("## Unreleased") == 1
+
+    def test_second_run_against_reset_skeleton_refuses(self) -> None:
+        """The re-run guard: once Unreleased is reset, running again with
+        nothing new written refuses rather than appending another empty
+        dated heading."""
+        first = promote_changelog(
+            self._changelog("\n### Fixes\n- a fix\n"), "2026.4.17", "2026-04-17"
+        )
+        with pytest.raises(EmptyUnreleasedError):
+            promote_changelog(first, "2026.4.17.2", "2026-04-17")
+
+
+class TestApplyReleaseAbortsCleanly:
+    """A refusal must not leave the tree half-bumped: if ``pyproject.toml``
+    advanced but the CHANGELOG did not, the next run computes a different
+    version and the two files disagree about what shipped."""
+
+    def _repo(self, tmp_path: Path, unreleased_body: str) -> Path:
+        (tmp_path / "pyproject.toml").write_text('[project]\nversion = "2026.4.17"\n')
+        init_dir = tmp_path / "src" / "swarm"
+        init_dir.mkdir(parents=True)
+        (init_dir / "__init__.py").write_text('__version__ = "2026.4.17"\n')
+        (tmp_path / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## Unreleased\n"
+            + unreleased_body
+            + "\n## [2026.4.16] - 2026-04-16\n\n- old\n"
+        )
+        return tmp_path
+
+    def test_empty_unreleased_writes_nothing(self, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path, "\n### Features\n\n### Changes\n\n### Fixes\n")
+        before_pyproject = (repo / "pyproject.toml").read_text()
+        before_init = (repo / "src" / "swarm" / "__init__.py").read_text()
+        before_changelog = (repo / "CHANGELOG.md").read_text()
+
+        with pytest.raises(EmptyUnreleasedError):
+            apply_release(repo, date(2026, 4, 17))
+
+        assert (repo / "pyproject.toml").read_text() == before_pyproject
+        assert (repo / "src" / "swarm" / "__init__.py").read_text() == before_init
+        assert (repo / "CHANGELOG.md").read_text() == before_changelog
+
+    def test_populated_unreleased_still_applies(self, tmp_path: Path) -> None:
+        """Positive control — without it the test above would pass even if
+        ``apply_release`` had stopped writing anything at all."""
+        repo = self._repo(tmp_path, "\n### Fixes\n- a real fix\n")
+
+        assert apply_release(repo, date(2026, 4, 17)) == "2026.4.17.2"
+
+        assert 'version = "2026.4.17.2"' in (repo / "pyproject.toml").read_text()
+        assert '__version__ = "2026.4.17.2"' in (repo / "src" / "swarm" / "__init__.py").read_text()
+        changelog = (repo / "CHANGELOG.md").read_text()
+        assert "## [2026.4.17.2] - 2026-04-17" in changelog
+        assert "- a real fix" in changelog
 
 
 class TestUpdateVersionFiles:

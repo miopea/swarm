@@ -1,8 +1,31 @@
+---
+title: "SwarmDaemon Refactor (god object)"
+status: SHIPPED
+shipped_date: 2026-05-27
+shipped_releases: ["2026.5.27", "2026.5.27.2"]
+---
+
 # SwarmDaemon Refactor — Spec
+
+> **Status: SHIPPED (2026-05-27).** Phase 1 + partial Phase 2 in `2026.5.27`,
+> Phase 3 in `2026.5.27.2` — see the CHANGELOG entries "SwarmDaemon refactor —
+> Phase 1 + partial Phase 2" and "— Phase 3 TaskCoordinator".
+>
+> Extracted collaborators, each with a docstring pointing back at this spec:
+> `server/invariants.py` (`InvariantReconciler`, Phase 1), `server/playbook_ops.py`
+> (Phase 2), `server/task_coordinator.py` (Phase 3), plus `server/runner.py`
+> which took the module-level entry-point code — `run_daemon`, the lock/systemd
+> helpers, and `_exec_restart` — out of `daemon.py` entirely. Later passes added
+> `server/worker_service.py`, `server/state_publisher.py`, `server/task_manager.py`
+> and `server/health.py`. `tests/conftest.py` wires the extracted pieces and
+> names their phases.
+>
+> `daemon.py` is ~2799 lines (from 3392) and the entry-point code is gone from
+> it. Retained as a historical reference; **do not re-plan off the numbers below**.
 
 **Audit finding**: #1 (MAJOR — god object)
 **Source**: `/audit-code` 2026-05-26 report
-**Status**: draft — operator approval needed before code lands
+**Status**: ~~draft — operator approval needed before code lands~~ → SHIPPED, see banner above
 
 ---
 
