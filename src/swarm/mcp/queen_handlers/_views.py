@@ -197,7 +197,17 @@ def _handle_view_worker_state(
                     if task
                     else None
                 ),
+                # THE FIX (reported by another operator's Queen, verified 2026-08-10).
+                # pty_tail is read at the top of this handler and was placed in the TEXT
+                # block only — the structured payload carried `pty_tail_lines` (the line
+                # COUNT) and never the content. A client reading structuredContent got a
+                # field promising 40 lines and no lines, which is worse than an absent
+                # key: it reads as a working contract.
+                #
+                # The dashboard is unaffected — it reads PTY output over /ws/terminal, a
+                # separate path — so this only ever hit MCP clients, i.e. the Queen.
                 "pty_tail_lines": lines,
+                "pty_tail": pty_tail,
             },
         },
     }

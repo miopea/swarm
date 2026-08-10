@@ -10,6 +10,22 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.10.20] - 2026-08-10
+
+### Fixes
+
+- `queen_view_worker_state` now returns the PTY tail in `structuredContent`, not only in
+  the human-readable text block. The value was read and then dropped, so MCP clients (the
+  Queen) received worker state with no terminal output — while `pty_tail_lines` advertised
+  a line count, making an absent field look like an empty terminal. The dashboard was
+  never affected; it reads PTY output over `/ws/terminal`.
+
+### Features
+
+### Changes
+
+### Fixes
+
 ## [2026.8.10.19] - 2026-08-10
 
 ### Features
