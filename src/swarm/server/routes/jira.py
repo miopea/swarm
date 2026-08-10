@@ -157,6 +157,27 @@ async def handle_jira_create(request: web.Request) -> web.Response:
 
         detail = f"linked to {jira_key}"
         d.task_history.append(task_id, TaskAction.EDITED, actor="user", detail=detail)
+
+        # GAP A (#1354). Synthesis runs at CREATION and again on ASSIGN — but the
+        # assign-time hook is scoped to tasks that already carry a jira_key, and in this
+        # create-then-link flow the assignment happens BEFORE the link exists. Measured
+        # on #1352: CREATED/ASSIGNED at 17:03:19 with no key, creation-time synthesis
+        # returned nothing at 17:03:26 (an EDITED row with an empty detail), the link
+        # landed at 17:03:31, and nothing tried again. The task reached a linked,
+        # assignable state with no criteria — and the verifier default-passes those.
+        #
+        # THIS is the moment to retry rather than widening the assign hook: linking is
+        # when the Jira context actually arrives. Re-running at assign time would feed
+        # synthesis the same pre-Jira description that already came back empty.
+        #
+        # apply_synthesized_criteria is gated on config, skips a task that already has
+        # criteria, and never raises — so the guard against double work lives in the
+        # callee rather than being restated at every call site. Awaited, not fired and
+        # forgotten: the caller is already async and the criteria should exist before the
+        # response says the link succeeded.
+        task = d.task_board.get(task_id)
+        if task is not None and not task.acceptance_criteria:
+            await d.tasks.apply_synthesized_criteria(task, actor="user")
     return web.json_response({"jira_key": jira_key, "task_id": task_id})
 
 

@@ -362,6 +362,30 @@ def _handle_reassign_task(
             }
         ]
     from swarm.drones.log import LogCategory, SystemAction
+    from swarm.tasks.history import TaskAction
+
+    # GAP B (#1354). This handler assigns through the RAW BOARD METHOD above, not through
+    # the coordinator's assign_task — so it got neither of the two things that path does
+    # afterwards: the ASSIGNED history row, and the acceptance-criteria synthesis hook.
+    #
+    # Measured on #1358 (WWD-6726, a real v4v6-audit import): the Queen assigned it and
+    # its history contained no ASSIGNED row and no synthesis attempt at all. That matters
+    # beyond bookkeeping — the verifier DEFAULT-PASSES a task with no criteria, so every
+    # one of the 109 v4→v6 tickets whose release mechanism is Queen assignment would
+    # arrive unverifiable by construction.
+    #
+    # The row is written here rather than by routing through assign_task because this
+    # handler is SYNCHRONOUS and checks board.assign's boolean to produce a precise
+    # refusal message (_why_unassignable). Routing would mean firing an async call and
+    # reporting success before knowing, which trades a real error message for tidier
+    # structure. Worth revisiting if a sync coordinator entry point appears.
+    d.task_history.append(task.id, TaskAction.ASSIGNED, actor="queen", detail=to_worker)
+
+    # Same scoping as _synthesize_criteria_if_missing: linked tasks only, and only when
+    # criteria are absent. Locally-created tasks already get criteria at creation, so
+    # widening this would add a model call to flows that never lacked them.
+    if getattr(task, "jira_key", "") and not task.acceptance_criteria:
+        _fire_async(d.tasks.apply_synthesized_criteria(task, actor="queen"))
 
     d.drone_log.add(
         SystemAction.OPERATOR,
