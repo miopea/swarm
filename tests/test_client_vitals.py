@@ -101,5 +101,7 @@ def test_the_dashboard_actually_sends_it():
 
     js = Path("src/swarm/web/static/dashboard.js").read_text(encoding="utf-8")
     assert "/api/client-vitals" in js, "nothing posts the heartbeat"
-    assert "setInterval(beat" in js, "the heartbeat fires once and never again"
+    # Matches the call, not its exact argument — the interval now also samples
+    # process memory, and pinning the literal made this red for a formatting reason.
+    assert "beat()" in js and "setInterval(" in js, "the heartbeat fires once and never again"
     assert "performance.memory" in js, "no heap reading — the number that settles it"

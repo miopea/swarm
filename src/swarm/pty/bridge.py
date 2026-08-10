@@ -138,6 +138,7 @@ async def _send_initial_view(
             _log.debug("holder replay snapshot failed; continuing", exc_info=True)
 
     snapshot = proc.subscribe_and_snapshot(ws) if terminal_cfg.replay_scrollback else b""
+    snapshot = _trim_replay(snapshot)
     if not terminal_cfg.replay_scrollback:
         # Still need to subscribe even when replay is disabled.
         proc.subscribe_ws(ws)
@@ -317,3 +318,37 @@ async def handle_terminal_ws(request: web.Request) -> web.WebSocketResponse:
             await ws.close()
 
     return ws
+
+
+# The ring buffer holds 1MB, and every attach shipped all of it. With attaches running
+# at 18-99/hour that is tens of megabytes an hour pushed into the browser as BINARY
+# WebSocket frames — ArrayBuffer backing stores, which live OUTSIDE the JS heap.
+#
+# That distinction is the whole story. A crash dump from the operator's Edge finally
+# named the failure: exception 0xE0000008 (Chromium's out-of-memory code) on a 2MB
+# allocation, while the dashboard heartbeat showed the JS heap flat at 17MB of a 4192MB
+# limit for five minutes beforehand. The heartbeat was reading usedJSHeapSize, which does
+# not count array buffers — it was blind to exactly the memory that ran out, and I twice
+# concluded "not memory" from it.
+#
+# 256KB still restores several screens of scrollback (~3,000 lines at 80 columns), which
+# is what an attaching terminal actually needs. The operator deferred this cap earlier —
+# correctly, since the churn was the bigger lever then — and the dump is what changed it.
+_MAX_REPLAY_BYTES = 256 * 1024
+
+
+def _trim_replay(snapshot: bytes) -> bytes:
+    """Keep the most recent slice of scrollback, cut at a line boundary.
+
+    Cutting mid-line would hand xterm a partial ANSI escape sequence, which it renders as
+    garbage or swallows along with the text after it — a corrupted first screen is worse
+    than a shorter one. Dropping to the first newline costs at most one line and
+    guarantees the frame starts somewhere the parser can begin.
+    """
+    if len(snapshot) <= _MAX_REPLAY_BYTES:
+        return snapshot
+    tail = snapshot[-_MAX_REPLAY_BYTES:]
+    nl = tail.find(b"\n")
+    # If there is no newline at all, the tail is one enormous line; sending it whole is
+    # still bounded, and trimming to nothing would be worse.
+    return tail[nl + 1 :] if 0 <= nl < len(tail) - 1 else tail

@@ -1395,6 +1395,19 @@
     // being used to diagnose.
     (function clientVitals() {
         var startedAt = Date.now();
+        // performance.measureUserAgentSpecificMemory() reports the WHOLE renderer's
+        // memory, array buffers included — the number usedJSHeapSize hides. It requires
+        // cross-origin isolation and is async, so it is sampled opportunistically into a
+        // global and read by the next beat rather than blocking one.
+        function sampleProcessMemory() {
+            try {
+                if (window.crossOriginIsolated && performance.measureUserAgentSpecificMemory) {
+                    performance.measureUserAgentSpecificMemory().then(function (r) {
+                        window.__swarmProcMB = Math.round(r.bytes / 1048576);
+                    }).catch(function () {});
+                }
+            } catch (_) { /* diagnostics never break the page */ }
+        }
         function beat() {
             var m = (window.performance && window.performance.memory) || null;
             var body = {
@@ -1407,6 +1420,24 @@
                 // path is live — the thing the crash turns on — rather than the vague
                 // 'canvas, .xterm' mix it replaced, which could not distinguish them.
                 canvases: document.querySelectorAll('canvas').length,
+                // THE BLIND SPOT THAT COST TWO WRONG DIAGNOSES. usedJSHeapSize counts
+                // ONLY the JS heap — ArrayBuffer backing stores are excluded, and the
+                // terminal replay arrives as BINARY WebSocket frames. So the heartbeat
+                // read a flat 17MB for five minutes while the renderer died of an
+                // out-of-memory (crash dump: exception 0xE0000008, 2MB allocation
+                // failed), and I twice concluded "not memory" from an instrument that
+                // could not see the memory in question.
+                //
+                // wsMB is cumulative bytes delivered over terminal sockets: not a
+                // measure of what is RETAINED, but a direct measure of the suspected
+                // source, and it can be compared against the replay cap to tell whether
+                // the cap is holding.
+                wsMB: Math.round((window.__swarmWsBytes || 0) / 1048576),
+                // A best-effort read of total process memory where the browser offers
+                // it. Absent on most configurations (needs crossOriginIsolated), hence
+                // reported as 0 rather than awaited — but when present it is the number
+                // that would have settled this on day one.
+                procMB: Math.round((window.__swarmProcMB || 0)),
                 uptimeS: Math.round((Date.now() - startedAt) / 1000),
                 panel: inPanelWindow(),
                 // Reported so the WebGL guard can be CONFIRMED from the operator's own
@@ -1426,7 +1457,7 @@
             } catch (e) { /* diagnostics must never break the page */ }
         }
         setTimeout(beat, 5000);
-        setInterval(beat, 30000);
+        setInterval(function () { sampleProcessMemory(); beat(); }, 30000);
     })();
 
     // --- HTMX partial fetchers ---
@@ -4648,6 +4679,10 @@
                 clearTimeout(entry.inputReadyTimer);
                 entry.inputReadyTimer = null;
             }
+            try {
+                var _n = (e.data && (e.data.byteLength || e.data.length)) || 0;
+                window.__swarmWsBytes = (window.__swarmWsBytes || 0) + _n;
+            } catch (_) { /* accounting must never break the terminal */ }
             function writeFrame(bytes) {
                 if (entry._firstData) {
                     entry._firstData = false;
