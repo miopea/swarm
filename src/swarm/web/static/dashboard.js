@@ -751,6 +751,18 @@
         };
 
         ws.onmessage = function(e) {
+            // THE LAST UNINSTRUMENTED CHANNEL. wsMB only ever wrapped the TERMINAL
+            // socket; this one — the dashboard event stream — was never counted, and it
+            // is the one place left where a page can grow the BROWSER process: frames
+            // arriving faster than this handler drains them are buffered there, not in
+            // the renderer. Which is exactly the observed shape: browser process at 5GB
+            // with sustained CPU while the renderer sits idle at 0% and 264MB, with
+            // storage, cache and network all measured empty.
+            try {
+                var _n = (e.data && (e.data.byteLength || e.data.length)) || 0;
+                window.__swarmMainWsBytes = (window.__swarmMainWsBytes || 0) + _n;
+                window.__swarmMainWsMsgs = (window.__swarmMainWsMsgs || 0) + 1;
+            } catch (_) { /* accounting must never break the event stream */ }
             try {
                 const data = JSON.parse(e.data);
                 handleEvent(data);
@@ -1444,6 +1456,9 @@
                 // source, and it can be compared against the replay cap to tell whether
                 // the cap is holding.
                 wsMB: Math.round((window.__swarmWsBytes || 0) / 1048576),
+                // The dashboard event stream, counted separately from the terminal.
+                evMB: Math.round((window.__swarmMainWsBytes || 0) / 1048576),
+                evMsgs: window.__swarmMainWsMsgs || 0,
                 // A best-effort read of total process memory where the browser offers
                 // it. Absent on most configurations (needs crossOriginIsolated), hence
                 // reported as 0 rather than awaited — but when present it is the number
