@@ -1,94 +1,58 @@
-"""The service worker must not cache unique-per-request URLs (browser-process leak).
+"""The service worker is disabled — a kill switch, and a diagnostic (#1359 crash work).
 
-THE REPORT: Edge climbing to 12-14GB with ALL extensions disabled and only Swarm open,
-reclaimed only by fully quitting the browser — never by reloading the page.
+WHY. With ONLY Swarm open, the operator's Edge BROWSER PROCESS climbed past 5GB at 4.3%
+sustained CPU and "very high" power, while the Swarm RENDERER sat at 264MB and 0% CPU.
+The page is not looping. Something between the page and the network/storage layer is —
+and the service worker is the only Swarm component living there: it intercepts every
+request and writes to Cache Storage, both of which are browser-process work.
 
-THE CAUSE. sw.js cached EVERY response in its catch-all branch:
+An earlier fix to its fetch handler (caching /api/health?_=<timestamp>, a unique URL per
+poll, into an unbounded cache) took the browser process from 12,316MB to 88.8MB in a
+controlled test. It was a real bug. It was evidently not the whole story.
 
-    caches.open(CACHE_NAME).then(c => c.put(req, clone));
+So the worker is removed rather than adjusted again. Six speculative fixes tonight was
+enough; this one answers a question either way:
+  - memory and CPU normalise  -> the worker is confirmed, restore it piece by piece
+  - they do not               -> the worker is exonerated and the search moves on
 
-``cache.put`` is keyed by URL, so that is bounded only while the URLs are. They are not —
-the dashboard polls ``/api/health?_=<Date.now()>``, a UNIQUE URL every call, so each poll
-wrote a permanent Cache Storage entry that nothing evicted.
-
-WHY IT TOOK ALL EVENING TO FIND. Cache Storage lives in the BROWSER process. Every
-instrument built during this investigation measured the renderer: JS heap (flat at 17MB
-of a 4192MB limit), DOM nodes (~1,450), canvases, WebSocket bytes. All flat, all correct,
-all irrelevant. The operator's own Task Manager screenshot is what localised it — Swarm's
-renderer at 116MB beside a 12,316MB browser process — and that is the reading no
-page-side counter could ever have produced.
+COST: the PWA loses offline support and app-shell precaching. The app is fully
+server-rendered and does not otherwise depend on it.
 """
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 _SW = Path("src/swarm/web/static/sw.js").read_text(encoding="utf-8")
-_JS = Path("src/swarm/web/static/dashboard.js").read_text(encoding="utf-8")
 
 
-def test_the_cache_is_restricted_to_static_assets():
-    """THE FIX. API responses are live state; caching them durably is both a leak and a
-    correctness bug waiting to happen."""
-    assert "cacheUrl.pathname.startsWith('/static/')" in _SW, (
-        "the service worker caches beyond /static/ again — API responses will accumulate"
+def test_the_worker_unregisters_itself():
+    """THE KILL SWITCH. Shipping a worker that merely does less would leave it in the
+    request path, which is the thing under suspicion."""
+    assert "self.registration.unregister()" in _SW, (
+        "the worker does not remove itself; requests still route through it"
     )
 
 
-def test_cache_busted_urls_are_never_cached():
-    """The specific shape that caused it: a `_=<timestamp>` parameter makes every request
-    a distinct cache key, so caching them grows without bound by construction."""
-    assert "cacheUrl.searchParams.has('_')" in _SW, (
-        "cache-busted URLs are cacheable again; each poll becomes a permanent entry"
+def test_it_has_no_fetch_handler():
+    """A fetch handler is what puts it in the path of every request. Its absence is the
+    property that matters, not any particular caching policy."""
+    assert "addEventListener('fetch'" not in _SW, (
+        "a fetch handler is back — the worker is intercepting requests again"
     )
 
 
-def test_non_cacheable_requests_still_work_offline():
-    """The cache was also the offline fallback. Skipping the WRITE must not skip the
-    READ, or turning this leak off would break offline use as a side effect."""
-    i = _SW.index("if (!cacheable)")
-    branch = _SW[i : i + 200]
-    assert "caches.match(req)" in branch, (
-        "non-cacheable requests no longer fall back to cache when the network fails"
+def test_it_deletes_every_cache_it_ever_made():
+    """Unregistering alone leaves the accumulated Cache Storage on disk and in the
+    browser process. The point is to reclaim it, not just to stop adding."""
+    assert "caches.keys()" in _SW and "caches.delete" in _SW, (
+        "old caches are not deleted; the banked entries stay"
     )
 
 
-def test_the_polling_url_that_caused_it_still_exists():
-    """A POSITIVE CONTROL on the premise. If the health poll stopped being cache-busted,
-    every test above would pass while describing a problem that no longer exists — and
-    the next person would not know why the restriction is there."""
-    assert re.search(r"/api/health\?_=' \+ Date\.now\(\)", _JS), (
-        "the cache-busted health poll is gone; re-read this file before trusting it"
-    )
-
-
-def test_only_the_app_shell_is_precached():
-    """Bounding the runtime cache is pointless if install-time precaching is unbounded."""
-    m = re.search(r"APP_SHELL\s*=\s*\[(.*?)\]", _SW, re.S)
-    assert m, "APP_SHELL is gone"
-    entries = [e for e in m.group(1).split(",") if e.strip()]
-    assert len(entries) < 20, f"the precache list has grown to {len(entries)} entries"
-
-
-def test_the_cache_version_was_bumped_past_the_leaking_one():
-    """CLEARING WHAT IS ALREADY BANKED. The fetch-handler fix stops NEW entries; it does
-    not remove the gigabytes v22 accumulated. The activate handler deletes every cache
-    whose name differs from CACHE_NAME, so renaming is what actually reclaims them —
-    and it does so on the next load, with no manual "clear site data" step.
-    """
-    m = re.search(r"CACHE_NAME = 'swarm-v(\d+)'", _SW)
-    assert m, "CACHE_NAME is gone or renamed"
-    assert int(m.group(1)) >= 23, (
-        f"still on swarm-v{m.group(1)} — the leaking cache is never evicted"
-    )
-
-
-def test_the_activate_handler_still_evicts_old_caches():
-    """A POSITIVE CONTROL on the bump. Renaming reclaims nothing if the eviction that
-    depends on it is removed, and the two live in different parts of the file."""
-    i = _SW.index("addEventListener('activate'")
-    block = _SW[i : i + 300]
-    assert "caches.delete" in block and "!== CACHE_NAME" in block, (
-        "old caches are no longer deleted on activate; the version bump reclaims nothing"
-    )
+def test_it_takes_effect_without_a_second_reload():
+    """skipWaiting + navigating existing clients. Without both, the OLD worker keeps
+    control until every window is closed — and the operator would reasonably conclude
+    the fix did nothing."""
+    assert "skipWaiting()" in _SW, "the new worker waits for the old one to release"
+    assert "clients.matchAll" in _SW, "open windows are never moved off the old worker"
