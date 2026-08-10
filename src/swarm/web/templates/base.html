@@ -1440,8 +1440,20 @@
            the caret then follows immediately. Neutral colours so it does not read as
            another orange action button beside "+ New Task". */
         .btn.btn-icon {
+            /* METRICS MATCH .btn-sm EXACTLY (0.2rem 0.5rem / 0.75rem). They did not:
+               a larger font-size plus an explicit line-height gave this button a taller
+               box than its siblings, so it sat off their baseline in the header row —
+               visible on mobile, where the row is tight and there is no slack to hide it
+               (operator, #1359 email 4: "that was not vertically aligned in mobile like
+               the other buttons").
+               inline-flex + center so the glyph is centred in the box rather than
+               sitting on a text baseline, which is what made a bare arrow look low even
+               once the box heights agreed. */
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
             min-width: 1.9rem; padding: 0.2rem 0.5rem;
-            font-size: 0.8rem; line-height: 1.2;
+            font-size: 0.75rem; line-height: 1;
             background: transparent; color: var(--muted);
             border: 1px solid var(--border); border-radius: 4px;
             margin-left: auto; flex-shrink: 0;

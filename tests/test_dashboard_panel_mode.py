@@ -305,3 +305,35 @@ def test_the_popped_out_window_never_writes_the_collapse_preference():
     assert body.index("inPanelWindow()") < body.index("if (persist)"), (
         "persistence is decided before the panel-window guard runs"
     )
+
+
+def test_the_icon_button_matches_its_siblings_metrics():
+    """#1359 email 4 — the one I wrongly recorded as "nothing actionable".
+
+    That email arrived with a dashboard link and no body, so I filled the gap with an
+    assumption instead of asking. The operator later said what it meant: "that was not
+    vertically aligned in mobile like the other buttons".
+
+    The cause is measurable rather than aesthetic. .btn-icon used font-size 0.8rem with
+    line-height 1.2 while every sibling is .btn-sm at 0.75rem, so its box was taller and
+    it sat off their baseline in the header row — invisible on desktop, where the row has
+    slack, and obvious on mobile where it does not.
+    """
+    css = Path("src/swarm/web/templates/base.html").read_text(encoding="utf-8")
+
+    sm = re.search(r"\.btn-sm \{([^}]*)\}", css)
+    assert sm, ".btn-sm is gone; this comparison no longer means anything"
+    sm_font = re.search(r"font-size:\s*([\d.]+rem)", sm.group(1)).group(1)
+
+    i = css.index(".btn.btn-icon {")
+    icon = css[i : css.index("}", i)]
+    icon_font = re.search(r"font-size:\s*([\d.]+rem)", icon).group(1)
+
+    assert icon_font == sm_font, (
+        f"the icon button is {icon_font} against its siblings' {sm_font}; a different "
+        "box height puts it off their baseline"
+    )
+    assert "align-items: center" in icon, (
+        "the glyph sits on a text baseline rather than centred in its box, which reads "
+        "as misaligned even when the heights match"
+    )
