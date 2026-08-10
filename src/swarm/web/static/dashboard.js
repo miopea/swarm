@@ -8632,13 +8632,24 @@
     window.addNotification = addNotification;
 
     function startTitleFlash(count) {
+        // EXPERIMENT, not a proven fix (2026-08-10). The operator's browser process is
+        // consuming 6.7GB of SQLite — measured in their own trace — while the renderer,
+        // GPU, storage APIs, cache, network and service worker are all clean. What
+        // writes that database has NOT been measured; these two calls are suspects
+        // because they are per-event browser-process writes, and a server-side change
+        // earlier today (the classifier fix, which stopped workers being stuck at
+        // BUZZING) turned this event path from near-dormant into continuous.
+        //
+        // This used to rewrite document.title EVERY SECOND, indefinitely, for as long as
+        // an event went unacknowledged. Each assignment is an IPC to the browser
+        // process, which records the page title in its History database. Setting the
+        // count once conveys the same thing and writes once.
+        //
+        // If memory still climbs with this out, the theory is wrong and these calls are
+        // exonerated — which is worth as much as a fix.
         pendingTitleCount = count;
-        if (titleFlashTimer) clearInterval(titleFlashTimer);
-        var show = true;
-        titleFlashTimer = setInterval(function() {
-            document.title = show ? '(' + pendingTitleCount + ') Event \u2014 Bee Hive' : ORIGINAL_TITLE;
-            show = !show;
-        }, 1000);
+        if (titleFlashTimer) { clearInterval(titleFlashTimer); titleFlashTimer = null; }
+        document.title = '(' + pendingTitleCount + ') Bee Hive';
     }
 
     function stopTitleFlash() {
@@ -8651,6 +8662,13 @@
     }
 
     function updateAppBadge(count) {
+        // DISABLED as part of the same experiment. For an INSTALLED PWA the badge is
+        // persisted by the browser, so every call is a browser-process write — and this
+        // fired on every event, which is now a continuous stream.
+        //
+        // Left as a no-op rather than deleted so restoring it is one line if the trace
+        // clears it. Guarded by a flag so re-enabling is deliberate.
+        if (!window.__swarmAppBadgeEnabled) return;
         if ('setAppBadge' in navigator) {
             if (count > 0) {
                 navigator.setAppBadge(count).catch(function() {});
