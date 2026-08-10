@@ -13376,14 +13376,25 @@
         if (!w) return;   // popup blocked — leave the main panel alone, it is all there is
         try { w.focus(); } catch (_) {}
         // The point of popping out is to get the panel OFF this window, so collapse it
-        // here. Persisted (the `true`), so it stays collapsed across a reload the same
-        // way the caret would — the operator moved the panel, they did not hide it once.
+        // here — but NOT persisted (#1360). It used to pass `true` for persist, which
+        // overwrote the operator's own stored collapse preference. The visible effect
+        // was right (the panel stayed collapsed across reloads) and the meaning was
+        // wrong: closing the pop-out never restored the preference, so a click labelled
+        // "pop out" silently became "minimize this panel forever", and the caret's
+        // behaviour changed with no way to tell why.
+        //
+        // Session-only collapse keeps the intent honest. The panel returns to whatever
+        // the operator actually chose on the next load. What this deliberately does NOT
+        // do is track the pop-out's lifetime — reloading the main window while the
+        // pop-out is open shows the panel again. That is the remaining gap, and it needs
+        // a live cross-window signal rather than a flag; judged not worth the shared-
+        // localStorage hazard that has already produced two bugs in this control.
         //
         // window.-qualified because this runs in the Command Center IIFE and
         // setBottomCollapsed is defined in the main one: a bare call throws
         // ReferenceError and takes the rest of this function with it. Guarded, so a
         // load order where the main IIFE has not run yet still opens the window.
-        if (window.setBottomCollapsed) { window.setBottomCollapsed(true, true); }
+        if (window.setBottomCollapsed) { window.setBottomCollapsed(true, false); }
     };
 
     if (document.readyState === 'loading') {

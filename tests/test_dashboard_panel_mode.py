@@ -251,13 +251,16 @@ def test_popping_out_collapses_the_panel_in_the_main_window():
     minimize." The whole point is to move the panel off this window, so leaving a second
     live copy behind means two renderers competing for the same screen space.
 
-    Persisted (the `true` second argument) so it stays collapsed across a reload exactly
-    as the caret would — the operator MOVED the panel, they did not hide it once.
+    NOT persisted (#1360): writing the preference made closing the pop-out leave the
+    panel minimized forever, which silently redefined what the caret does.
     """
     js = Path("src/swarm/web/static/dashboard.js").read_text(encoding="utf-8")
     i = js.index("window.popOutTasks = function")
     body = js[i : js.index("\n    };", i)]
-    assert "window.setBottomCollapsed(true, true)" in body, body
+    # persist=FALSE (#1360). Passing true overwrote the operator's own stored collapse
+    # preference: the panel stayed collapsed across reloads, closing the pop-out never
+    # restored it, and a click labelled "pop out" silently became "minimize forever".
+    assert "window.setBottomCollapsed(true, false)" in body, body
 
 
 def test_a_blocked_popup_leaves_the_main_panel_alone():
