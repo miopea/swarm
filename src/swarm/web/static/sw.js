@@ -96,6 +96,35 @@ self.addEventListener('fetch', e => {
     return;
   }
 
+  // THE MEMORY LEAK (operator: browser climbing to 12-14GB with all extensions
+  // disabled, only Swarm open).
+  //
+  // This branch used to cache EVERY response, keyed by URL. That is bounded only while
+  // the URLs are. They are not: the dashboard polls
+  //     /api/health?_=<Date.now()>
+  // which is a UNIQUE URL on every call, so each poll wrote a permanent new Cache
+  // Storage entry that nothing ever evicted.
+  //
+  // Cache Storage lives in the BROWSER process, which is exactly why this was so hard
+  // to see: the renderer stayed at 116MB, page reloads never freed it (the cache
+  // outlives the page), only a full browser exit reclaimed it, and heap/DOM/socket
+  // counters all read flat throughout.
+  //
+  // API responses have no business in a durable cache anyway — they are live state, and
+  // serving a stale one from cache would be its own bug. Only same-origin GETs for
+  // static assets are cached now; everything else goes straight to the network, falling
+  // back to any cache entry only when offline.
+  const cacheUrl = new URL(req.url);
+  const cacheable = req.method === 'GET'
+    && cacheUrl.origin === self.location.origin
+    && cacheUrl.pathname.startsWith('/static/')
+    && !cacheUrl.searchParams.has('_');
+
+  if (!cacheable) {
+    e.respondWith(fetch(req).catch(() => caches.match(req)));
+    return;
+  }
+
   e.respondWith(
     fetch(req).then(resp => {
       const clone = resp.clone();
