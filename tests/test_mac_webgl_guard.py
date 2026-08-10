@@ -79,31 +79,36 @@ def test_webgl_is_disabled_outright():
     trade — "perf is a non-issue for viewing worker output" — and a measured crash
     outranks an optimisation nobody asked for.
     """
-    assert re.search(r"var _webglDisabled = true;", _JS), (
-        "WebGL is no longer disabled by default; the GPU-process crash comes back"
+    # REVERTED 2026-08-10: disabling the GPU renderers dropped xterm to its DOM
+    # renderer, which allocates DOM elements per character cell — the operator's browser
+    # hit ELEVEN GIGABYTES at ~1%/second while heap, wsMB and canvases all sat flat.
+    # A 6-9 minute crash cadence is bad; 11GB in two minutes is worse. The flag stays in
+    # place so the switch is one line, but it is OFF.
+    assert re.search(r"var _webglDisabled = false;", _JS), (
+        "GPU renderers are disabled again — that caused an 11GB DOM-renderer blowup"
     )
     assert re.search(r"if\s*\(\s*!_webglDisabled\s*&&\s*!_isMac[^)]*WebglAddon", _JS), (
         "the WebGL branch no longer consults the disable flag"
     )
 
 
-def test_disabling_webgl_falls_through_to_the_dom_renderer_not_canvas():
-    """Canvas is also a GPU path, so falling back to it would keep the same exposure.
+def test_the_canvas_fallback_is_reachable_again():
+    """WHY THE REVERT MATTERS. With the GPU renderers off, xterm used its DOM renderer —
+    a DOM element per character cell — and the operator's browser climbed to ELEVEN
+    GIGABYTES at ~1%/second while heap, wsMB and canvases all read flat. DOM memory is
+    C++ memory; not one of the counters added during this investigation could see it.
 
-    The Canvas fallbacks live INSIDE the WebGL branch, so skipping the branch skips them
-    too and xterm uses its DOM renderer. Asserted because someone hoisting a Canvas
-    fallback "for perf" would silently reopen this.
+    So WebGL->Canvas is restored on non-Mac platforms. The 6-9 minute crash cadence it
+    carries is a real problem and still open — but it is far better than 11GB in two
+    minutes, and reverting to the known-prior behaviour is the right move with the true
+    cause still unidentified.
     """
-    i = _JS.index("var _webglDisabled = true;")
+    i = _JS.index("var _webglDisabled")
     j = _JS.index("// Custom link provider", i)
     block = _JS[i:j]
-    canvas_uses = block.count("new CanvasAddon.CanvasAddon()")
-    assert canvas_uses > 0, "the block moved; re-read before trusting this test"
-    # Every Canvas construction must sit inside the WebGL branch that is now skipped.
-    branch = block[block.index("if (!_webglDisabled") :]
-    assert branch.count("new CanvasAddon.CanvasAddon()") == canvas_uses, (
-        "a Canvas renderer is constructed outside the disabled WebGL branch, so the GPU "
-        "path is still reachable"
+    assert "new CanvasAddon.CanvasAddon()" in block, (
+        "the Canvas fallback is gone; a WebGL context loss would drop to the DOM "
+        "renderer, which is what blew up to 11GB"
     )
 
 

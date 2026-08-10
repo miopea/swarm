@@ -1420,6 +1420,17 @@
                 // path is live — the thing the crash turns on — rather than the vague
                 // 'canvas, .xterm' mix it replaced, which could not distinguish them.
                 canvases: document.querySelectorAll('canvas').length,
+                // LIVE DOM NODE COUNT. The third blind spot: DOM nodes live in C++
+                // memory, not the JS heap, so a document that grows without bound is
+                // invisible to usedJSHeapSize exactly as array buffers were. This
+                // dashboard replaces the ENTIRE worker-list partial every few seconds,
+                // so an htmx swap that fails to release what it replaced accumulates
+                // silently — and the operator reports the process leaking while both
+                // heap and wsMB sit flat.
+                // A rising number here means the live document is growing. A FLAT number
+                // with memory still climbing means DETACHED nodes are being retained,
+                // which is a different bug and needs a heap snapshot to localise.
+                nodes: document.getElementsByTagName('*').length,
                 // THE BLIND SPOT THAT COST TWO WRONG DIAGNOSES. usedJSHeapSize counts
                 // ONLY the JS heap — ArrayBuffer backing stores are excluded, and the
                 // terminal replay arrives as BINARY WebSocket frames. So the heartbeat
@@ -4241,7 +4252,22 @@
         // optimisation nobody asked for, the default flips. `_isMac` is kept and fixed
         // (it was case-sensitive and never matched "macOS") so re-enabling per-platform
         // stays possible, but nothing takes the GPU path by default.
-        var _webglDisabled = true;
+        // REVERTED, IMMEDIATELY, and this is my regression to own.
+        //
+        // Disabling both GPU renderers dropped xterm to its DOM renderer, which
+        // materialises DOM elements per character cell. With a full-size terminal and a
+        // 5000-line scrollback that allocates without bound, in C++ DOM memory — which
+        // none of heap/wsMB/canvases can see. The operator watched the browser climb to
+        // ELEVEN GIGABYTES at ~1%/second while every counter I had added sat flat.
+        //
+        // Windows had WebGL->Canvas before and crashed every 6-9 minutes; that is bad,
+        // but it is far better than 11GB in two minutes. Restoring the prior behaviour
+        // is the correct move while the real cause is still open.
+        //
+        // The _isMac fix stays: it was a genuine bug (case-sensitive match never hit
+        // "macOS") and macOS keeps the DOM renderer, which is where that carve-out came
+        // from and where terminals are typically smaller.
+        var _webglDisabled = false;
         if (!_webglDisabled && !_isMac && typeof WebglAddon !== 'undefined' && WebglAddon.WebglAddon) {
             try {
                 rendererAddon = new WebglAddon.WebglAddon();

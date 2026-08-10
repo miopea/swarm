@@ -432,7 +432,7 @@ async def handle_client_vitals(request: web.Request) -> web.Response:
     # explicitly rather than dumping the whole body, so the line stays greppable.
     log.warning(
         "[client-vitals] heap=%.1fMB/%.1fMB wsMB=%d procMB=%d terms=%d canvases=%d "
-        "uptime=%.0fs panel=%s "
+        "nodes=%d uptime=%.0fs panel=%s "
         "plat=%s webgl=%s",
         _num("heapMB"),
         _num("heapLimitMB"),
@@ -440,6 +440,7 @@ async def handle_client_vitals(request: web.Request) -> web.Response:
         int(_num("procMB")),
         int(_num("terms")),
         int(_num("canvases")),
+        int(_num("nodes")),
         _num("uptimeS"),
         bool(body.get("panel")),
         str(body.get("plat") or "?")[:32],
