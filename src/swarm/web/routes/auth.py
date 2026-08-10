@@ -154,11 +154,19 @@ async def handle_jira_auth_status(request: web.Request) -> web.Response:
                 "configured": False,
             }
         )
+    # `enabled` is reported alongside `connected` because they are INDEPENDENT and the
+    # UI showed only the first. A user authorised OAuth, saw a green "Connected — OAuth
+    # active" banner, and then every action failed with "Jira integration not enabled" —
+    # which is a different flag (the integration's enabled checkbox) that every
+    # /api/jira/* route gates on. The banner could not say so because this payload never
+    # carried it, so the screen contradicted itself with no way to tell where to look.
+    jira = getattr(d, "jira", None)
     return web.json_response(
         {
             "connected": d.jira_mgr.is_connected(),
             "configured": True,
             "cloud_id": d.jira_mgr.cloud_id,
+            "enabled": bool(getattr(jira, "enabled", False)),
         }
     )
 

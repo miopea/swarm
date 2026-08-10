@@ -3319,7 +3319,22 @@
                 var guide = document.getElementById('jira-setup-guide');
                 var hint = document.getElementById('jira-help-hint');
                 if (!el) return;
-                if (data.connected) {
+                if (data.connected && data.enabled === false) {
+                    // CONNECTED BUT SWITCHED OFF. OAuth and the integration's `enabled`
+                    // flag are independent: every /api/jira/* route gates on `enabled`,
+                    // so a user could authorise successfully, see a green banner, and
+                    // have "Discover workflow" fail with "Jira integration not enabled"
+                    // — with nothing on screen pointing at the checkbox that fixes it.
+                    // Amber, not green: the connection is real but nothing will work.
+                    el.style.borderColor = 'var(--honey)';
+                    el.innerHTML = '<span class="status-warn">&#9888; Connected, but the Jira integration is switched OFF</span>'
+                        + ' — OAuth is fine' + (data.cloud_id ? ' (cloud: ' + data.cloud_id.substring(0,8) + '&hellip;)' : '')
+                        + '. Tick <strong>enabled</strong> above and save, or Discover/Sync will keep refusing.';
+                    if (connectBtn) connectBtn.style.display = 'none';
+                    if (disconnectBtn) disconnectBtn.style.display = 'inline-block';
+                    if (guide) guide.removeAttribute('open');
+                    if (hint) hint.style.display = 'block';
+                } else if (data.connected) {
                     el.style.borderColor = 'var(--leaf)';
                     el.innerHTML = '<span class="status-connected">&#10003; Connected</span> — OAuth active' + (data.cloud_id ? ' (cloud: ' + data.cloud_id.substring(0,8) + '&hellip;)' : '');
                     if (connectBtn) connectBtn.style.display = 'none';

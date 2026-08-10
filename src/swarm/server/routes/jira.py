@@ -26,6 +26,16 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/tasks/{task_id}/jira/refresh", handle_jira_refresh)
 
 
+# The message a user actually hits after a SUCCESSFUL OAuth connection, so it has to say
+# where to look. "Jira integration not enabled" alone reads as "your connection failed"
+# when the connection is fine and a separate checkbox is off.
+_NOT_ENABLED = (
+    "Jira integration is switched off. OAuth may be connected, but the integration's "
+    "'enabled' setting is off — tick it in Settings → Integrations → Jira and save, "
+    "then retry."
+)
+
+
 @handle_errors
 async def handle_jira_status(request: web.Request) -> web.Response:
     """Return Jira sync service status."""
@@ -42,7 +52,7 @@ async def handle_jira_sync(request: web.Request) -> web.Response:
     d = get_daemon(request)
     jira = getattr(d, "jira", None)
     if jira is None or not jira.enabled:
-        return json_error("Jira integration not enabled", status=400)
+        return json_error(_NOT_ENABLED, status=400)
     count = await d.jira_svc.run_import()
     return web.json_response({"imported": count})
 
@@ -55,7 +65,7 @@ async def handle_jira_import_by_key(request: web.Request) -> web.Response:
     d = get_daemon(request)
     jira = getattr(d, "jira", None)
     if jira is None or not jira.enabled:
-        return json_error("Jira integration not enabled", status=400)
+        return json_error(_NOT_ENABLED, status=400)
 
     data = await request.post()
     raw = (data.get("key") or "").strip()
@@ -114,7 +124,7 @@ async def handle_jira_refresh(request: web.Request) -> web.Response:
     task_id = request.match_info["task_id"]
     jira = getattr(d, "jira", None)
     if jira is None or not jira.enabled:
-        return json_error("Jira integration not enabled", status=400)
+        return json_error(_NOT_ENABLED, status=400)
     task = d.task_board.get(task_id)
     if not task:
         return json_error("Task not found", status=404)
@@ -141,7 +151,7 @@ async def handle_jira_create(request: web.Request) -> web.Response:
     task_id = request.match_info["task_id"]
     jira = getattr(d, "jira", None)
     if jira is None or not jira.enabled:
-        return json_error("Jira integration not enabled", status=400)
+        return json_error(_NOT_ENABLED, status=400)
     task = d.task_board.get(task_id)
     if not task:
         return json_error("Task not found", status=404)
@@ -197,7 +207,7 @@ async def handle_jira_discover(request: web.Request) -> web.Response:
         return json_error("project is required", status=400)
     jira = getattr(d, "jira", None)
     if jira is None or not jira.enabled:
-        return json_error("Jira integration not enabled", status=400)
+        return json_error(_NOT_ENABLED, status=400)
     return web.json_response(await jira.discover_workflow(project))
 
 
@@ -212,7 +222,7 @@ async def handle_jira_plan(request: web.Request) -> web.Response:
     d = get_daemon(request)
     svc = getattr(d, "jira_svc", None)
     if svc is None:
-        return json_error("Jira integration not enabled", status=400)
+        return json_error(_NOT_ENABLED, status=400)
     plan = svc.plan_exports()
     return web.json_response(
         {
@@ -243,7 +253,7 @@ async def handle_jira_confirm(request: web.Request) -> web.Response:
 
     cfg = getattr(getattr(d, "jira", None), "_config", None)
     if cfg is None:
-        return json_error("Jira integration not enabled", status=400)
+        return json_error(_NOT_ENABLED, status=400)
 
     cfg.project_status_maps[project] = {str(k): str(v) for k, v in status_map.items()}
     if project not in cfg.confirmed_projects:
