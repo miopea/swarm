@@ -2141,6 +2141,30 @@
         .tuning-grid input, .tuning-grid textarea { width: 100%; min-width: 0; box-sizing: border-box; }
         .tuning-grid textarea { font-family: monospace; font-size: 0.8rem; resize: vertical; }
         .tuning-grid .tuning-default { color: var(--muted); opacity: 0.7; }
+        /* Jira provenance on a task row (#1359). The operator watched the first
+           synced ticket arrive and could not tell it came from Jira, nor reach it:
+           "there is nothing in the issue that links back to the jira ticket". The key
+           was in the payload all along and was never rendered.
+           Styled as a link, not a button — it navigates away, and dressing navigation
+           as an action is how people end up clicking it expecting a dialog. */
+        .jira-badge {
+            display: inline-block;
+            font-family: monospace;
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 1px 5px;
+            margin-right: 0.35rem;
+            border-radius: 3px;
+            border: 1px solid var(--lavender);
+            color: var(--lavender);
+            text-decoration: none;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        a.jira-badge:hover { background: var(--lavender); color: var(--hive-bg); }
+        /* No site URL recorded: still show provenance, but do not imply a link. */
+        .jira-badge-plain { border-style: dashed; opacity: 0.75; cursor: help; }
+
         .badge-builtin { background: var(--leaf); color: #1a1a0e; font-size: 0.75rem; padding: 1px 6px; border-radius: 3px; }
         .badge-tuned { background: var(--honey); color: #1a1a0e; font-size: 0.75rem; padding: 1px 6px; border-radius: 3px; }
 

@@ -49,6 +49,25 @@
         {% if t.source_worker %}<span class="task-source">from {{ t.source_worker }}</span>{% endif %}
         {% if t.target_worker %}<span class="task-target">&rarr; {{ t.target_worker }}</span>{% endif %}
         {% endif %}
+        {# JIRA PROVENANCE (#1359). The operator saw the first synced ticket land and
+           reported that "there is nothing in the issue that links back to the jira
+           ticket ... except a little text" — the only trace was prose under the
+           `--- Jira sync ---` marker in the description. jira_key was in the task
+           payload the whole time and simply never rendered.
+           The key IS the link when a site URL is known; when Jira is connected but the
+           site was never recorded (tokens predating that field), it still renders as a
+           badge so provenance is visible rather than silently absent. #}
+        {% if t.jira_key %}
+        {% if jira_site_url %}
+        <a class="jira-badge" href="{{ jira_site_url }}/browse/{{ t.jira_key }}"
+           target="_blank" rel="noopener"
+           title="Open {{ t.jira_key }} in Jira — this task is synced from Jira"
+           onclick="event.stopPropagation()">{{ t.jira_key }}</a>
+        {% else %}
+        <span class="jira-badge jira-badge-plain"
+              title="Synced from Jira ({{ t.jira_key }}) — no site URL recorded, reconnect Jira to enable the link">{{ t.jira_key }}</span>
+        {% endif %}
+        {% endif %}
         <span class="task-title">{{ t.title }}</span>
         {% if t.assigned_worker %}
         <span class="task-worker">&rarr; {{ t.assigned_worker }}</span>

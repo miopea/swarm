@@ -1279,7 +1279,7 @@
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.19.0/lib/addon-webgl.min.js" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-canvas@0.7.0/lib/addon-canvas.min.js" crossorigin="anonymous" defer></script>
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-serialize@0.14.0/lib/addon-serialize.min.js" crossorigin="anonymous" defer></script>
-<script id="swarm-config" type="application/json" nonce="{{ csp_nonce }}">{"groups":{{ groups|map(attribute='name')|list|tojson }},"wsToken":{{ ws_token|tojson }},"termDebug":{{ 'true' if is_dev else 'false' }},"buildSha":{{ build_sha|tojson }},"tunnelUrl":{{ tunnel.url|tojson }},"workerCount":{{ worker_count|tojson }},"providers":{{ providers|tojson }}}</script>
+<script id="swarm-config" type="application/json" nonce="{{ csp_nonce }}">{"groups":{{ groups|map(attribute='name')|list|tojson }},"wsToken":{{ ws_token|tojson }},"termDebug":{{ 'true' if is_dev else 'false' }},"buildSha":{{ build_sha|tojson }},"tunnelUrl":{{ tunnel.url|tojson }},"workerCount":{{ worker_count|tojson }},"providers":{{ providers|tojson }},"jiraSiteUrl":{{ (jira_site_url or '')|tojson }}}</script>
 <script src="/static/dashboard.js?v={{ build_sha or version }}" nonce="{{ csp_nonce }}" defer></script>
 
 {% endblock %}

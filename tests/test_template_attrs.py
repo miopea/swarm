@@ -146,7 +146,16 @@ def test_theme_reaches_login_offline_and_pwa_shell():
 
     assert "/static/theme.js" in login
     assert "/static/theme.js" in offline
-    assert "'/static/theme.js'" in service_worker
+    # The service worker no longer carries an inline offline shell — it is a no-op that
+    # unregisters itself, and base.html stopped registering it (PR #11), because a
+    # kill-switch worker that navigates its clients on activate plus a page that
+    # re-registers it every load is an unbounded loop. So there is no SW-served offline
+    # page whose theme could be asserted; /static/offline.html above is the only offline
+    # surface left, and it is checked directly.
+    assert "addEventListener('fetch'" not in service_worker, (
+        "the service worker serves content again — if it serves an offline shell, that "
+        "shell needs /static/theme.js or it renders unthemed"
+    )
     assert '"background_color": "#15130F"' in pwa_route
     assert '"theme_color": "#F1B83D"' in pwa_route
 
