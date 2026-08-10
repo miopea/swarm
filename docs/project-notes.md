@@ -564,6 +564,55 @@ Reload does NOT clear Claude Code session state (queued messages in `~/.claude/s
 
 ---
 
+### Debugging the dashboard: what the tests cannot see (2026-08-10)
+
+**Source-scan tests do not prove anything renders.** `tests/test_dashboard_panel_mode.py`
+and friends read the template/JS as text. In one session three separate defects passed
+every one of those assertions and were caught only by a real browser:
+
+- an unclosed `<div>` in `partials/worker_list.html` reparented the whole page into
+  `.worker-switcher`, which is `display:none` above mobile width — the entire dashboard
+  vanished
+- the mobile selector was clipped to a ~45px row by **two ancestors**
+  (`.panel { overflow:hidden }` and the pill scroller's `overflow-y:hidden`), leaving
+  14 of 16 workers unreachable while every worker was present in the DOM
+- the selector's trigger appeared to ignore taps, because its label is server-rendered
+  and only refreshed on the next partial swap
+
+**Do not measure clipping with `bounding_box()` or Playwright's `is_visible()`.** An
+element clipped by an ancestor keeps its full layout box, so both report a cropped row as
+present and correct. Two drafts of a clipping test passed with the fix REMOVED. The honest
+measure is `elementFromPoint` at the element's centre, walked across the container's own
+scroll range — `tests/test_worker_selector_browser.py` does this and names the rows it
+loses. Run the negative control; it is what surfaced the mistake.
+
+**Browser memory does not live where the page can see it.** `performance.memory
+.usedJSHeapSize` counts ONLY the JS heap — not ArrayBuffer backing stores, not DOM nodes
+(C++), and nothing in the browser process. A session spent hours concluding "not memory"
+from a flat 17MB reading while the *browser process* grew past 12GB. `/api/client-vitals`
+(routes/system.py) exists for this: the dashboard posts heap, WS bytes, DOM node count,
+canvas count, platform and renderer every 30s, logged at WARNING so it **survives a tab
+crash** — the last line before a gap is the trajectory. When the operator reports browser
+memory, ask for the per-process breakdown (Task Manager) FIRST; renderer-vs-browser-process
+is usually the whole answer.
+
+### Two running instances, and only one tracks your edits
+
+`swarm serve` runs from **two different code paths** and they update differently:
+
+- the daemon started via `uv run` uses the project venv, an **editable** install — it
+  always reflects the working tree, which is why a dashboard Reload picks up JS/template
+  edits immediately
+- the PTY-holder instance runs from `~/.local/share/uv/tools/swarm-ai/` — a **copied**
+  install that a Reload does *not* reliably refresh, because `_best_effort_reinstall`
+  time-boxes at 30s and **swallows failures by design**
+
+A stale module there ran 6-day-old code for hours, throwing ~148 `TypeError`/minute while
+every reload appeared to succeed. Symptoms: an exception loop in `~/.swarm/swarm.log` that
+survives reloads. Fix: `uv cache clean swarm-ai && uv tool install --no-cache --force .`,
+then `swarm holder-restart` — which restarts the holder **preserving worker child
+processes**, so it is safe and does not take the fleet down. Do not kill the holder PID.
+
 ## 9. Swarm / Conductor
 
 ### Headless Conductor Pattern

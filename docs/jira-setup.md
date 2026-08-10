@@ -95,7 +95,15 @@ When the plan looks right, turn **read-only off**. Writes begin on the next cycl
 ## What you will see afterwards
 
 - Tickets assigned to you appear as tasks, with their description, comments and
-  attachments mirrored.
+  attachments mirrored. **The ticket key shows on the task row and links straight to
+  Jira** — that badge is how you tell a synced task from a local one at a glance. If it
+  renders as a dashed badge with no link, Swarm has the key but never recorded your site
+  URL; reconnecting Jira fixes it, and nothing else is affected.
+- **Acceptance criteria are synthesized** for a linked task that has none, at two points:
+  when it is assigned, and when a Swarm-created task is first linked to a ticket. The
+  second exists because a task created here is assigned *before* the link exists, so the
+  assign-time pass has no Jira context to work from. A task that already has criteria
+  never triggers another model call.
 - **New comments keep arriving** after import — they land under a `--- Jira sync ---`
   marker in the task description, and the assigned worker gets a message with the latest
   one. A scope change on the ticket reaches whoever is working it.
