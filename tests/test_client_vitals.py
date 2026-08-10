@@ -38,13 +38,17 @@ async def test_a_heartbeat_is_recorded(caplog):
     """The whole point: the numbers reach the log, where they survive the tab."""
     with caplog.at_level("WARNING"):
         resp = await handle_client_vitals(
-            _Req({"heapMB": 812, "heapLimitMB": 4096, "terms": 7, "sockets": 3, "uptimeS": 240})
+            _Req({"heapMB": 812, "heapLimitMB": 4096, "terms": 7, "canvases": 3, "uptimeS": 240})
         )
     assert isinstance(resp, web.Response)
     text = caplog.text
     assert "client-vitals" in text
     assert "812" in text and "4096" in text, f"the heap figures did not reach the log: {text}"
     assert "terms=7" in text, "the live terminal count is missing — the memory lever"
+    assert "canvases=3" in text, (
+        "the canvas count is missing — it is the direct read of whether a GPU renderer "
+        "is live, which is what the crash turns on"
+    )
 
 
 @pytest.mark.asyncio
@@ -85,7 +89,7 @@ async def test_junk_values_do_not_raise(caplog):
     belongs must not take the endpoint down."""
     with caplog.at_level("WARNING"):
         resp = await handle_client_vitals(
-            _Req({"heapMB": "lots", "terms": None, "sockets": [], "uptimeS": {}})
+            _Req({"heapMB": "lots", "terms": None, "canvases": [], "uptimeS": {}})
         )
     assert resp.status == 200
 

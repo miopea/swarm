@@ -66,12 +66,44 @@ def test_the_guard_does_not_fire_on_other_platforms():
     assert not wrong, f"the guard fires on non-Mac platforms, costing them GPU rendering: {wrong}"
 
 
-def test_webgl_is_still_gated_on_that_guard():
-    """A POSITIVE CONTROL on the two tests above. They check a regex; this checks the
-    regex is what decides. If the branch stopped consulting _isMac, both would pass while
-    every Mac loaded WebGL again."""
-    assert re.search(r"if\s*\(\s*!_isMac\s*&&[^)]*WebglAddon", _JS), (
-        "the WebGL renderer is no longer gated on _isMac"
+def test_webgl_is_disabled_outright():
+    """THE ACTUAL FIX for this operator, who is on WINDOWS — not macOS.
+
+    The platform correction matters: _isMac was correctly false for them, so fixing its
+    case-sensitivity changed nothing on their machine. They were on the platform where
+    this code deliberately LEFT WebGL enabled, and got the macOS crash signature anyway:
+    JS heap flat at 23MB of a 4192MB limit, and both browser windows dying in the same
+    instant. A WebGL crash takes the shared GPU process down and every tab with it.
+
+    So the default flipped for everyone. The original comment already conceded the
+    trade — "perf is a non-issue for viewing worker output" — and a measured crash
+    outranks an optimisation nobody asked for.
+    """
+    assert re.search(r"var _webglDisabled = true;", _JS), (
+        "WebGL is no longer disabled by default; the GPU-process crash comes back"
+    )
+    assert re.search(r"if\s*\(\s*!_webglDisabled\s*&&\s*!_isMac[^)]*WebglAddon", _JS), (
+        "the WebGL branch no longer consults the disable flag"
+    )
+
+
+def test_disabling_webgl_falls_through_to_the_dom_renderer_not_canvas():
+    """Canvas is also a GPU path, so falling back to it would keep the same exposure.
+
+    The Canvas fallbacks live INSIDE the WebGL branch, so skipping the branch skips them
+    too and xterm uses its DOM renderer. Asserted because someone hoisting a Canvas
+    fallback "for perf" would silently reopen this.
+    """
+    i = _JS.index("var _webglDisabled = true;")
+    j = _JS.index("// Custom link provider", i)
+    block = _JS[i:j]
+    canvas_uses = block.count("new CanvasAddon.CanvasAddon()")
+    assert canvas_uses > 0, "the block moved; re-read before trusting this test"
+    # Every Canvas construction must sit inside the WebGL branch that is now skipped.
+    branch = block[block.index("if (!_webglDisabled") :]
+    assert branch.count("new CanvasAddon.CanvasAddon()") == canvas_uses, (
+        "a Canvas renderer is constructed outside the disabled WebGL branch, so the GPU "
+        "path is still reachable"
     )
 
 

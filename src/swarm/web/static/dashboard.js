@@ -1401,7 +1401,12 @@
                 heapMB: m ? Math.round(m.usedJSHeapSize / 1048576) : 0,
                 heapLimitMB: m ? Math.round(m.jsHeapSizeLimit / 1048576) : 0,
                 terms: (typeof termCache !== 'undefined' && termCache.size) || 0,
-                sockets: document.querySelectorAll('canvas, .xterm').length,
+                // CANVASES ONLY, counted separately from terminals. xterm's DOM
+                // renderer creates ZERO canvases; the WebGL and Canvas renderers create
+                // several per terminal. So this number is a direct read of whether a GPU
+                // path is live — the thing the crash turns on — rather than the vague
+                // 'canvas, .xterm' mix it replaced, which could not distinguish them.
+                canvases: document.querySelectorAll('canvas').length,
                 uptimeS: Math.round((Date.now() - startedAt) / 1000),
                 panel: inPanelWindow(),
                 // Reported so the WebGL guard can be CONFIRMED from the operator's own
@@ -4187,7 +4192,26 @@
         // platform values are a closed set ("macOS", "iOS", "Windows", "Linux", ...),
         // hence matching those forms too.
         var _isMac = /mac|iphone|ipad|ipod|ios/i.test(_uaPlat);
-        if (!_isMac && typeof WebglAddon !== 'undefined' && WebglAddon.WebglAddon) {
+        // WEBGL IS OFF EVERYWHERE NOW, not just macOS.
+        //
+        // The macOS carve-out above was written from a real Mac incident. The operator
+        // reporting the current crashes is on WINDOWS — the platform this code
+        // explicitly considered "fine" — and is getting the same signature:
+        //
+        //   heap flat at 23MB of a 4192MB limit right up to the crash (not memory)
+        //   BOTH browser windows dying in the same instant (not one tab's ceiling)
+        //
+        // A WebGL crash takes down the shared GPU process, which takes every tab with
+        // it. That is the only mechanism observed here that kills two windows at once
+        // while the JS heap is idle.
+        //
+        // The original comment already conceded the trade is cheap: "perf is a non-issue
+        // for viewing worker output". Given a measured, reproducible crash against an
+        // optimisation nobody asked for, the default flips. `_isMac` is kept and fixed
+        // (it was case-sensitive and never matched "macOS") so re-enabling per-platform
+        // stays possible, but nothing takes the GPU path by default.
+        var _webglDisabled = true;
+        if (!_webglDisabled && !_isMac && typeof WebglAddon !== 'undefined' && WebglAddon.WebglAddon) {
             try {
                 rendererAddon = new WebglAddon.WebglAddon();
                 window.__swarmTermRenderer = 'webgl';

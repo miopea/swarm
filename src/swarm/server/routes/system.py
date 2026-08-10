@@ -431,12 +431,12 @@ async def handle_client_vitals(request: web.Request) -> web.Response:
     # guard was wrong for months because nothing ever surfaced what it decided. Logged
     # explicitly rather than dumping the whole body, so the line stays greppable.
     log.warning(
-        "[client-vitals] heap=%.1fMB/%.1fMB terms=%d sockets=%d uptime=%.0fs panel=%s "
+        "[client-vitals] heap=%.1fMB/%.1fMB terms=%d canvases=%d uptime=%.0fs panel=%s "
         "plat=%s webgl=%s",
         _num("heapMB"),
         _num("heapLimitMB"),
         int(_num("terms")),
-        int(_num("sockets")),
+        int(_num("canvases")),
         _num("uptimeS"),
         bool(body.get("panel")),
         str(body.get("plat") or "?")[:32],
