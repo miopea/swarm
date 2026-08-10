@@ -348,6 +348,12 @@
     function wselOpen(open) {
         var list = wselList(), trig = wselTrigger();
         document.body.classList.toggle('wsel-open', !!open);
+        // Any refresh that arrived while the list was open was held back rather than
+        // yanking the rows away. Now that it is closed, take the update.
+        if (!open && _workersRefreshDeferred) {
+            _workersRefreshDeferred = false;
+            refreshWorkers();
+        }
         if (list) list.hidden = !open;
         if (trig) trig.setAttribute('aria-expanded', open ? 'true' : 'false');
         if (open) {
@@ -1363,12 +1369,60 @@
         if (!e.target.closest('#resource-indicator')) closeResourcePopover();
     });
 
+    // Is THIS window the popped-out panel? Read from the URL rather than shared with
+    // the Command Center IIFE's _panelMode, because that is a separate scope and a bare
+    // cross-IIFE read throws.
+    function inPanelWindow() {
+        try { return /[?&]panel=/.test(window.location.search); } catch (e) { return false; }
+    }
+
     // --- HTMX partial fetchers ---
     var _reorderInFlight = false;
-    function refreshWorkers() {
+    var _workersRefreshTimer = null;
+
+    var _workersRefreshDeferred = false;
+
+    function _doRefreshWorkers() {
+        _workersRefreshTimer = null;
         if (_reorderInFlight) return;
+        // NEVER swap the list out from under an open selector. The partial is replaced
+        // wholesale, so a refresh mid-interaction detaches the very row being tapped —
+        // the tap then lands on nothing and the control appears to ignore it. Surfaced
+        // as "Element is not attached to the DOM" in the browser tests, which is the
+        // same event a finger would hit.
+        // The open state already lives on <body> so it survives the swap; this is about
+        // the NODES, which do not.
+        if (document.body.classList.contains('wsel-open')) {
+            _workersRefreshDeferred = true;
+            return;
+        }
         htmx.ajax('GET', '/partials/workers' + (selectedWorker ? '?worker=' + selectedWorker : ''), '#worker-list');
     }
+
+    // COST CONTROL (operator: "when swarm is open the CPU usage goes up", with Edge
+    // crashing). This refreshes on `workers_changed` and a dozen other socket events,
+    // and each refresh is a full GET plus a whole-partial DOM swap. Measured with 16
+    // workers: 25.4KB and 280 elements per swap, roughly double what it was before the
+    // custom selector landed (12.1KB / 147) — and with the panel popped out it was
+    // happening in TWO windows.
+    //
+    // Two guards, both measured rather than guessed:
+    //   1. The popped-out window never needs it at all. .worker-list is display:none
+    //      there, so every one of those swaps was pure waste in exactly the window the
+    //      crash was reported against.
+    //   2. Coalesce bursts. Sixteen workers changing state produce a flurry of events;
+    //      one repaint answers all of them. 120ms is below the threshold where an
+    //      operator perceives the list as lagging.
+    function refreshWorkers() {
+        if (inPanelWindow()) return;
+        if (_workersRefreshTimer !== null) return;
+        _workersRefreshTimer = setTimeout(_doRefreshWorkers, 120);
+    }
+    // Exposed so the coalescing can be driven directly from a test. Without a handle,
+    // a test that calls `window.refreshWorkers && ...` silently does nothing and passes
+    // while measuring nothing at all — which is how two earlier tests in this control
+    // went green against a broken build.
+    window.refreshWorkers = refreshWorkers;
 
     // --- Worker search (client-side DOM filter) ---
     //
@@ -6514,13 +6568,6 @@
     // `persist` records an OPERATOR choice; layout-driven callers (worker
     // focus, Queen dashboard) pass false so switching views never overwrites
     // what the operator asked for.
-    // Is THIS window the popped-out panel? Read from the URL rather than shared with
-    // the Command Center IIFE's _panelMode, because this runs in the main IIFE and the
-    // two are separate scopes — a bare cross-IIFE read throws.
-    function inPanelWindow() {
-        try { return /[?&]panel=/.test(window.location.search); } catch (e) { return false; }
-    }
-
     function setBottomCollapsed(collapsed, persist) {
         var panel = document.querySelector('.bottom-tabbed');
         if (!panel) return;

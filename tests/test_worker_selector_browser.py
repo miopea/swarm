@@ -314,3 +314,59 @@ def test_the_active_row_stays_visible_against_the_tints(phone_page):
         return others.includes(a) ? 'active row matches a resting row: ' + a : '';
     }""")
     assert same == "", same
+
+
+@pytest.mark.browser
+def test_the_popped_out_window_does_not_refresh_the_hidden_worker_list(phone_page):
+    """OPERATOR-REPORTED: "Something in swarm seems to be crashing edge ... when swarm
+    is open the CPU usage goes up", suspected around the popped-out tasks.
+
+    .worker-list is display:none in the popped window, yet it was still issuing a full
+    GET and swapping the whole partial on every workers_changed — and that partial
+    roughly doubled in size when the custom selector landed (measured: 12.1KB/147
+    elements -> 25.4KB/280 with sixteen workers). Two open windows doubled it again.
+
+    Asserted by counting REQUESTS the browser actually makes, not by reading the guard
+    in the source: a guard that is present but bypassed by another caller looks
+    identical in a source scan, and this whole control has a history of exactly that.
+    """
+    page, _daemon, base = phone_page
+    seen: list[str] = []
+    page.on("request", lambda r: seen.append(r.url))
+
+    page.goto(f"{base}/?panel=tasks", wait_until="domcontentloaded")
+    page.wait_for_selector("body.panel-mode", timeout=15000)
+    # Give any socket-driven refresh a chance to fire.
+    page.wait_for_timeout(1500)
+
+    partial_calls = [u for u in seen if "/partials/workers" in u]
+    assert not partial_calls, (
+        f"the popped-out window fetched the hidden worker list {len(partial_calls)} "
+        f"time(s): {partial_calls[:3]}"
+    )
+
+
+@pytest.mark.browser
+def test_a_burst_of_events_coalesces_into_one_refresh(phone_page):
+    """The other half of the CPU fix. Sixteen workers changing state produce a flurry of
+    socket events; one repaint answers all of them.
+
+    Driven by calling the refresher directly rather than by faking sixteen socket
+    messages — the debounce is the unit under test, and routing through the socket would
+    make this a test of the daemon's broadcast timing instead.
+    """
+    page, _daemon, base = phone_page
+    page.goto(f"{base}/", wait_until="domcontentloaded")
+    page.wait_for_selector("#wsel-trigger", timeout=15000)
+
+    seen: list[str] = []
+    page.on("request", lambda r: seen.append(r.url))
+    assert page.evaluate("() => typeof window.refreshWorkers"), (
+        "refreshWorkers is not reachable, so the loop below would do nothing and this "
+        "test would pass without measuring anything"
+    )
+    page.evaluate("() => { for (let i = 0; i < 20; i++) window.refreshWorkers(); }")
+    page.wait_for_timeout(800)
+
+    calls = [u for u in seen if "/partials/workers" in u]
+    assert len(calls) <= 1, f"20 rapid events produced {len(calls)} full partial fetches"
