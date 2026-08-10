@@ -261,3 +261,56 @@ def test_choosing_a_worker_from_the_bottom_of_the_list_selects_it(phone_page):
     assert name in page.locator("#wsel-trigger").inner_text(), (
         f"selecting {name} did not update the trigger"
     )
+
+
+@pytest.mark.browser
+def test_each_state_paints_a_distinct_row_background(phone_page):
+    """Operator: "add the color coding for the background ... so it's easy to scan."
+
+    MEASURED AS COMPUTED STYLE, not as CSS source. A rule can be present and still lose
+    to a later selector, resolve to the same colour through two different variables, or
+    fail entirely if `color-mix` is unsupported — and every one of those renders sixteen
+    identical rows while a source scan stays green. This control has already produced
+    three defects that only a browser caught; asserting on the stylesheet here would be
+    repeating the mistake on purpose.
+    """
+    page, _daemon, base = phone_page
+    _open_selector(page, base)
+
+    by_state = page.evaluate("""() => {
+        const out = {};
+        for (const o of document.querySelectorAll('#wsel-list .wsel-opt')) {
+            const state = [...o.classList].find(c => c.startsWith('wsel-state-'));
+            if (state) out[state] = getComputedStyle(o).backgroundColor;
+        }
+        return out;
+    }""")
+
+    assert len(by_state) >= 4, f"fewer states rendered than expected: {by_state}"
+    assert len(set(by_state.values())) == len(by_state), (
+        f"two states paint the same background, so they cannot be told apart: {by_state}"
+    )
+    transparent = [s for s, c in by_state.items() if "rgba(0, 0, 0, 0)" in c]
+    assert not transparent, (
+        f"these rows have no background at all — color-mix likely did not resolve: {transparent}"
+    )
+
+
+@pytest.mark.browser
+def test_the_active_row_stays_visible_against_the_tints(phone_page):
+    """A wash under every row can swallow the hover/keyboard highlight on the brighter
+    states, which would make the list harder to drive, not easier."""
+    page, _daemon, base = phone_page
+    _open_selector(page, base)
+
+    page.keyboard.press("ArrowDown")
+    same = page.evaluate("""() => {
+        const active = document.querySelector('#wsel-list .wsel-opt.wsel-active');
+        if (!active) return 'no active row';
+        const a = getComputedStyle(active).backgroundColor;
+        const others = [...document.querySelectorAll('#wsel-list .wsel-opt')]
+            .filter(o => o !== active)
+            .map(o => getComputedStyle(o).backgroundColor);
+        return others.includes(a) ? 'active row matches a resting row: ' + a : '';
+    }""")
+    assert same == "", same

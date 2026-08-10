@@ -2790,6 +2790,35 @@
                 min-height: 44px; box-sizing: border-box;
             }
             .wsel-opt + .wsel-opt { border-top: 1px solid var(--border); }
+            /* STATE AS A BACKGROUND WASH (operator: "we need to add the color coding
+               for the background and what not so it's easy to scan").
+               The 3px stripe alone still made you read the row to place it; a tinted
+               field is what lets a block of sixteen sort itself at arm's length.
+               MIXED INTO var(--panel) rather than laid over it as rgba: the mix stays
+               dark in the dark theme and light in the light one, so neither the tint nor
+               the text contrast has to be tuned twice. Kept at 14% because the row text
+               is ALREADY state-coloured — the app targets WCAG 2.1 AA, and a heavier
+               wash starts eating the contrast of the very text it is highlighting. */
+            .wsel-state-BUZZING  { background: color-mix(in srgb, var(--leaf) 14%, var(--panel)); }
+            .wsel-state-WAITING  { background: color-mix(in srgb, var(--honey) 14%, var(--panel)); }
+            .wsel-state-STUNG    { background: color-mix(in srgb, var(--poppy) 18%, var(--panel)); }
+            .wsel-state-RESTING  { background: color-mix(in srgb, var(--lavender) 10%, var(--panel)); }
+            .wsel-state-SLEEPING { background: var(--panel); }
+            /* WAITING is the one that means "this one needs you", so it gets the only
+               edge treatment — findable without comparing tints to each other. */
+            .wsel-state-WAITING { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--honey) 45%, transparent); }
+            .wsel-state-STUNG   { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--poppy) 45%, transparent); }
+            /* SLEEPING recedes rather than competing — it is the state you are least
+               likely to be looking for. */
+            .wsel-state-SLEEPING .wsel-opt-name { opacity: 0.65; }
+            /* Hover/keyboard focus must still beat the tint underneath it, or the
+               active row becomes invisible on the brighter states. */
+            .wsel-opt:hover, .wsel-opt.wsel-active {
+                background: var(--surface-raised);
+                box-shadow: inset 0 0 0 1px var(--honey);
+            }
+            /* Widened now that it sits against a tinted field rather than a flat one. */
+            .wsel-state-bar { flex-basis: 4px; }
             .wsel-opt:hover, .wsel-opt.wsel-active { background: var(--surface-raised); }
             .wsel-opt-selected { outline: 1px solid var(--honey); outline-offset: -1px; }
             /* The state as a colour stripe: scannable down the left edge without

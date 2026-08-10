@@ -97,7 +97,7 @@
         <ul class="wsel-list" id="wsel-list" role="listbox" tabindex="-1" hidden
             aria-label="Workers">
             {% for w in workers %}
-            <li class="wsel-opt{% if w.name == selected_worker %} wsel-opt-selected{% endif %}"
+            <li class="wsel-opt wsel-state-{{ w.state }}{% if w.name == selected_worker %} wsel-opt-selected{% endif %}"
                 role="option" id="wsel-opt-{{ loop.index }}" data-worker="{{ w.name }}"
                 aria-selected="{{ 'true' if w.name == selected_worker else 'false' }}">
                 <span class="wsel-state-bar state-bg-{{ w.state }}" aria-hidden="true"></span>
