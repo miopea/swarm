@@ -12,6 +12,12 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ## [2026.8.10] - 2026-08-10
 
+> Shipped in commit `8464592`, whose subject reads `release: 2026.8.9.29`. The
+> date rolled over between the version bump and the commit, and that subject was
+> hardcoded rather than taken from the release script's output. **2026.8.10 is
+> the version that shipped** — `pyproject.toml` and `__init__.py` both say so.
+> Corrected here rather than by rewriting a pushed commit.
+
 ### Features
 
 ### Changes
