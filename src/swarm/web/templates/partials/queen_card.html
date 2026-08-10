@@ -26,6 +26,28 @@
         <div class="queen-name">
             Queen
         </div>
-        <div class="queen-meta text-muted">operator command center</div>
+        {# STATE, the same way a worker row shows it. The card previously rendered only
+           a name and the static subtitle "operator command center", so there was no way
+           to tell whether she was deciding, idle, or waiting on the operator — the one
+           thing the sidebar exists to answer. Every worker row beside her carries a
+           state badge and duration; she is the only entry that did not.
+           The macros in worker_list.html are not in scope here (this partial is included
+           before they are defined, and also directly from dashboard.html), so the colour
+           mapping is inlined rather than imported. Keep it in step with state_color(). #}
+        {% if queen %}
+        <div class="queen-meta">
+            <span class="queen-state text-{{ 'leaf' if queen.state == 'BUZZING' else 'honey' if queen.state == 'WAITING' else 'poppy' if queen.state == 'STUNG' else 'lavender' if queen.state == 'RESTING' else 'muted' }}">{{ queen.state }}</span>
+            <span class="text-muted">&mdash; {{ queen.state_duration }}</span>
+        </div>
+        {% if queen.needs_operator_input %}
+        {# The state word alone does not distinguish "thinking" from "blocked on you",
+           and only one of those is your problem. Same pill the worker rows use. #}
+        <div class="needs-input-pill" title="The Queen is waiting on a prompt — your input is needed">
+            <span class="needs-input-dot"></span>Awaiting your input
+        </div>
+        {% endif %}
+        {% else %}
+        <div class="queen-meta text-muted">offline &mdash; click to spawn</div>
+        {% endif %}
     </div>
 </div>
