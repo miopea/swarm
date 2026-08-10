@@ -24,6 +24,34 @@ from __future__ import annotations
 from pathlib import Path
 
 _SW = Path("src/swarm/web/static/sw.js").read_text(encoding="utf-8")
+_BASE = Path("src/swarm/web/templates/base.html").read_text(encoding="utf-8")
+
+
+def test_the_page_does_not_reregister_the_kill_switch_worker():
+    """The production page must not recreate the worker it is trying to remove.
+
+    2026.8.10.10 changed ``sw.js`` into a kill switch whose activate handler
+    unregisters itself and navigates every client.  ``base.html`` still registered
+    that file on every production page load, creating an unbounded browser-process
+    loop::
+
+        page load -> register -> activate -> unregister + navigate -> page load
+
+    Edge reached 4 GB private memory in under a minute with only Swarm open.  The
+    cleanup belongs in the page; registering an unregistering worker can never
+    converge.
+    """
+    assert "serviceWorker.register(" not in _BASE, (
+        "base.html recreates the service-worker kill switch on every load; its "
+        "activate-time navigation then reloads the page and starts the cycle again"
+    )
+
+
+def test_the_page_removes_existing_workers_and_swarm_caches():
+    """Removing registration must still clean up installs from older releases."""
+    assert "serviceWorker.getRegistrations()" in _BASE
+    assert "reg.unregister()" in _BASE
+    assert "caches.keys()" in _BASE and "caches.delete(" in _BASE
 
 
 def test_the_worker_unregisters_itself():

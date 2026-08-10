@@ -3528,7 +3528,13 @@
     {% block scripts %}{% endblock %}
     <script nonce="{{ csp_nonce }}">
     if ('serviceWorker' in navigator) {
-        {% if is_dev %}
+        // 2026.8.10.10 turned /sw.js into a kill switch: on activation it
+        // unregisters itself and navigates every client.  Registering that same
+        // worker here on every production load made the cleanup non-convergent:
+        // load -> register -> activate -> unregister+navigate -> load.  Edge's
+        // browser process reached 4 GB in under a minute with only Swarm open.
+        // Cleanup belongs in the page, and the kill-switch worker must never be
+        // recreated after it removes itself.
         navigator.serviceWorker.getRegistrations().then(function(registrations) {
             registrations.forEach(function(reg) { reg.unregister().catch(function() {}); });
         }).catch(function() {});
@@ -3539,9 +3545,6 @@
                 });
             }).catch(function() {});
         }
-        {% else %}
-        navigator.serviceWorker.register('/sw.js?v={{ build_sha or version }}', { updateViaCache: 'none' }).catch(function() {});
-        {% endif %}
     }
     </script>
 </body>
