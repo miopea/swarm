@@ -1384,6 +1384,46 @@
         try { return /[?&]panel=/.test(window.location.search); } catch (e) { return false; }
     }
 
+    // BROWSER HEARTBEAT (#1359 follow-up). Three crash reports, three fixes reasoned
+    // from inference, still crashing. Console output dies with the tab, so every crash
+    // so far has left NO evidence — this posts to the daemon instead, where the last
+    // line before a gap is the trajectory. Heap climbing to a ceiling means memory;
+    // heap flat means the cause is elsewhere and I should stop looking there.
+    //
+    // performance.memory is Chromium-only and that is fine: the operator is on Edge.
+    // Every 30s, one small POST — deliberately far below the cost of the churn it is
+    // being used to diagnose.
+    (function clientVitals() {
+        var startedAt = Date.now();
+        function beat() {
+            var m = (window.performance && window.performance.memory) || null;
+            var body = {
+                heapMB: m ? Math.round(m.usedJSHeapSize / 1048576) : 0,
+                heapLimitMB: m ? Math.round(m.jsHeapSizeLimit / 1048576) : 0,
+                terms: (typeof termCache !== 'undefined' && termCache.size) || 0,
+                sockets: document.querySelectorAll('canvas, .xterm').length,
+                uptimeS: Math.round((Date.now() - startedAt) / 1000),
+                panel: inPanelWindow(),
+                // Reported so the WebGL guard can be CONFIRMED from the operator's own
+                // browser instead of inferred. The guard was wrong for months precisely
+                // because nobody could see what it decided.
+                plat: (navigator.userAgentData && navigator.userAgentData.platform)
+                    || navigator.platform || '',
+                webgl: !!(window.__swarmTermRenderer === 'webgl'),
+            };
+            try {
+                fetch('/api/client-vitals', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
+                    body: JSON.stringify(body),
+                    keepalive: true,
+                }).catch(function () {});
+            } catch (e) { /* diagnostics must never break the page */ }
+        }
+        setTimeout(beat, 5000);
+        setInterval(beat, 30000);
+    })();
+
     // --- HTMX partial fetchers ---
     var _reorderInFlight = false;
     var _workersRefreshTimer = null;
@@ -4130,12 +4170,27 @@
         // perf is a non-issue for viewing worker output). Other platforms keep
         // WebGL→Canvas.
         var rendererAddon = null;
+        window.__swarmTermRenderer = 'dom';
         var _uaPlat = (navigator.userAgentData && navigator.userAgentData.platform)
             || navigator.platform || navigator.userAgent || '';
-        var _isMac = /Mac|iPhone|iPad|iPod/.test(_uaPlat);
+        // CASE-INSENSITIVE, and this is the whole bug (#1359 crash investigation).
+        // navigator.userAgentData.platform returns "macOS" — LOWERCASE m — and it is
+        // consulted FIRST, so it always wins on modern Edge/Chrome. The old pattern
+        // matched "Mac" case-sensitively, so it never matched "macOS", _isMac came back
+        // false on every Mac with userAgentData, WebGL loaded, and the crash this guard
+        // exists to prevent went right on happening. navigator.platform WOULD have
+        // matched ("MacIntel") but is only reached when userAgentData is absent.
+        //
+        // Confirmed by measurement, not by reading: heartbeats showed the JS heap flat
+        // at 23MB of a 4192MB limit right up to the crash, and BOTH windows died in the
+        // same instant — a GPU-process crash, never an out-of-memory. The spec's
+        // platform values are a closed set ("macOS", "iOS", "Windows", "Linux", ...),
+        // hence matching those forms too.
+        var _isMac = /mac|iphone|ipad|ipod|ios/i.test(_uaPlat);
         if (!_isMac && typeof WebglAddon !== 'undefined' && WebglAddon.WebglAddon) {
             try {
                 rendererAddon = new WebglAddon.WebglAddon();
+                window.__swarmTermRenderer = 'webgl';
                 rendererAddon.onContextLoss(function() {
                     console.warn('[swarm-term] WebGL context lost for', name);
                     try { rendererAddon.dispose(); } catch (e) {}

@@ -47,6 +47,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/holder/drift", handle_holder_drift)
     app.router.add_post("/api/holder/bounce", handle_holder_bounce)
     app.router.add_get("/api/resources", handle_resources)
+    app.router.add_post("/api/client-vitals", handle_client_vitals)
     app.router.add_get("/api/resources/history", handle_resource_history)
 
     app.router.add_post("/api/session/kill", handle_session_kill)
@@ -398,3 +399,47 @@ async def handle_global_search(request: web.Request) -> web.Response:
     ]
 
     return web.json_response({"workers": workers, "tasks": tasks, "buzz": buzz})
+
+
+async def handle_client_vitals(request: web.Request) -> web.Response:
+    """Record a browser heartbeat so a tab crash leaves evidence behind.
+
+    WHY THIS EXISTS. The operator's Edge tab has died repeatedly — never on demand,
+    always some minutes in. Console logs die WITH the tab, so every crash so far has
+    produced no evidence at all and three fixes have been reasoned from inference. A
+    heartbeat posted to the daemon survives, so the last line before a gap shows the
+    trajectory: heap climbing to a ceiling is memory, heap flat is not.
+
+    Deliberately tiny and best-effort. It logs and returns; it must never become a
+    reason the dashboard is slow, which would be its own kind of self-defeating.
+    """
+    import logging
+
+    log = logging.getLogger("swarm.api")
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": True})
+
+    def _num(key: str) -> float:
+        try:
+            return float(body.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    # plat and webgl are the two fields the WebGL-guard investigation turns on: the
+    # guard was wrong for months because nothing ever surfaced what it decided. Logged
+    # explicitly rather than dumping the whole body, so the line stays greppable.
+    log.warning(
+        "[client-vitals] heap=%.1fMB/%.1fMB terms=%d sockets=%d uptime=%.0fs panel=%s "
+        "plat=%s webgl=%s",
+        _num("heapMB"),
+        _num("heapLimitMB"),
+        int(_num("terms")),
+        int(_num("sockets")),
+        _num("uptimeS"),
+        bool(body.get("panel")),
+        str(body.get("plat") or "?")[:32],
+        bool(body.get("webgl")),
+    )
+    return web.json_response({"ok": True})
