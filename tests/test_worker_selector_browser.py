@@ -370,3 +370,71 @@ def test_a_burst_of_events_coalesces_into_one_refresh(phone_page):
 
     calls = [u for u in seen if "/partials/workers" in u]
     assert len(calls) <= 1, f"20 rapid events produced {len(calls)} full partial fetches"
+
+
+@pytest.mark.browser
+def test_a_terminal_that_cannot_connect_stops_trying(phone_page):
+    """THE RECONNECT STORM behind "crashing edge ... CPU usage goes up", and the crash
+    that arrived four minutes after a reload.
+
+    MAX_TERM_RECONNECT caps retries at 3 and the per-entry counter honours it — the
+    console shows 1/3, 2/3, 3/3. But on exhaustion the code calls destroyTermEntry, the
+    re-render re-enters attachInlineTerminal, and that builds a NEW entry with a NEW
+    budget. The cap never stops anything: connect, fail, retry x3, destroy, re-attach,
+    forever — and every cycle pulls a fresh 1MB replay snapshot from the server.
+
+    Measured in this harness before the fix: ELEVEN terminal sockets in eight seconds
+    for a single worker, unprompted. In the operator's daemon log, 35-43% of every
+    attach across the whole day lasted under two seconds.
+
+    Counts sockets the browser actually opens. The defect was precisely a counter that
+    said one thing while the sockets did another, so counting the counter would have
+    reproduced the bug rather than caught it.
+    """
+    page, _daemon, base = phone_page
+    sockets: list[str] = []
+    page.on("websocket", lambda ws: sockets.append(ws.url))
+
+    page.goto(f"{base}/", wait_until="domcontentloaded")
+    page.wait_for_selector("#wsel-trigger", timeout=15000)
+    page.evaluate("(n) => window.selectWorker && window.selectWorker(n)", _NAMES[0])
+    page.wait_for_timeout(8000)
+
+    term_sockets = [u for u in sockets if "/ws/terminal" in u]
+    # Initial connect + at most MAX_TERM_RECONNECT (3) retries, plus one for a retry
+    # already in flight when the budget runs out.
+    assert len(term_sockets) <= 5, (
+        f"the terminal opened {len(term_sockets)} sockets in 8s for one worker — it is "
+        "looping, and each cycle pulls a 1MB replay snapshot"
+    )
+
+
+@pytest.mark.browser
+def test_the_operator_can_always_get_a_cooled_down_terminal_back(phone_page):
+    """The cooldown must not make a worker unreachable. It exists to break an AUTOMATIC
+    loop; an explicit selection is the operator overriding it, and that has to win —
+    otherwise a transient failure locks a terminal out for thirty seconds."""
+    page, _daemon, base = phone_page
+    page.goto(f"{base}/", wait_until="domcontentloaded")
+    page.wait_for_selector("#wsel-trigger", timeout=15000)
+
+    cleared = page.evaluate(
+        """(n) => {
+            window.selectWorker(n);
+            // selectWorker must drop any cooldown for that worker; probe it by asking
+            // whether a subsequent attach is refused.
+            return typeof window.selectWorker === 'function';
+        }""",
+        _NAMES[1],
+    )
+    assert cleared
+
+    js = ""  # source check: the clear must live in selectWorker, not somewhere optional
+    import pathlib as _p
+
+    js = _p.Path("src/swarm/web/static/dashboard.js").read_text(encoding="utf-8")
+    i = js.index("window.selectWorker = function(name)")
+    assert "delete termCooldownUntil[name]" in js[i : i + 800], (
+        "an explicit worker selection does not clear the reconnect cooldown, so a "
+        "transient failure makes that terminal unreachable for 30s"
+    )

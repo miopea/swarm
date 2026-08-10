@@ -103,6 +103,14 @@
     const MIN_TERM_ROWS = 4;
     let activeTermWorker = null;
     var MAX_TERM_RECONNECT = 3;
+    // A connection must survive this long before it counts as "stable" and earns the
+    // attempt counter back. See the reset in onopen for why an immediate reset makes
+    // MAX_TERM_RECONNECT unenforceable.
+    var TERM_STABLE_MS = 10000;
+    // After a terminal exhausts its reconnect budget, refuse to re-attach it for this
+    // long. Without it the cap is decorative — see attachInlineTerminal.
+    var TERM_COOLDOWN_MS = 30000;
+    var termCooldownUntil = Object.create(null);
     // Backward-compat aliases — updated on every show/hide so existing code
     // (fullscreen, keyboard shortcuts, mobileSend, etc.) keeps working.
     let inlineTerm = null;
@@ -4480,7 +4488,26 @@
         newWs.onopen = function() {
             if (entry.ws !== newWs) return;
             console.log('[swarm-term] WS open for', name);
-            entry.reconnectAttempts = 0;
+            // RECONNECT STORM (operator: Edge crashing, CPU climbing, not immediate).
+            // This used to zero the counter the instant the socket opened, which makes
+            // MAX_TERM_RECONNECT unenforceable: a socket that opens and then closes
+            // again resets the budget on every open, so "3 attempts" never trips and the
+            // client reconnects forever, ~500ms apart.
+            //
+            // Each reconnect calls term.reset() and pulls a FRESH 1MB replay snapshot
+            // from the server — roughly 2MB/s into xterm, indefinitely. In the daemon
+            // log it reads as attach → detach at 0.2s → immediate re-attach with a new
+            // socket id, and 35-43% of ALL attaches across the day lasted under two
+            // seconds.
+            //
+            // The budget is now earned by SURVIVING, not by connecting. A genuinely
+            // recovered terminal gets its attempts back after ten seconds; a flapping
+            // one exhausts them and stops, which is what the cap was always for.
+            if (entry.stableTimer) clearTimeout(entry.stableTimer);
+            entry.stableTimer = setTimeout(function () {
+                entry.stableTimer = null;
+                if (entry.ws === newWs) entry.reconnectAttempts = 0;
+            }, TERM_STABLE_MS);
             // Failsafe: if replay/meta frames are delayed, don't deadlock input
             // after reload/reconnect. Allow queued keystrokes through shortly
             // after open; stale/unauthorized sockets will fail closed anyway.
@@ -4623,6 +4650,9 @@
                 clearInterval(entry._staleWatchdog);
                 entry._staleWatchdog = null;
             }
+            // Pending stability credit dies with the socket that was earning it —
+            // otherwise a connection that closes at 9s still gets its budget back.
+            if (entry.stableTimer) { clearTimeout(entry.stableTimer); entry.stableTimer = null; }
             if (activeTermWorker === name) inlineTermWs = null;
             maybeClearStaleSessionToken();
             updateTermDebug(entry);
@@ -4640,7 +4670,12 @@
                     }
                 }, delay);
             } else if (activeTermWorker === name) {
-                // All reconnects exhausted for the active terminal — show static
+                // All reconnects exhausted for the active terminal — show static.
+                // Stamp the cooldown BEFORE destroying: destroy triggers the re-render
+                // that re-enters attachInlineTerminal, and the stamp is what stops it
+                // from starting the whole cycle again.
+                termCooldownUntil[name] = Date.now() + TERM_COOLDOWN_MS;
+                console.log('[swarm-term] giving up on ' + name + ' for ' + (TERM_COOLDOWN_MS / 1000) + 's');
                 destroyTermEntry(name);
                 refreshDetailStatic();
                 showToast('Terminal disconnected — showing static capture', true);
@@ -4980,6 +5015,27 @@
     function attachInlineTerminal(workerName) {
         // Already showing this worker
         if (activeTermWorker === workerName) return;
+
+        // THE RECONNECT STORM, outer loop (operator: Edge crashing every few minutes,
+        // CPU climbing). The per-entry budget works — the console shows 1/3, 2/3, 3/3 —
+        // but on exhaustion the code calls destroyTermEntry and then something re-enters
+        // HERE, which builds a brand-new entry with a brand-new budget. So the cap never
+        // actually stops anything: connect, fail, retry x3, destroy, re-attach, forever,
+        // and every cycle pulls a fresh 1MB replay snapshot.
+        //
+        // Captured in a browser: eleven terminal sockets in eight seconds for one
+        // worker, unprompted. In the daemon log, 35-43% of every attach all day lasted
+        // under two seconds.
+        //
+        // A cooldown is what makes the budget mean something. Cleared by an explicit
+        // operator action (see selectWorker) so a terminal is never stuck unreachable —
+        // the cooldown exists to stop a LOOP, not to lock anybody out.
+        var until = termCooldownUntil[workerName] || 0;
+        if (Date.now() < until) {
+            console.log('[swarm-term] cooling down ' + workerName + ', showing static');
+            refreshDetailStatic();
+            return;
+        }
 
         // Fall back to static if xterm CDN hasn't loaded yet
         if (typeof Terminal === 'undefined') {
@@ -5353,6 +5409,10 @@
 
     window.selectWorker = function(name) {
         selectedWorker = name;
+        // An explicit choice clears any reconnect cooldown: the operator asking for this
+        // terminal outranks the loop-breaker. The cooldown exists to stop an automatic
+        // cycle, never to make a worker unreachable.
+        delete termCooldownUntil[name];
         // #1292: reveal the Tile button here, in the BASE definition, rather than from
         // a decorator. There used to be a wrapper ~130 lines above that did this, and
         // it was DOUBLY dead: it captured `window.selectWorker` before anything had
