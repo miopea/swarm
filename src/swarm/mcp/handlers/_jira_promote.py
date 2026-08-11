@@ -129,7 +129,7 @@ def _select_task(d: SwarmDaemon, worker_name: str, args: RequestJiraTicketArgs) 
         # swarm_create_task returns it exists with no owner. Reporting that as a flat
         # "not assigned to you" describes a permanent condition for a sub-second window
         # and sends the caller looking for a routing bug that is not there.
-        exists = next((t for t in board.all_tasks() if t.number == want), None)
+        exists = next((t for t in board.all_tasks if t.number == want), None)
         if exists is not None and not exists.assigned_worker:
             return (
                 f"Task #{want} exists but has no owner yet — if you just created it, "

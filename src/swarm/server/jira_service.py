@@ -37,6 +37,12 @@ def _is_disowned(task: Any) -> bool:
 class JiraService:
     """Manages Jira import/export/sync operations."""
 
+    # (task id, status value) pairs whose export Jira REFUSED — as opposed to
+    # errored. Lazily created by the reconcile pass and deliberately not reset
+    # per cycle; declared here so the type is stated once rather than inferred
+    # from whichever assignment mypy happens to see first.
+    _export_refused: set[tuple[str, str]]
+
     def __init__(
         self,
         *,
@@ -253,7 +259,7 @@ class JiraService:
             if not seconds:
                 _log.debug("no substantiated active time for #%s; nothing logged", task.number)
                 return False
-            return await jira.log_work(task, seconds)
+            return bool(await jira.log_work(task, seconds))
 
         self.fire_jira(task_id, "worklog", _work)
 
@@ -651,7 +657,7 @@ class JiraService:
         # differs, and the new target may well be reachable. Held in memory
         # deliberately — one retry per daemon start is a cheap way to recover from a
         # workflow or permission change without another column.
-        refused = getattr(self, "_export_refused", None)
+        refused: set[tuple[str, str]] | None = getattr(self, "_export_refused", None)
         if refused is None:
             refused = self._export_refused = set()
         stale = [

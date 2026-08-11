@@ -181,6 +181,21 @@ def _handle_start_task(d: SwarmDaemon, worker_name: str, args: StartTaskArgs) ->
         task, refusal = _resolve_explicit(board, mine, startable, raw, unpark)
         if refusal is not None:
             return [{"type": "text", "text": refusal}]
+        if task is None:
+            # Contract violation, not a user error: _resolve_explicit promises
+            # (task, None) or (None, refusal) and never (None, None). Stating it
+            # here is what lets every later `task.` access be type-checked rather
+            # than assumed — a silent None would AttributeError twelve lines on.
+            return [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Could not resolve task {raw!r} and could not say why — "
+                        f"this is a bug in swarm_start_task, not something you did. "
+                        f"Nothing changed."
+                    ),
+                }
+            ]
     else:
         if not startable:
             return [

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 from swarm.config.models import HiveConfig
 from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
+from swarm.tasks.blockers import BlockerStore
 from swarm.tasks.history import TaskAction
 from swarm.tasks.task import (
     SwarmTask,
@@ -96,7 +97,7 @@ class TaskManager:
         pilot: DronePilot | None = None,
         notification_bus: NotificationBus | None = None,
         config: HiveConfig | None = None,
-        blocker_store: object | None = None,
+        blocker_store: BlockerStore | None = None,
     ) -> None:
         self.task_board = task_board
         self.task_history = task_history
