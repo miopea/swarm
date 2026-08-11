@@ -244,21 +244,88 @@ def _resolve_task(d: SwarmDaemon, args: dict[str, Any]) -> SwarmTask | list[Text
     return task
 
 
-def _fire_async(coro: Coroutine[Any, Any, None]) -> None:
+def _fire_async(coro: Coroutine[Any, Any, None], *, label: str = "") -> None:
     """Fire an async daemon method from a sync MCP handler context.
 
     Falls back to silently dropping the call if no event loop is
     available (should only happen in unit tests that mock the daemon).
+
+    #1486: the done-callback used to be ``t.exception()`` alone — which
+    RETRIEVES the exception purely to suppress asyncio's "exception was never
+    retrieved" warning and then DISCARDS it. A dispatch that raised therefore
+    left no trace anywhere: the Queen was told "and dispatched", the worker was
+    never messaged, and the only evidence was a worker that stayed asleep. That
+    cost hub, public-website and root hours of idle time on urgent work.
+    Failures are now logged with the caller's label. Silence is no longer a
+    possible outcome.
     """
     try:
         loop = asyncio.get_running_loop()
         task = loop.create_task(coro)
-        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+        task.add_done_callback(lambda t: _log_async_failure(t, label))
     except RuntimeError:
         try:
             coro.close()
         except Exception:
             pass
+
+
+def _log_async_failure(task: asyncio.Task[Any], label: str) -> None:
+    """Log a fire-and-forget failure instead of discarding it (#1486)."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _log.error("async %s failed: %s", label or "call", exc, exc_info=exc)
+
+
+def _dispatch_after_reassign(
+    d: SwarmDaemon, task: Any, prev: str, to_worker: str
+) -> list[TextContent]:
+    """Dispatch a just-reassigned task, or say precisely why it cannot (#1486).
+
+    Split out of ``_handle_reassign_task`` to stay under the complexity gate.
+
+    THE BUG THIS EXISTS TO CLOSE. ``start_task`` refuses anything whose status is
+    not ASSIGNED. Assignment deliberately PRESERVES a BACKLOG/parked status —
+    routing parked work must not un-park it — so reassigning parked work with
+    ``start=true`` produced: ``start_task`` raises, ``_fire_async`` discarded the
+    exception, and this returned "and dispatched" anyway. The worker was never
+    messaged and the task never reached ACTIVE. hub, public-website and root each
+    sat on urgent work for hours because that string was believed.
+
+    A tool reporting an action it did not perform is worse than one that fails
+    loudly, so the precondition is checked HERE, synchronously, before anything
+    is claimed.
+    """
+    current = d.task_board.get(task.id)
+    status = getattr(getattr(current, "status", None), "value", "unknown")
+    if status != TaskStatus.ASSIGNED.value:
+        return [
+            {
+                "type": "text",
+                "text": (
+                    f"Reassigned #{task.number} from {prev} → {to_worker}, but NOT dispatched: "
+                    f"the task is {status}, and dispatch requires ASSIGNED. Parked/backlog work "
+                    f"keeps its status when reassigned, by design. Un-park it first, then "
+                    f"dispatch — or use queen_prompt_worker to wake {to_worker} directly."
+                ),
+            }
+        ]
+    _fire_async(
+        d.assign_and_start_task(task.id, to_worker, actor="queen"),
+        label=f"dispatch #{task.number} -> {to_worker}",
+    )
+    return [
+        {
+            "type": "text",
+            "text": (
+                f"Reassigned #{task.number} from {prev} → {to_worker} and dispatched. "
+                f"Dispatch is asynchronous — confirm #{task.number} reaches ACTIVE on the "
+                f"board; a failure now logs rather than vanishing."
+            ),
+        }
+    ]
 
 
 def _why_unassignable(d: SwarmDaemon, task_id: str) -> str:
@@ -394,13 +461,7 @@ def _handle_reassign_task(
         category=LogCategory.OPERATOR,
     )
     if start:
-        _fire_async(d.assign_and_start_task(task.id, to_worker, actor="queen"))
-        return [
-            {
-                "type": "text",
-                "text": (f"Reassigned #{task.number} from {prev} → {to_worker} and dispatched."),
-            }
-        ]
+        return _dispatch_after_reassign(d, task, prev, to_worker)
     return [
         {
             "type": "text",
