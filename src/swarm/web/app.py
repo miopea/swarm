@@ -125,6 +125,44 @@ def _worker_task_titles(daemon: SwarmDaemon) -> dict[str, str]:
     return titles
 
 
+def _worker_task_cards(daemon: SwarmDaemon) -> dict[str, dict[str, Any]]:
+    """worker name -> {number, title, status} for the task it holds (#1496).
+
+    DELIBERATELY WIDER THAN ``_worker_task_titles``, which stays ACTIVE-only and
+    keeps its guarantee. The 2026-08-06 ruling behind that function was *"if it's
+    not set to in progress, assigned just means it's a pending task"* — the
+    complaint was CONFLATION, a queued task rendering as though the worker were
+    working it. This returns the status alongside, so the tile can show a pending
+    task AS pending instead of hiding it or lying about it.
+
+    Why hiding it stopped being good enough: until #1486, dispatch failed
+    silently and almost nothing ever reached ACTIVE, so an ACTIVE-only tile was
+    blank for every worker — the operator could not tell "nothing assigned" from
+    "assigned and stuck". Showing both, differentiated, is what makes that
+    distinction visible.
+
+    NO INFERENCE. This reports the board's own status and nothing else. #1159
+    removed daemon-side activation inference after the promoter activated the
+    wrong task (it picked most-recently-updated, and parking a task stamps
+    updated_at); a worker that skips ``swarm_start_task`` will read ASSIGNED here
+    even while working, and that is the honest answer rather than a guess.
+    ACTIVE wins when a worker somehow holds both, because it is the asserted one.
+    """
+    cards: dict[str, dict[str, Any]] = {}
+    for t in daemon.task_board.all_tasks:
+        if t.status not in (TaskStatus.ACTIVE, TaskStatus.ASSIGNED) or not t.assigned_worker:
+            continue
+        existing = cards.get(t.assigned_worker)
+        if existing and existing["status"] == TaskStatus.ACTIVE.value:
+            continue
+        cards[t.assigned_worker] = {
+            "number": t.number,
+            "title": t.title,
+            "status": t.status.value,
+        }
+    return cards
+
+
 def _task_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:
     all_tasks = daemon.task_board.all_tasks
     completed_ids = {t.id for t in all_tasks if t.status == TaskStatus.DONE}

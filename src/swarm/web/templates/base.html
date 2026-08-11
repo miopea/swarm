@@ -1239,7 +1239,33 @@
         .worker-name { font-weight: bold; }
         .worker-provider-tag { font-weight: normal; font-size: 0.75rem; color: var(--muted); }
         .worker-meta { font-size: 0.75rem; color: var(--muted); }
-        .worker-task { font-size: 0.75rem; color: var(--lavender); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+
+        /* #1496 — worker tile task line: number, short title, and the
+           ASSIGNED/ACTIVE distinction. The chip carries the state so the
+           difference survives a greyscale screenshot and a colour-blind reader;
+           colour alone would encode it for neither. */
+        .worker-task { display: flex; align-items: baseline; gap: 0.35rem;
+            font-size: 0.72rem; margin-top: 0.15rem; min-width: 0;
+            color: var(--lavender); max-width: 200px; }
+        .worker-task .task-num { color: var(--muted); font-variant-numeric: tabular-nums;
+            flex: 0 0 auto; }
+        /* Truncate rather than wrap: a long title must not reflow the tile and
+           push every worker below it down the list. Full text is in the title=. */
+        .worker-task .task-title { overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap; min-width: 0; }
+        .task-status-chip { flex: 0 0 auto; font-size: 0.62rem; line-height: 1.5;
+            padding: 0 0.3rem; border-radius: 3px; text-transform: uppercase;
+            letter-spacing: 0.04em; }
+        .task-chip-active { background: var(--leaf); color: #06210f; }
+        .task-chip-assigned { background: var(--honey); color: #2b1d00; }
+        .task-chip-idle { background: transparent; color: var(--muted);
+            border: 1px solid var(--muted); opacity: 0.55; }
+        .worker-task-idle { opacity: 0.7; }
+        /* #1496: the former single-line `.worker-task` rule lived HERE, after the
+           block above, so it re-won `display` and re-imposed max-width — collapsing
+           the flex row back to one truncated string. Its surviving intent (colour,
+           width cap) is folded into the block above; the ellipsis now belongs to
+           .task-title so the chip and number never truncate. */
         /* In light mode, colour alone is too weak to scan across a long
            worker list. Keep selection on the left, and give state its own
            right-edge rail, quiet tint, and labelled pill. */

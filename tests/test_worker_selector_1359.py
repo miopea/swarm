@@ -99,7 +99,12 @@ def test_rows_show_what_the_worker_is_doing():
     """Operator asked for "task count / current task" — choosing a worker by name alone
     is what made the list unscannable in the first place."""
     block = _option_block()
-    assert "worker_tasks" in block, "rows do not show the worker's current task"
+    # #1496 renamed the source: the rows now read `worker_task_cards`, which
+    # carries number + title + ASSIGNED/ACTIVE instead of a bare title string.
+    # The guarantee this test exists for — rows show what the worker is on —
+    # is unchanged and now stronger.
+    assert "worker_task_cards" in block, "rows do not show the worker's current task"
+    assert "c.number" in block, "rows show a title but not WHICH task"
     assert "needs_operator_input" in block, (
         "nothing marks the workers that need the operator — 'which need me' was the "
         "stated reason for scanning the list at all"

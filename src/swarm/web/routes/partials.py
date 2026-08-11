@@ -14,6 +14,7 @@ from swarm.web.app import (
     _system_log_dicts,
     _task_dicts,
     _worker_dicts,
+    _worker_task_cards,
     _worker_task_titles,
 )
 from swarm.web.log_filter import LOG_LEVEL_INCLUSIVE, line_matches_level
@@ -51,6 +52,7 @@ async def handle_partial_workers(request: web.Request) -> dict[str, Any]:
         "queen": _queen_dict(d),
         "selected_worker": request.query.get("worker"),
         "worker_tasks": _worker_task_titles(d),
+        "worker_task_cards": _worker_task_cards(d),
     }
 
 

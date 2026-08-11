@@ -14,6 +14,7 @@ from swarm.web.app import (
     _queen_dict,
     _task_dicts,
     _worker_dicts,
+    _worker_task_cards,
     _worker_task_titles,
 )
 
@@ -126,6 +127,7 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
         "proposals": proposals,
         "proposal_count": len(proposals),
         "worker_tasks": _worker_task_titles(d),
+        "worker_task_cards": _worker_task_cards(d),
         "tool_buttons": [{"label": b.label, "command": b.command} for b in d.config.tool_buttons],
         "action_buttons": [
             {
