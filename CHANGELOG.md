@@ -10,6 +10,20 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.11.2] - 2026-08-11
+
+### Fixes
+
+- `ExitPlanMode` joins `AskUserQuestion` in `_NEVER_AUTO_APPROVE`. Its purpose is also to
+  obtain a human decision — approval of a plan before work begins — so auto-approving it
+  means an agent approves its own plan and everything downstream inherits it unreviewed.
+
+### Features
+
+### Changes
+
+### Fixes
+
 ## [2026.8.11] - 2026-08-11
 
 ### Fixes

@@ -51,7 +51,12 @@ _ALWAYS_ESCALATE_TOOLS = frozenset({"Bash"})
 # THE RULE: if a tool's purpose is to obtain a human decision, no automation may supply
 # that decision. Adding to this set should be argued, not assumed — but the bar for
 # membership is exactly that question.
-_NEVER_AUTO_APPROVE = frozenset({"AskUserQuestion"})
+# ExitPlanMode added 2026-08-11 at the operator's direction, on the same reasoning:
+# its entire purpose is to obtain a human decision — approval of a plan before work
+# starts. Auto-approving it means an agent writes a plan and then approves its own plan,
+# which is the same defect as answering your own escalation and is arguably worse,
+# because everything downstream inherits the unreviewed plan.
+_NEVER_AUTO_APPROVE = frozenset({"AskUserQuestion", "ExitPlanMode"})
 
 
 def register(app: web.Application) -> None:
