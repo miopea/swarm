@@ -406,29 +406,86 @@ _MAX_RECENT_TOOLS = 5
 def _check_file_lock(
     d: SwarmDaemon, worker: Worker | None, tool_name: str, tool_input: dict[str, Any]
 ) -> web.Response | None:
-    """Block Edit/Write if another worker holds the file lock."""
+    """Warn or block Edit/Write when ANOTHER worker holds the file lock.
+
+    THIS PATH HARD-BLOCKED REGARDLESS OF ``coordination.file_ownership``. The
+    operator's config reads ``"warning"`` — advisory — and the workers' briefs
+    said so, correctly. This function never consulted the setting, so a mode
+    nobody selected was enforced fleet-wide and read as a broken tool rather
+    than a policy. Honouring the mode is both the fix and the off switch.
+
+    Note there are TWO file-coordination systems and they are not the same one:
+    ``d.file_ownership`` (FileOwnershipMap, derived from git conflicts, already
+    mode-aware, served by ``/api/coordination/ownership``) and ``d.file_locks``
+    (this dict, written by ``swarm_claim_file`` and by this hook). Only the
+    first honoured the mode. They still share the operator's single setting,
+    which is the point — one control, not two.
+
+    FAILS OPEN ON UNKNOWN IDENTITY. ``_identify_worker`` is a CWD heuristic and
+    returns None whenever it cannot match a worker path. The old code turned
+    that None into the literal name ``"unknown"``, which then compared unequal
+    to every real owner — so an unidentified worker was blocked from every
+    claimed file, and the refusal named the legitimate holder. That is the
+    reported symptom: the claim holder appearing to be refused its own file.
+    It also wrote ``"unknown"`` into the lock table on the way past, taking
+    ownership away from whoever actually held it. A guard that cannot tell who
+    is asking must not be the thing that says no.
+    """
     if tool_name not in ("Edit", "Write"):
         return None
     file_path = tool_input.get("file_path", "")
     if not file_path:
         return None
+    # Unknown identity: allow, and do not record a lock under a name that is not
+    # a worker. Both halves matter — the second is how "unknown" dispossessed a
+    # real claim holder and made claiming actively harmful.
+    if worker is None:
+        return None
+
     import os
     import time
 
+    from swarm.coordination.ownership import OwnershipMode
+
+    mode = getattr(getattr(d, "file_ownership", None), "mode", OwnershipMode.WARNING)
+    if mode == OwnershipMode.OFF:
+        return None
+
     resolved = os.path.realpath(file_path)
     lock = d.file_locks.get(resolved)
-    worker_name = worker.name if worker else "unknown"
+    worker_name = worker.name
     now = time.time()
     if lock:
         lock_owner, lock_time = lock
         if lock_owner != worker_name and (now - lock_time) < d._file_lock_ttl:
-            _log.info("file conflict: %s locked by %s", resolved, lock_owner)
-            return web.json_response(
-                {
-                    "decision": "block",
-                    "reason": f"File locked by worker {lock_owner}",
-                }
+            # WARNING, not INFO: the daemon runs at log_level=WARNING, so the
+            # previous _log.info left no record at any destination — a denial
+            # nobody outside the blocked worker could diagnose. _log_hook_decision
+            # additionally puts it in the drone log, which is where every other
+            # decision on this route already goes; this was the one that skipped it.
+            _log.warning(
+                "file conflict: %s locked by %s, requested by %s (mode=%s)",
+                resolved,
+                lock_owner,
+                worker_name,
+                mode.value,
             )
+            verdict = "block" if mode == OwnershipMode.HARD_BLOCK else "passthrough"
+            _log_hook_decision(d, tool_name, verdict, f"file locked by {lock_owner}", worker_name)
+            if mode == OwnershipMode.HARD_BLOCK:
+                return web.json_response(
+                    {
+                        "decision": "block",
+                        "reason": (
+                            f"File locked by worker {lock_owner} (you are {worker_name}). "
+                            f"Coordinate with them, or set coordination.file_ownership "
+                            f"to 'warning' to make claims advisory."
+                        ),
+                    }
+                )
+            # Advisory mode: the conflict is now on the record, but the write
+            # proceeds and the lock is NOT stolen from its holder.
+            return None
     # Acquire/refresh lock
     d.file_locks[resolved] = (worker_name, now)
     return None

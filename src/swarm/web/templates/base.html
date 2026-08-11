@@ -1270,6 +1270,12 @@
            theme's accent, so the chips keep their identity in both modes. */
         [data-theme="light"] .task-chip-active,
         [data-theme="light"] .task-chip-assigned { color: #ffffff; }
+        /* Queue depth, NOT a task. Deliberately quieter than .worker-task: it is
+           a standing fact about the backlog, not a claim about right now, and it
+           must never out-shout the in-progress line above it. */
+        .worker-pending { font-size: 0.68rem; margin-top: 0.15rem; color: var(--muted);
+            max-width: 200px; overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap; }
         .task-chip-idle { background: transparent; color: var(--muted);
             border: 1px solid var(--muted); opacity: 0.55; }
         .worker-task-idle { opacity: 0.7; }
@@ -2748,6 +2754,9 @@
             .worker-item .worker-name { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             .worker-item .worker-meta { display: none; }
             .worker-item .worker-task { display: none; }
+            /* Same reason as .worker-task: the mobile tile is a compact pill and
+               a second text line breaks its layout. */
+            .worker-item .worker-pending { display: none; }
             /* Context-pressure bar (task #285) renders a 3px brown stripe
                inside the worker pill whenever ``context_pct > 0.05``. On
                mobile that stripe is the only inner element still showing,

@@ -126,27 +126,29 @@ def _worker_task_titles(daemon: SwarmDaemon) -> dict[str, str]:
 
 
 def _worker_task_cards(daemon: SwarmDaemon) -> dict[str, dict[str, Any]]:
-    """worker name -> {number, title, status, label} for the task it holds (#1496).
+    """worker name -> {number, title, status, label} for the task it is WORKING.
 
-    DELIBERATELY WIDER THAN ``_worker_task_titles``, which stays ACTIVE-only and
-    keeps its guarantee. The 2026-08-06 ruling behind that function was *"if it's
-    not set to in progress, assigned just means it's a pending task"* — the
-    complaint was CONFLATION, a queued task rendering as though the worker were
-    working it. This returns the status alongside, so the tile can show a pending
-    task AS pending instead of hiding it or lying about it.
+    ACTIVE ONLY. Operator, 2026-08-11: *"assigned workers shouldn't show in the
+    list, as assignment doesn't mean anything"* — which restores the 2026-08-06
+    ruling this function had drifted from. #1496 widened it to ASSIGNED on the
+    reasoning that a blank tile hid "assigned and stuck"; that traded a missing
+    fact for a false one. The tile's top line answers *what is this worker doing*,
+    and an ASSIGNED task is not an answer to that question: nobody has claimed to
+    have started it. Rendering one here put a task row on every buzzing worker
+    that named the wrong task, or a task it had not begun.
 
-    Why hiding it stopped being good enough: until #1486, dispatch failed
-    silently and almost nothing ever reached ACTIVE, so an ACTIVE-only tile was
-    blank for every worker — the operator could not tell "nothing assigned" from
-    "assigned and stuck". Showing both, differentiated, is what makes that
-    distinction visible.
+    The pending count in ``_worker_pending_counts`` is where assigned work goes.
+    Separating them is the point: one line is a claim about the present, the
+    other is a queue depth, and collapsing the two is what produced both of
+    today's reports.
 
     NO INFERENCE. This reports the board's own status and nothing else. #1159
     removed daemon-side activation inference after the promoter activated the
     wrong task (it picked most-recently-updated, and parking a task stamps
-    updated_at); a worker that skips ``swarm_start_task`` will read ASSIGNED here
-    even while working, and that is the honest answer rather than a guess.
-    ACTIVE wins when a worker somehow holds both, because it is the asserted one.
+    updated_at). A worker that skips ``swarm_start_task`` therefore shows NO
+    current task even while working — deliberately. That reads as a gap, and it
+    is the real one: the fix is the worker calling the verb, not the dashboard
+    guessing on its behalf.
 
     ``label`` COMES FROM ``STATUS_LABEL`` AND IS NOT INVENTED HERE. The first cut
     of the tile hand-rolled its own words in the template — "working"/"queued" —
@@ -162,10 +164,7 @@ def _worker_task_cards(daemon: SwarmDaemon) -> dict[str, dict[str, Any]]:
     """
     cards: dict[str, dict[str, Any]] = {}
     for t in daemon.task_board.all_tasks:
-        if t.status not in (TaskStatus.ACTIVE, TaskStatus.ASSIGNED) or not t.assigned_worker:
-            continue
-        existing = cards.get(t.assigned_worker)
-        if existing and existing["status"] == TaskStatus.ACTIVE.value:
+        if t.status != TaskStatus.ACTIVE or not t.assigned_worker:
             continue
         cards[t.assigned_worker] = {
             "number": t.number,
@@ -174,6 +173,30 @@ def _worker_task_cards(daemon: SwarmDaemon) -> dict[str, dict[str, Any]]:
             "label": STATUS_LABEL.get(t.status, t.status.value),
         }
     return cards
+
+
+def _worker_pending_counts(daemon: SwarmDaemon) -> dict[str, int]:
+    """worker name -> how many ASSIGNED tasks are waiting on it.
+
+    Operator, 2026-08-11: *"maybe show 'Pending Assigned Tasks' or something
+    useful"*. A COUNT rather than a task row, because that is the honest shape of
+    the fact. "3 pending" says queue depth and claims nothing about what the
+    worker is doing; naming one of the three would re-assert exactly the thing
+    the ACTIVE-only rule above exists to prevent, and would have to pick one
+    arbitrarily — the same arbitrary pick that made #1159's promoter activate the
+    wrong task.
+
+    Parked (HOLD) tasks are excluded. Parked means nobody should pick it up, so
+    counting it as pending would inflate every queue with work deliberately set
+    down, and an operator acting on that number would be chasing tasks that are
+    not waiting on anyone.
+    """
+    counts: dict[str, int] = {}
+    for t in daemon.task_board.all_tasks:
+        if t.status != TaskStatus.ASSIGNED or not t.assigned_worker or t.is_on_hold:
+            continue
+        counts[t.assigned_worker] = counts.get(t.assigned_worker, 0) + 1
+    return counts
 
 
 def _task_dicts(daemon: SwarmDaemon) -> list[dict[str, Any]]:

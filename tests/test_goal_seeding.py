@@ -61,6 +61,45 @@ def test_condition_truncated_to_4000_chars():
     assert len(out) <= 4000
 
 
+# --- a declared blocker is an exit, not a failure (#1500) ---------------
+
+
+def test_a_declared_blocker_satisfies_the_goal():
+    """#1500. The only exit used to be the turn counter, so a worker waiting on
+    an operator ruling had to burn all max_turns before it could stop — and every
+    one of those turns was guaranteed waste, because retrying cannot resolve a
+    decision someone else has to make.
+
+    Measured 2026-08-11: my-rcg and nexus each hit Claude Code's 9-consecutive-
+    block cap re-emitting "Blocking on #1382" / "Blocked on your GO" against
+    "Goal not yet met… continuing".
+    """
+    out = render_goal_condition(["tests pass"], max_turns=25).lower()
+    assert "blocked" in out, "the condition must name the blocked case at all"
+    assert "satisfies" in out, "and must say it SATISFIES the goal, not fails it"
+
+
+def test_the_blocker_exit_survives_truncation():
+    """The exits used to sit at the END of one string that was then sliced, so a
+    long enough criteria list would silently delete the only stop condition and
+    leave a goal loop with no way out.
+
+    Latent, not active — 0 of 799 tasks with usable criteria exceed the cap
+    (longest 1964 chars) — but the failure mode is unbounded looping, and
+    criteria only ever get longer.
+    """
+    out = render_goal_condition(["x" * 9000], max_turns=25)
+    assert len(out) <= 4000
+    assert "stop after 25 turns" in out, "the turn bound must survive truncation"
+    assert "blocked" in out.lower(), "and so must the blocker exit"
+
+
+def test_truncation_drops_criteria_not_the_exits():
+    """Positive control on the above: the criteria ARE what gets cut."""
+    out = render_goal_condition(["x" * 9000], max_turns=25)
+    assert out.count("x") < 9000
+
+
 # --- start_task injection ----------------------------------------------
 
 

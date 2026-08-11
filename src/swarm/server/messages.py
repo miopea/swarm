@@ -314,10 +314,38 @@ def render_goal_condition(criteria: list[str], *, max_turns: int) -> str:
     if not cleaned:
         return ""
     enumerated = "; ".join(f"({i}) {c}" for i, c in enumerate(cleaned, 1))
-    condition = (
-        f"All of these hold, each demonstrated in your own output: {enumerated}"
-        f" — or stop after {max_turns} turns and report what's blocking."
+
+    # A DECLARED BLOCKER SATISFIES THE GOAL. Without this the only exit is the
+    # turn counter, so a worker waiting on an operator ruling or another worker
+    # must burn all ``max_turns`` before it is allowed to stop — and every one of
+    # those turns is guaranteed waste, because retrying cannot resolve a decision
+    # someone else has to make. Measured 2026-08-11: my-rcg and nexus each hit
+    # Claude Code's 9-block cap re-emitting "Blocking on #1382" / "Blocked on your
+    # GO" against "Goal not yet met… continuing".
+    #
+    # This is the SECOND instance of one bug class, not a new bug. The first was
+    # cross-project dispatch seeding /goal on criteria the worker physically could
+    # not satisfy (#523, ~257K output tokens on rcg-networks); that was fixed at
+    # the call site in task_coordinator by skipping the seed. Both are "a goal
+    # loop pointed at something continuing cannot achieve". The call-site guard
+    # cannot cover this one — the task is legitimately the worker's and the block
+    # only emerges mid-work — so the exit has to live in the condition itself.
+    exits = (
+        f" — or you are blocked on something continuing cannot resolve"
+        f" (an operator decision, an external dependency, another worker's work):"
+        f" say so plainly and stop; that SATISFIES this goal rather than failing it."
+        f" Otherwise stop after {max_turns} turns and report what's blocking."
     )
-    if len(condition) > _GOAL_MAX_LEN:
-        condition = condition[:_GOAL_MAX_LEN]
-    return condition
+
+    # Truncate the CRITERIA, never the exits. The exits used to sit at the end of
+    # one concatenated string that was then sliced to _GOAL_MAX_LEN, so a long
+    # enough criteria list would have silently removed the only stop condition and
+    # produced a goal loop with no way out. Nothing has hit it — 0 of 799 tasks
+    # with usable criteria exceed the cap, longest 1964 chars — so this closes a
+    # latent hazard, not an active one. Worth closing anyway: the failure mode is
+    # unbounded looping, and criteria only get longer.
+    head = "All of these hold, each demonstrated in your own output: "
+    budget = _GOAL_MAX_LEN - len(head) - len(exits)
+    if budget < 1:  # pragma: no cover - _GOAL_MAX_LEN is far larger than the exits
+        return (head + enumerated)[:_GOAL_MAX_LEN]
+    return head + enumerated[:budget] + exits

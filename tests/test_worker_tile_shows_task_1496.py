@@ -16,14 +16,16 @@ import pytest
 from jinja2 import Environment, FileSystemLoader
 
 from swarm.tasks.task import STATUS_LABEL, TaskStatus
-from swarm.web.app import _worker_task_cards, _worker_task_titles
+from swarm.web.app import _worker_pending_counts, _worker_task_cards, _worker_task_titles
 
 TPL = "src/swarm/web/templates"
 BASE = Path("src/swarm/web/templates/base.html")
 
 
-def _task(num: int, title: str, status: TaskStatus, worker: str | None):
-    return types.SimpleNamespace(number=num, title=title, status=status, assigned_worker=worker)
+def _task(num: int, title: str, status: TaskStatus, worker: str | None, on_hold: bool = False):
+    return types.SimpleNamespace(
+        number=num, title=title, status=status, assigned_worker=worker, is_on_hold=on_hold
+    )
 
 
 def _daemon(*tasks) -> MagicMock:
@@ -51,39 +53,36 @@ def test_label_comes_from_the_canonical_status_vocabulary() -> None:
     """Operator, 2026-08-11: "it isn't queued, that isn't the status, right?"
 
     He is right. The first tile hand-rolled its own words in the template —
-    "working"/"queued" — so a BUZZING worker's ASSIGNED task read QUEUED, which
-    names a task nobody has picked up: the opposite of what was on screen. The
-    task board beside it said ASSIGNED for the same row, so two surfaces
-    disagreed about one task. STATUS_LABEL is the declared single source of truth
-    and is already coverage-tested against every TaskStatus member.
+    "working"/"queued" — so a task read QUEUED on the tile while the board two
+    panels over called the same row ASSIGNED. STATUS_LABEL is the declared single
+    source of truth and is already coverage-tested against every TaskStatus.
     """
-    for status in (TaskStatus.ACTIVE, TaskStatus.ASSIGNED):
-        d = _daemon(_task(7, "t", status, "swarm"))
-        assert _worker_task_cards(d)["swarm"]["label"] == STATUS_LABEL[status]
+    d = _daemon(_task(7, "t", TaskStatus.ACTIVE, "swarm"))
+    assert _worker_task_cards(d)["swarm"]["label"] == STATUS_LABEL[TaskStatus.ACTIVE]
 
 
-def test_the_tile_never_says_queued_for_an_assigned_task() -> None:
-    """The specific regression, asserted on the rendered output.
+def test_no_hand_rolled_status_vocabulary_in_the_template() -> None:
+    """Guards the source, because the map test above cannot see the template.
 
-    Guards the word itself, not just the plumbing: re-introducing a ternary in
-    the template would satisfy the map test above and still print "queued".
+    Re-introducing a ternary would satisfy every data-layer assertion here and
+    still print the wrong word on screen — which is exactly how this shipped.
     """
-    cards = _worker_task_cards(_daemon(_task(1501, "Choir rows", TaskStatus.ASSIGNED, "swarm")))
-    html = _render(cards)
-    assert "queued" not in html.lower(), "an ASSIGNED task is owned, not waiting in a queue"
-    assert "Assigned" in html
+    src = (Path(TPL) / "partials" / "worker_list.html").read_text()
+    assert "'queued'" not in src and "'working'" not in src
 
 
-def test_assigned_is_reported_as_assigned_not_hidden_and_not_promoted() -> None:
-    """The whole point: visible, but NOT dressed up as in-progress.
+def test_an_assigned_task_is_not_reported_as_the_current_task() -> None:
+    """REVERSES #1496's widening. Operator, 2026-08-11: "assigned workers
+    shouldn't show in the list, as assignment doesn't mean anything".
 
-    #1159 removed daemon-side activation inference after the promoter activated
-    the wrong task. A worker that skipped swarm_start_task reads ASSIGNED here
-    even while working — the honest answer, not a guess.
+    #1496 put ASSIGNED tasks on the tile's top line reasoning that a blank tile
+    hid "assigned and stuck". That traded a missing fact for a false one: the
+    line answers "what is this worker doing", and nobody has claimed to have
+    started an assigned task. It goes to the pending count instead.
     """
     d = _daemon(_task(1498, "claim hook", TaskStatus.ASSIGNED, "swarm"))
-    card = _worker_task_cards(d)["swarm"]
-    assert card["status"] == "assigned", "an assigned task must not be reported as active"
+    assert _worker_task_cards(d) == {}, "assignment is not a claim about the present"
+    assert _worker_pending_counts(d) == {"swarm": 1}, "but it must not vanish either"
 
 
 def test_active_wins_when_a_worker_somehow_holds_both() -> None:
@@ -115,11 +114,43 @@ def test_worker_with_no_task_is_absent_from_the_map() -> None:
 def test_active_only_helper_is_unchanged() -> None:
     """_worker_task_titles keeps its ACTIVE-only guarantee (2026-08-06 ruling).
 
-    The new card function is additive. If this ever starts returning assigned
-    work, the old ruling has been silently reversed.
+    Both surfaces now agree on ACTIVE-only, which is the point. If this ever
+    starts returning assigned work, the ruling has been silently reversed.
     """
     d = _daemon(_task(1, "queued", TaskStatus.ASSIGNED, "swarm"))
     assert _worker_task_titles(d) == {}
+
+
+# ---------------------------------------------------------------- pending
+
+
+def test_pending_counts_every_assigned_task_not_just_one() -> None:
+    """A count is the honest shape: naming one of three would pick arbitrarily."""
+    d = _daemon(
+        _task(1, "a", TaskStatus.ASSIGNED, "swarm"),
+        _task(2, "b", TaskStatus.ASSIGNED, "swarm"),
+        _task(3, "c", TaskStatus.ASSIGNED, "other"),
+    )
+    assert _worker_pending_counts(d) == {"swarm": 2, "other": 1}
+
+
+def test_parked_work_is_not_pending_on_anyone() -> None:
+    """Parked means nobody should pick it up, so counting it inflates the queue
+    with work deliberately set down — an operator acting on that number would be
+    chasing tasks that are not waiting on them."""
+    d = _daemon(_task(1, "parked", TaskStatus.ASSIGNED, "swarm", on_hold=True))
+    assert _worker_pending_counts(d) == {}
+
+
+def test_an_active_task_is_not_also_counted_as_pending() -> None:
+    """Otherwise the tile would say "In Progress #2" and "1 pending" for one task."""
+    d = _daemon(_task(2, "started", TaskStatus.ACTIVE, "swarm"))
+    assert _worker_pending_counts(d) == {}
+
+
+@pytest.mark.parametrize("status", [TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.BACKLOG])
+def test_closed_or_blocked_work_is_not_pending(status: TaskStatus) -> None:
+    assert _worker_pending_counts(_daemon(_task(9, "x", status, "swarm"))) == {}
 
 
 # ------------------------------------------------------------------ render
@@ -129,7 +160,7 @@ _CARD_ACTIVE = {"swarm": {"number": 1, "title": "t", "status": "active", "label"
 _CARD_ASSIGNED = {"swarm": {"number": 1, "title": "t", "status": "assigned", "label": "Assigned"}}
 
 
-def _render(cards: dict) -> str:
+def _render(cards: dict, pending: dict | None = None) -> str:
     env = Environment(loader=FileSystemLoader(TPL), autoescape=True)
     tpl = env.get_template("partials/worker_list.html")
     w = types.SimpleNamespace(
@@ -147,8 +178,33 @@ def _render(cards: dict) -> str:
         state_duration="2m",
     )
     return tpl.render(
-        workers=[w], selected_worker="swarm", worker_tasks={}, worker_task_cards=cards, queen=None
+        workers=[w],
+        selected_worker="swarm",
+        worker_tasks={},
+        worker_task_cards=cards,
+        worker_pending=pending or {},
+        queen=None,
     )
+
+
+def test_pending_renders_as_a_count_and_never_as_a_task_row() -> None:
+    """Operator, 2026-08-11: "maybe show 'Pending Assigned Tasks' or something
+    useful". Useful, but not on the line that says what the worker is doing."""
+    html = _render({}, {"swarm": 3})
+    assert "3 pending assigned" in html
+    assert "worker-task" not in html, "a pending count must not render a task row"
+
+
+def test_a_worker_can_show_both_a_current_task_and_a_queue() -> None:
+    html = _render(_CARD_ACTIVE, {"swarm": 2})
+    assert "In Progress" in html and "2 pending assigned" in html
+
+
+def test_pending_line_is_absent_at_zero() -> None:
+    """Same ruling as the idle task row: absence is the signal, not a "0 pending"
+    label repeated down a 16-worker sidebar."""
+    html = _render({}, {})
+    assert "pending" not in html.lower()
 
 
 def test_tile_renders_number_and_title() -> None:
@@ -166,13 +222,24 @@ def test_tile_renders_number_and_title() -> None:
     assert "Worker tiles show no task" in html
 
 
-def test_tile_distinguishes_active_from_assigned() -> None:
-    active = _render(_CARD_ACTIVE)
-    assigned = _render(_CARD_ASSIGNED)
+def test_tile_distinguishes_working_from_merely_queued() -> None:
+    """The distinction survives, but it moved: it is now row-vs-count, not
+    chip-colour, because the two facts are different KINDS of fact."""
+    working = _render(_CARD_ACTIVE)
+    queued = _render({}, {"swarm": 1})
 
-    assert "task-chip-active" in active and "In Progress" in active
+    assert "task-chip-active" in working and "In Progress" in working
+    assert "task-chip-active" not in queued, "a queued task must not borrow the working chip"
+    assert "1 pending assigned" in queued
+    assert working != queued, "the two states must not render identically"
+
+
+def test_the_template_still_honours_a_cards_own_status_class() -> None:
+    """_CARD_ASSIGNED is unreachable via _worker_task_cards today, but the
+    template must not hard-code "active" — a future status reaching the card
+    should carry its own class rather than silently render as in-progress."""
+    assigned = _render(_CARD_ASSIGNED)
     assert "task-chip-assigned" in assigned and "Assigned" in assigned
-    assert active != assigned, "the two states must not render identically"
 
 
 def test_idle_worker_renders_no_task_row_at_all() -> None:
@@ -184,10 +251,11 @@ def test_idle_worker_renders_no_task_row_at_all() -> None:
     whose card failed to build, which is exactly the confusion the feature was
     added to remove. Absence is the signal; the state pill already says RESTING.
     """
-    html = _render({})
+    html = _render({}, {})
     assert "no task assigned" not in html
     assert "task-chip-idle" not in html
     assert "worker-task" not in html, "an empty task row is still a row — render nothing"
+    assert "worker-pending" not in html, "and neither is an empty pending line"
     assert "None" not in html, "a missing card must not leak a Python None into the tile"
     assert "Undefined" not in html
 
@@ -196,9 +264,9 @@ def test_status_is_not_conveyed_by_colour_alone() -> None:
     """A greyscale screenshot — which is how the operator reported this — must
     still distinguish the two states, so the chip carries a word."""
     active = _render(_CARD_ACTIVE)
-    assigned = _render(_CARD_ASSIGNED)
-    assert "In Progress" in active and "In Progress" not in assigned
-    assert "Assigned" in assigned
+    queued = _render({}, {"swarm": 1})
+    assert "In Progress" in active and "In Progress" not in queued
+    assert "pending assigned" in queued and "pending assigned" not in active
 
 
 # ---------------------------------------------------------------- contrast

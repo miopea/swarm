@@ -14,6 +14,7 @@ from swarm.web.app import (
     _system_log_dicts,
     _task_dicts,
     _worker_dicts,
+    _worker_pending_counts,
     _worker_task_cards,
     _worker_task_titles,
 )
@@ -53,6 +54,7 @@ async def handle_partial_workers(request: web.Request) -> dict[str, Any]:
         "selected_worker": request.query.get("worker"),
         "worker_tasks": _worker_task_titles(d),
         "worker_task_cards": _worker_task_cards(d),
+        "worker_pending": _worker_pending_counts(d),
     }
 
 

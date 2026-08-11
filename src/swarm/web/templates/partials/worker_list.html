@@ -27,13 +27,20 @@
             {% endif %}
         </div>
         {% endif %}
-        {# #1496: number + short title + the ASSIGNED/ACTIVE distinction.
-           Reports the board's own status; NO inference (#1159). A worker that
-           skipped swarm_start_task reads "Assigned" while working — the honest
-           answer, and the state dot beside it says whether it is BUZZING.
-           The word comes from card.label (STATUS_LABEL) rather than a ternary
-           here: the ternary said "queued", which named a task nobody had picked
-           up, and printed it on workers that were visibly buzzing on it. #}
+        {# TWO DIFFERENT FACTS, TWO DIFFERENT SHAPES — do not merge them back.
+           Operator, 2026-08-11: "assigned workers shouldn't show in the list, as
+           assignment doesn't mean anything" / "maybe show 'Pending Assigned
+           Tasks' or something useful".
+           Line 1 answers WHAT IS THIS WORKER DOING, so only an ACTIVE task —
+           one a worker asserted via swarm_start_task — may appear there. An
+           assigned task is not an answer to that question, and #1496 briefly
+           put one there: every buzzing worker then displayed a task it had not
+           declared it started.
+           Line 2 is QUEUE DEPTH. A count, not a task: naming one of N pending
+           would have to pick arbitrarily, which is the same arbitrary pick that
+           made #1159's promoter activate the wrong task.
+           The word comes from card.label (STATUS_LABEL), never a ternary here —
+           a ternary is what printed "queued" for an owned task. #}
         {% set card = worker_task_cards.get(w.name) if worker_task_cards else None %}
         {% if card %}
         <div class="worker-task worker-task-{{ card.status }}"
@@ -41,6 +48,13 @@
             <span class="task-status-chip task-chip-{{ card.status }}">{{ card.label }}</span>
             <span class="task-num">#{{ card.number }}</span>
             <span class="task-title">{{ card.title }}</span>
+        </div>
+        {% endif %}
+        {% set pending = worker_pending.get(w.name) if worker_pending else 0 %}
+        {% if pending %}
+        <div class="worker-pending"
+             title="{{ pending }} task{{ '' if pending == 1 else 's' }} assigned to {{ w.name }} that nobody has started. Assignment alone does not mean work is happening — a task only counts as in progress once the worker calls swarm_start_task.">
+            {{ pending }} pending assigned
         </div>
         {% endif %}
         {# No task: render NOTHING. An explicit "idle / no task assigned" row was

@@ -10,6 +10,48 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.11.4] - 2026-08-11
+
+### Features
+
+### Changes
+
+- Worker tiles show only a task the worker has ASSERTED via `swarm_start_task`.
+  Assignment is not a claim about the present, so it no longer occupies the line
+  that answers "what is this worker doing" — it appears as a quiet `N pending
+  assigned` count instead. A count rather than a task on purpose: naming one of N
+  would have to pick arbitrarily, which is the pick that made #1159's promoter
+  activate the wrong task. Parked (HOLD) tasks are excluded from the count.
+
+### Fixes
+
+- The Edit/Write file-lock hook no longer refuses a claim holder its own file
+  (#1498). `_identify_worker` is a CWD heuristic that returns `None` when it
+  cannot match a worker path, and the old code substituted the literal string
+  `"unknown"`, which compares unequal to every real owner — so an unidentified
+  worker was refused every claimed file, the refusal named the legitimate holder,
+  and `"unknown"` was then written into the lock table, dispossessing the real
+  claimer. Claiming a file was therefore strictly harmful. It now fails open on
+  unknown identity and never records a lock under a non-worker name.
+- That hook also honours `coordination.file_ownership` (`off` / `warning` /
+  `hard-block`), which it previously never consulted — hard-blocking fleet-wide
+  while the configured mode was advisory. A block now names both parties, so a
+  self-refusal is impossible to misread.
+- File-lock conflicts reach the drone log and log at WARNING. They were logged at
+  INFO under a daemon running `log_level=WARNING`, so a denial reached no
+  destination at all, and it was the only decision on that route that skipped
+  `_log_hook_decision` — a block nobody outside the blocked worker could diagnose.
+- A declared blocker now satisfies the native `/goal` condition instead of reading
+  as "goal not yet met, continue" (#1500). The only exit was a turn counter, so a
+  worker waiting on an operator decision had to burn all `native_goal_max_turns`
+  before it was allowed to stop, and every one of those turns was guaranteed waste.
+  Measured: two workers each hit Claude Code's 9-consecutive-block cap re-emitting
+  a blocker. Second instance of the class fixed at the call site for #523.
+- The `/goal` condition's exit clauses survive truncation. They sat at the end of a
+  string sliced to 4000 chars, so long criteria would have silently removed the
+  only stop condition and produced a goal loop with no exit. Latent, never fired —
+  0 of 799 tasks with usable criteria exceed the cap, longest 1964 chars.
+
 ## [2026.8.11.3] - 2026-08-11
 
 ### Features
