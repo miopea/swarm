@@ -133,10 +133,19 @@ def test_tile_distinguishes_active_from_assigned() -> None:
     assert active != assigned, "the two states must not render identically"
 
 
-def test_idle_worker_renders_cleanly_not_blank_and_not_an_error() -> None:
+def test_idle_worker_renders_no_task_row_at_all() -> None:
+    """Operator ruling 2026-08-11: no task means NO TEXT, not an "idle" row.
+
+    The original #1496 tile printed "idle / no task assigned" whenever the card
+    was missing. Across a 16-worker sidebar that painted the same sentence into
+    every tile, and — worse — made a genuinely idle worker look identical to one
+    whose card failed to build, which is exactly the confusion the feature was
+    added to remove. Absence is the signal; the state pill already says RESTING.
+    """
     html = _render({})
-    assert "task-chip-idle" in html
-    assert "no task assigned" in html
+    assert "no task assigned" not in html
+    assert "task-chip-idle" not in html
+    assert "worker-task" not in html, "an empty task row is still a row — render nothing"
     assert "None" not in html, "a missing card must not leak a Python None into the tile"
     assert "Undefined" not in html
 

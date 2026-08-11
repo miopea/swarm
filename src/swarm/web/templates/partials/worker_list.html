@@ -39,12 +39,13 @@
             <span class="task-num">#{{ card.number }}</span>
             <span class="task-title">{{ card.title }}</span>
         </div>
-        {% else %}
-        <div class="worker-task worker-task-idle" title="No task assigned">
-            <span class="task-status-chip task-chip-idle">idle</span>
-            <span class="task-title text-muted">no task assigned</span>
-        </div>
         {% endif %}
+        {# No task: render NOTHING. An explicit "idle / no task assigned" row was
+           worse than silence — it filled every tile in a 16-worker sidebar with
+           the one fact the empty space already conveys, and made a genuinely
+           idle worker visually indistinguishable from a worker whose card failed
+           to build. Absence of a task row means no task; the state pill above
+           already says RESTING/SLEEPING. #}
         {% if w.state == 'STUNG' %}
         <div class="stung-recovery">
             <button class="btn btn-xs btn-secondary" data-worker-revive="{{ w.name }}" title="Restart this worker">Revive</button>
