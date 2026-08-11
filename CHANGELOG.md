@@ -10,6 +10,26 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.11.3] - 2026-08-11
+
+### Features
+
+### Changes
+
+- Worker tiles name a task's state with the canonical `STATUS_LABEL` vocabulary
+  ("Assigned" / "In Progress") instead of words invented in the template. The old
+  ternary printed "queued" for an ASSIGNED task, which names work nobody has picked
+  up — so a BUZZING worker's tile described the opposite of what was happening, and
+  the task board beside it called the same row "Assigned".
+
+### Fixes
+
+- Task status chips meet WCAG 2.1 AA in light mode. Both rules set near-black text
+  against a background token that inverts between themes (`--accent` is `#F1B83D`
+  in dark, `#7A5000` in light), so light mode rendered dark-on-dark: measured
+  2.33:1 for the assigned chip and 2.81:1 for the active one, against the 4.5:1
+  AA needs at that text size. Now 7.07:1 and 6.06:1.
+
 ## [2026.8.11.2] - 2026-08-11
 
 ### Fixes

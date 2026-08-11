@@ -29,13 +29,16 @@
         {% endif %}
         {# #1496: number + short title + the ASSIGNED/ACTIVE distinction.
            Reports the board's own status; NO inference (#1159). A worker that
-           skipped swarm_start_task reads "queued" while working — the honest
-           answer, and the state dot beside it says whether it is BUZZING. #}
+           skipped swarm_start_task reads "Assigned" while working — the honest
+           answer, and the state dot beside it says whether it is BUZZING.
+           The word comes from card.label (STATUS_LABEL) rather than a ternary
+           here: the ternary said "queued", which named a task nobody had picked
+           up, and printed it on workers that were visibly buzzing on it. #}
         {% set card = worker_task_cards.get(w.name) if worker_task_cards else None %}
         {% if card %}
         <div class="worker-task worker-task-{{ card.status }}"
-             title="#{{ card.number }} — {{ card.title }} ({{ card.status }})">
-            <span class="task-status-chip task-chip-{{ card.status }}">{{ 'working' if card.status == 'active' else 'queued' }}</span>
+             title="#{{ card.number }} — {{ card.title }} ({{ card.label }})">
+            <span class="task-status-chip task-chip-{{ card.status }}">{{ card.label }}</span>
             <span class="task-num">#{{ card.number }}</span>
             <span class="task-title">{{ card.title }}</span>
         </div>
@@ -126,7 +129,7 @@
                     <span class="wsel-opt-line2">
                         <span class="{{ state_color(w.state) }}">{{ w.state }}</span>
                         {% if w.needs_operator_input %}<span class="wsel-opt-needs">needs you</span>{% endif %}
-                        {% set c = worker_task_cards.get(w.name) if worker_task_cards else None %}{% if c %}<span class="wsel-opt-task task-chip-{{ c.status }}" title="#{{ c.number }} — {{ c.title }} ({{ c.status }})">#{{ c.number }} {{ c.title }}</span>{% endif %}
+                        {% set c = worker_task_cards.get(w.name) if worker_task_cards else None %}{% if c %}<span class="wsel-opt-task task-chip-{{ c.status }}" title="#{{ c.number }} — {{ c.title }} ({{ c.label }})">#{{ c.number }} {{ c.title }}</span>{% endif %}
                     </span>
                 </span>
             </li>

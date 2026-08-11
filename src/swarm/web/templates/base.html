@@ -1258,6 +1258,18 @@
             letter-spacing: 0.04em; }
         .task-chip-active { background: var(--leaf); color: #06210f; }
         .task-chip-assigned { background: var(--honey); color: #2b1d00; }
+        /* The two rules above set a NEAR-BLACK text colour against a token that
+           INVERTS between themes, so they were only ever legible in dark mode.
+           --honey resolves to #F1B83D (bright) in dark and #7A5000 (dark brown)
+           in light; --leaf to #7FCB87 and #2F6F3E. In light mode that is dark-on-
+           dark: measured 2.32:1 for the assigned chip and 2.81:1 for the active
+           one, against the 4.5:1 WCAG 2.1 AA needs for text this size (0.62rem —
+           nowhere near the 18.66px that would let 3:1 apply). Operator report:
+           "queued is hard to see". White restores 7.07:1 and 6.06:1.
+           Overriding only `color` is deliberate: the backgrounds still carry the
+           theme's accent, so the chips keep their identity in both modes. */
+        [data-theme="light"] .task-chip-active,
+        [data-theme="light"] .task-chip-assigned { color: #ffffff; }
         .task-chip-idle { background: transparent; color: var(--muted);
             border: 1px solid var(--muted); opacity: 0.55; }
         .worker-task-idle { opacity: 0.7; }

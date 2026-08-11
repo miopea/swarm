@@ -126,7 +126,7 @@ def _worker_task_titles(daemon: SwarmDaemon) -> dict[str, str]:
 
 
 def _worker_task_cards(daemon: SwarmDaemon) -> dict[str, dict[str, Any]]:
-    """worker name -> {number, title, status} for the task it holds (#1496).
+    """worker name -> {number, title, status, label} for the task it holds (#1496).
 
     DELIBERATELY WIDER THAN ``_worker_task_titles``, which stays ACTIVE-only and
     keeps its guarantee. The 2026-08-06 ruling behind that function was *"if it's
@@ -147,6 +147,18 @@ def _worker_task_cards(daemon: SwarmDaemon) -> dict[str, dict[str, Any]]:
     updated_at); a worker that skips ``swarm_start_task`` will read ASSIGNED here
     even while working, and that is the honest answer rather than a guess.
     ACTIVE wins when a worker somehow holds both, because it is the asserted one.
+
+    ``label`` COMES FROM ``STATUS_LABEL`` AND IS NOT INVENTED HERE. The first cut
+    of the tile hand-rolled its own words in the template — "working"/"queued" —
+    and the operator caught it immediately: *"it isn't queued, that isn't the
+    status, right?"* He is right, and the damage was worse than a wrong synonym.
+    "Queued" names a task waiting its turn with nobody on it, so a BUZZING worker
+    whose task read QUEUED described the opposite of what was happening; and the
+    task board beside it called the very same task ASSIGNED, so the two surfaces
+    disagreed about one row. ``STATUS_LABEL`` is the declared single source of
+    truth for this vocabulary and a coverage test already forces it to span every
+    ``TaskStatus`` — carrying the label instead of re-deriving it means a status
+    added later cannot reach this tile without a word.
     """
     cards: dict[str, dict[str, Any]] = {}
     for t in daemon.task_board.all_tasks:
@@ -159,6 +171,7 @@ def _worker_task_cards(daemon: SwarmDaemon) -> dict[str, dict[str, Any]]:
             "number": t.number,
             "title": t.title,
             "status": t.status.value,
+            "label": STATUS_LABEL.get(t.status, t.status.value),
         }
     return cards
 
