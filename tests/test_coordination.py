@@ -311,7 +311,11 @@ class TestPullWorker:
         w = _make_worker("w1", WorkerState.RESTING)
         result = await pull_worker(w)
         assert result is True
-        w.process.send_keys.assert_called_once_with("git pull --rebase --quiet\n")
+        # automated=True is part of the contract, not incidental (#1451): a git
+        # pull is a scheduled housekeeping write, so it must be held rather than
+        # typed into an open AskUserQuestion. Asserted explicitly so that
+        # dropping the flag fails here instead of silently re-opening the hole.
+        w.process.send_keys.assert_called_once_with("git pull --rebase --quiet\n", automated=True)
 
     @pytest.mark.asyncio
     async def test_pull_sleeping_worker(self) -> None:

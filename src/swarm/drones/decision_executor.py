@@ -307,7 +307,7 @@ class DecisionExecutor:
         provider = self._get_provider(worker)
         if await self._safe_worker_action(
             worker,
-            target_proc.send_keys(provider.approval_response(True), enter=False),
+            target_proc.send_keys(provider.approval_response(True), enter=False, automated=True),
             DroneAction.CONTINUED,
             decision,
             include_rule_pattern=True,
@@ -334,7 +334,7 @@ class DecisionExecutor:
 
             await asyncio.sleep(3)
             try:
-                await proc.send_keys(msg, enter=True)
+                await proc.send_keys(msg, enter=True, automated=True)
                 _log.info("injected context restoration for %s", worker.name)
             except (ProcessError, OSError):
                 _log.debug("context restoration failed for %s", worker.name)
@@ -356,7 +356,7 @@ class DecisionExecutor:
             worker.compacting = False
             return
         try:
-            await target.send_keys("/compact", enter=True)
+            await target.send_keys("/compact", enter=True, automated=True)
             _log.info("injected /compact for %s", worker.name)
         except (ProcessError, OSError):
             _log.warning("failed to inject /compact for %s", worker.name)

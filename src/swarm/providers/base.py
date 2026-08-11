@@ -186,6 +186,36 @@ class LLMProvider(ABC):
         """Check if output shows an empty input prompt ready for continuation."""
         return False
 
+    def has_open_selection_prompt(self, content: str) -> bool:
+        """Whether the screen is showing a prompt that a stray Enter would ANSWER.
+
+        This is the guard used by ``WorkerService.send_to_worker(automated=True)``
+        to refuse writing into a question the operator is being asked. It is
+        deliberately SEPARATE from ``is_user_question`` and from
+        ``has_choice_prompt``, for two reasons:
+
+        NO TAIL WINDOW. ``is_user_question`` matches inside ``TAIL_MEDIUM`` (15
+        lines) and ``has_choice_prompt`` inside ``TAIL_WIDE`` (30). An
+        AskUserQuestion set with three questions of four options each renders
+        TALLER THAN BOTH, so the marker that says "a selection is pending" scrolls
+        out of the window while the prompt is still open and still answerable.
+        A guard that is blind to exactly the biggest prompts is worse than none,
+        because it reports safe. So this scans the WHOLE captured screen.
+
+        STRUCTURAL, NOT LEXICAL. It keys on the shape every selection prompt has —
+        a cursored option line (``> 1.`` / ``❯ 2.``) with at least one sibling
+        option — rather than on wording like "chat about this", which differs per
+        provider and per prompt type and silently stops matching when the CLI
+        rewords its UI.
+
+        Default is a generic implementation rather than an abstractmethod so that
+        adding this guard cannot break a provider that has not been updated; a
+        provider whose prompts do not render this way should override it.
+        """
+        from swarm.pty.prompt_guard import has_open_selection_prompt
+
+        return has_open_selection_prompt(content)
+
     def plan_mode_preamble(self) -> str | None:
         """Preamble prepended to user-request tasks that need a plan-approval gate.
 

@@ -383,7 +383,7 @@ class QueenAnalyzer:
                     proposal.worker_name,
                 )
                 return False
-            await proc.send_keys(proposal.message)
+            await proc.send_keys(proposal.message, automated=True)
         elif action == QueenAction.CONTINUE:
             if worker.state != WorkerState.BUZZING:
                 _log.info(

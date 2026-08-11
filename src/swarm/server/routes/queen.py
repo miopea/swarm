@@ -369,9 +369,9 @@ async def _forward_to_queen(daemon: object, thread_id: str, body: str) -> bool:
     try:
         worker_svc = getattr(daemon, "worker_svc", None)
         if worker_svc is not None:
-            await worker_svc.send_to_worker(queen.name, text, _log_operator=False)
+            await worker_svc.send_to_worker(queen.name, text, automated=True, _log_operator=False)
         else:
-            await queen.process.send_keys(text)
+            await queen.process.send_keys(text, automated=True)
             await queen.process.send_enter()
         return True
     except Exception:

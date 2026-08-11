@@ -239,6 +239,7 @@ class WorkerService:
         message: str,
         *,
         enter: bool = True,
+        automated: bool = False,
         _log_operator: bool = True,
     ) -> None:
         """Send text to a worker's process (serialized per-worker).
@@ -248,6 +249,20 @@ class WorkerService:
         operator can add context (or edit the auto-inserted path)
         before hitting Enter themselves. Default stays True to preserve
         the long-standing semantics of `/api/workers/<name>/send`.
+
+        ``automated=True`` marks a message that NO HUMAN chose to send right
+        now — a broadcast, a dispatch, an oversight nudge, a proposal. Those are
+        held back while a selection prompt is open, because writing into a
+        focused question either commits the highlighted option or types the
+        message body in as free text, and the answer is then attributed to the
+        operator. The default is False so the operator's own dashboard send and
+        the terminal bridge keep working while a prompt is up — the operator is
+        precisely the human the prompt is waiting for, and a guard that blocked
+        them would make an open question unanswerable.
+
+        THIS FLAG IS THE WHOLE FIX. The guard below is inert unless callers pass
+        it, which is why #1451 wired every automated call site in one change
+        rather than landing the choke point first.
         """
         worker = self.require_worker(name)
         self._require_process(worker)
@@ -255,7 +270,10 @@ class WorkerService:
         if pilot:
             pilot.wake_worker(name)
         async with self._pty_lock(name):
-            await worker.process.send_keys(message, enter=enter)
+            # The hold-and-flush itself lives in WorkerProcess.send_keys, which is
+            # the ONE choke point every write passes through — including the ~13
+            # sites that hold a PtyProcess and never reach this method.
+            await worker.process.send_keys(message, enter=enter, automated=automated)
         if _log_operator:
             self._drone_log.add(
                 DroneAction.OPERATOR, name, "sent message", category=LogCategory.OPERATOR
@@ -653,6 +671,13 @@ class WorkerService:
 
             quit_cmd = provider.quit_command()
             if quit_cmd:
+                # #1451: DELIBERATELY NOT automated=True. Kill is operator-
+                # initiated and its whole purpose is to end a stuck session — a
+                # worker hung ON a prompt is the commonest reason to press it.
+                # Deferring the quit behind that prompt would make exactly the
+                # worker you most need to kill unkillable, which is a worse
+                # failure than the one this guard prevents. The Esc interrupt
+                # sent just above dismisses the prompt first in any case.
                 await proc.send_keys(quit_cmd, enter=True)
                 # Wait for the agent to actually go. shell_wrap re-execs a login
                 # shell when it exits, so "foreground command is a shell" is the
@@ -663,6 +688,8 @@ class WorkerService:
                         break
                     await asyncio.sleep(_KILL_POLL_INTERVAL)
 
+            # Same reasoning as the quit above: an un-killable worker is worse
+            # than a stray Enter, and by here the agent has already exited.
             await proc.send_keys("exit", enter=True)
             await asyncio.sleep(_KILL_SHELL_EXIT_DELAY)
         except (ProcessError, OSError):
@@ -853,7 +880,7 @@ class WorkerService:
         ]
         return await self._send_to_workers(
             targets,
-            lambda w: w.process.send_keys(message),
+            lambda w: w.process.send_keys(message, automated=True),
             "all",
             f'broadcast to {{count}} worker(s): "{preview}"',
         )
@@ -867,7 +894,7 @@ class WorkerService:
         preview = truncate_preview(message)
         return await self._send_to_workers(
             targets,
-            lambda w: w.process.send_keys(message),
+            lambda w: w.process.send_keys(message, automated=True),
             group_name,
             f'group send to {{count}} worker(s): "{preview}"',
         )

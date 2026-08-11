@@ -489,7 +489,7 @@ class TaskCoordinator:
         )
 
         try:
-            await d.send_to_worker(worker_name, msg, _log_operator=False)
+            await d.send_to_worker(worker_name, msg, automated=True, _log_operator=False)
             if "\n" in msg or len(msg) > 200:
                 worker = d._require_worker(worker_name)
                 await asyncio.sleep(0.3)
@@ -632,7 +632,9 @@ class TaskCoordinator:
             )
             if not condition:
                 return
-            await d.send_to_worker(worker_name, f"/goal {condition}", _log_operator=False)
+            await d.send_to_worker(
+                worker_name, f"/goal {condition}", automated=True, _log_operator=False
+            )
             await asyncio.sleep(0.3)
             proc = d._require_worker(worker_name).process
             if proc and not proc.is_user_active:
@@ -962,7 +964,9 @@ class TaskCoordinator:
                     )
                     try:
                         t = asyncio.create_task(
-                            d.send_to_worker(task.source_worker, notify_msg, _log_operator=False)
+                            d.send_to_worker(
+                                task.source_worker, notify_msg, automated=True, _log_operator=False
+                            )
                         )
                         t.add_done_callback(_log_task_exception)
                         d._track_task(t)

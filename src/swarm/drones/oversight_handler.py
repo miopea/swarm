@@ -213,7 +213,7 @@ class OversightHandler:
                 # Send as a single-line message — no embedded newlines that
                 # bash could interpret as separate commands if Claude exits.
                 clean_msg = result.message.replace("\n", " ").strip()
-                await worker.process.send_keys(clean_msg)
+                await worker.process.send_keys(clean_msg, automated=True)
                 _log.info(
                     "oversight redirected %s: %s",
                     worker.name,

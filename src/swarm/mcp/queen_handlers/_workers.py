@@ -223,7 +223,7 @@ def _handle_prompt_worker(
     worker_svc = getattr(d, "worker_svc", None)
     if worker_svc is None:
         return [{"type": "text", "text": "Worker service unavailable."}]
-    _fire_async(worker_svc.send_to_worker(target, prompt, _log_operator=False))
+    _fire_async(worker_svc.send_to_worker(target, prompt, automated=True, _log_operator=False))
     suffix = " — queued for next turn" if will_queue else ""
     lines = [f"Prompt sent to {target}{suffix}.", f"Target engagement: {engagement_str}."]
     if collided and not ack:

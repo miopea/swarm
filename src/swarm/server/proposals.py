@@ -368,7 +368,7 @@ class ProposalManager:
         if action == QueenAction.WAIT and proc:
             if not proc.is_user_active:
                 if proposal.message:
-                    await proc.send_keys(proposal.message)
+                    await proc.send_keys(proposal.message, automated=True)
                 else:
                     await proc.send_enter()
         return f"escalation approved: {action}"

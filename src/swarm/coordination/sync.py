@@ -35,7 +35,7 @@ async def pull_worker(worker: Worker) -> bool:
         _log.debug("skip pull for %s: state=%s", worker.name, worker.state.value)
         return False
 
-    await proc.send_keys("git pull --rebase --quiet\n")
+    await proc.send_keys("git pull --rebase --quiet\n", automated=True)
     _log.info("sent git pull to %s", worker.name)
     return True
 

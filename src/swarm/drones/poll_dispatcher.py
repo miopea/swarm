@@ -347,7 +347,7 @@ class PollDispatcher:
                 f"Read relevant files but do not make changes yet."
             )
             try:
-                await proc.send_keys(msg, enter=True)
+                await proc.send_keys(msg, enter=True, automated=True)
                 worker.speculating_task_id = task.id
                 p.log.add(
                     DroneAction.CONTINUED,

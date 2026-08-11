@@ -19,12 +19,19 @@ from aiohttp import web
 
 from swarm.logging import get_logger
 from swarm.pty.buffer import RingBuffer
+from swarm.pty.prompt_guard import has_open_selection_prompt
 from swarm.pty.terminal import CellStyle
 
 _log = get_logger("pty.process")
 
 # Delay between text and Enter so TUI apps can process input
 _INPUT_DRAIN_DELAY = 0.05  # seconds
+
+# #1451: how much screen the open-prompt guard reads. Deliberately larger than
+# every TAIL_* window in providers/base.py — an AskUserQuestion set with three
+# questions of four options each is taller than TAIL_WIDE (30), and a guard that
+# cannot see the tallest prompts reports "safe" exactly when it matters most.
+_PROMPT_SCAN_LINES = 120
 
 # Type alias for the pool command sender bound method
 _SendCmd = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
@@ -106,6 +113,9 @@ class WorkerProcess:
         self._send_cmd: _SendCmd | None = None
         # Terminal-active guard: prevents automated input while user is typing
         self._terminal_active: bool = False
+        # #1451: automated writes held because a selection prompt was open.
+        # Held, NOT dropped — flushed by _flush_deferred_keys on the next write.
+        self._deferred_keys: list[tuple[str, bool]] = []
         self._last_user_input: float = 0.0
 
     def bind_send_cmd(self, send_cmd: _SendCmd) -> None:
@@ -432,17 +442,85 @@ class WorkerProcess:
         # Fallback to own command
         return self.get_foreground_command()
 
-    async def send_keys(self, text: str, enter: bool = True) -> None:
+    async def send_keys(self, text: str, enter: bool = True, *, automated: bool = False) -> None:
         """Send text to the worker's PTY.
 
         Text and Enter are sent as separate writes so that interactive
         TUI apps (e.g. Claude Code's slash-command autocomplete) have
         time to process the input before receiving the carriage return.
+
+        ``automated=True`` (#1451) marks a write NO HUMAN chose to make right
+        now — a broadcast, a dispatch, an oversight nudge, a proposal, a sync
+        command. Those are HELD while a selection prompt is open and delivered
+        once it clears, because Enter is the default here and an automated write
+        into a focused question either commits the highlighted option or types
+        the message in as free text. Either way the swarm answers a question the
+        operator was asked, under the operator's name.
+
+        The default is False so the two legitimate paths keep working unchanged:
+        ``pty/bridge.py`` (the operator's own keystrokes) and the operator's
+        dashboard send. The operator is precisely the human the prompt is waiting
+        for — a guard that blocked them would make an open question unanswerable.
         """
+        if automated and self._defer_if_prompt_open(text, enter):
+            return
+        await self._flush_deferred_keys()
         await self._write(text.encode("utf-8"))
         if enter:
             await asyncio.sleep(_INPUT_DRAIN_DELAY)
             await self._write(b"\r")
+
+    def _defer_if_prompt_open(self, text: str, enter: bool) -> bool:
+        """Queue an automated write if a selection prompt is open. True if held.
+
+        Reads a generous slice — larger than every ``TAIL_*`` window used for
+        state detection — because prompt HEIGHT is what defeated the earlier
+        detectors: a 3-question set with 4 options each is taller than both
+        TAIL_MEDIUM (15) and TAIL_WIDE (30).
+        """
+        try:
+            content = self.buffer.get_lines(_PROMPT_SCAN_LINES)
+        except Exception:
+            return False
+        if not has_open_selection_prompt(content):
+            return False
+        self._deferred_keys.append((text, enter))
+        _log.info(
+            "held automated write to %s — selection prompt open (%d queued)",
+            self.name,
+            len(self._deferred_keys),
+        )
+        return True
+
+    async def _flush_deferred_keys(self) -> None:
+        """Deliver writes held during a prompt, in order, before the current one.
+
+        Flushed opportunistically on the next write rather than on an event: the
+        prompt clears when the OPERATOR answers it, which produces no signal this
+        object can subscribe to.
+
+        RE-CHECKS the prompt before releasing anything. Without that check this
+        method REINTRODUCES the bug it exists to fix: the operator's own answer
+        is a write, so typing "y" into an open question would flush every held
+        message into that question FIRST, with Enter, answering it a beat before
+        the operator's keystroke lands. Deferring is only safe if releasing is
+        conditional too.
+        """
+        if not self._deferred_keys:
+            return
+        try:
+            if has_open_selection_prompt(self.buffer.get_lines(_PROMPT_SCAN_LINES)):
+                return
+        except Exception:
+            pass
+        # Swap the list out before awaiting so a concurrent flush cannot double-send.
+        queued, self._deferred_keys = self._deferred_keys, []
+        _log.info("flushing %d deferred write(s) to %s", len(queued), self.name)
+        for qtext, qenter in queued:
+            await self._write(qtext.encode("utf-8"))
+            if qenter:
+                await asyncio.sleep(_INPUT_DRAIN_DELAY)
+                await self._write(b"\r")
 
     async def send_enter(self) -> None:
         """Send Enter (carriage return) to the worker."""

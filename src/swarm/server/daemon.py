@@ -762,8 +762,19 @@ class SwarmDaemon(EventEmitter):
                 priority="high",
             )
 
+        # #1451: drones never speak for the operator. Bind automated=True HERE
+        # rather than at each drone call site, so a call site added later is
+        # guarded by construction instead of by memory — the failure mode that
+        # let #1443 sit half-fixed for a month.
+        async def _automated_send(
+            name: str, message: str, *, enter: bool = True, _log_operator: bool = True
+        ) -> None:
+            await self.send_to_worker(
+                name, message, enter=enter, automated=True, _log_operator=_log_operator
+            )
+
         self.pilot.set_idle_nudge_sender(
-            self.send_to_worker,
+            _automated_send,
             message_store=getattr(self, "message_store", None),
             blocker_store=getattr(self, "blocker_store", None),
             mcp_activity_lookup=get_worker_last_mcp_activity,
@@ -2257,13 +2268,18 @@ class SwarmDaemon(EventEmitter):
         message: str,
         *,
         enter: bool = True,
+        automated: bool = False,
         _log_operator: bool = True,
     ) -> None:
         """Send text to a worker's process. Pass ``enter=False`` to type
         the message into the input buffer without submitting (used by
-        the Web Share Target flow)."""
+        the Web Share Target flow).
+
+        ``automated=True`` (#1451) marks a message no human chose to send now,
+        so it is held back rather than typed into an open question. Default
+        stays False: this method is also the operator's dashboard send."""
         await self.worker_svc.send_to_worker(
-            name, message, enter=enter, _log_operator=_log_operator
+            name, message, enter=enter, automated=automated, _log_operator=_log_operator
         )
 
     async def continue_worker(self, name: str) -> None:

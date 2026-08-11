@@ -285,7 +285,7 @@ async def _deliver_reply_to_worker(
         "Full thread: `swarm_check_messages`. Resume the blocked work."
     )
     try:
-        await worker_svc.send_to_worker(worker, nudge, _log_operator=False)
+        await worker_svc.send_to_worker(worker, nudge, automated=True, _log_operator=False)
         return sent_id, True
     except Exception:
         _log.warning("attention reply: send_to_worker(%s) failed", worker, exc_info=True)

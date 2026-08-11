@@ -34,6 +34,8 @@ class FakeWorkerProcess:
     _foreground_command: str = "claude"
     _child_foreground_command: str = "claude"
     keys_sent: list[str] = field(default_factory=list, repr=False)
+    # #1451: writes held because a selection prompt was open.
+    deferred_keys: list[tuple[str, bool]] = field(default_factory=list, repr=False)
     _killed: bool = False
     _terminal_active: bool = False
     _last_user_input: float = 0.0
@@ -66,7 +68,22 @@ class FakeWorkerProcess:
     def feed_output(self, data: bytes) -> None:
         self.buffer.write(data)
 
-    async def send_keys(self, text: str, enter: bool = True) -> None:
+    async def send_keys(self, text: str, enter: bool = True, *, automated: bool = False) -> None:
+        """Mirror WorkerProcess.send_keys, INCLUDING the #1451 hold.
+
+        The fake models the guard rather than merely tolerating the keyword. A
+        fake that accepted ``automated`` and ignored it would let every existing
+        test keep passing while the real guard was wired backwards — the fake
+        would be asserting that the bug is absent by construction.
+        """
+        from swarm.pty.prompt_guard import has_open_selection_prompt
+
+        if automated and has_open_selection_prompt(self.buffer.get_lines(120)):
+            self.deferred_keys.append((text, enter))
+            return
+        for qtext, qenter in self.deferred_keys:
+            self.keys_sent.append(qtext + ("\n" if qenter else ""))
+        self.deferred_keys.clear()
         full = text + ("\n" if enter else "")
         self.keys_sent.append(full)
 

@@ -205,7 +205,7 @@ class DirectiveExecutor:
         provider = self._get_provider(worker)
         return await self._safe_worker_action(
             worker,
-            worker.process.send_keys(provider.approval_response(True), enter=False),
+            worker.process.send_keys(provider.approval_response(True), enter=False, automated=True),
             DroneAction.QUEEN_CONTINUED,
             reason=f"Queen ({conf:.0%}): {reason}",
         )
