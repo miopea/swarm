@@ -10,6 +10,23 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.11] - 2026-08-11
+
+### Fixes
+
+- **Drones can no longer answer the operator's `AskUserQuestion` escalations.** The tool
+  was approvable like any other, and the drone's approval response for Claude is a bare
+  Enter — which on an option picker selects the highlighted option. Escalations returned
+  verbatim option labels the operator never chose, identically on every re-ask. 400
+  occurrences since 2026-07-13. A new `_NEVER_AUTO_APPROVE` set is checked before rule
+  evaluation, so no rule, queen delegation or empty config can supply a human decision.
+
+### Features
+
+### Changes
+
+### Fixes
+
 ## [2026.8.10.20] - 2026-08-10
 
 ### Fixes

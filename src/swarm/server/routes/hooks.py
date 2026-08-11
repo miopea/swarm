@@ -30,6 +30,29 @@ _SWARM_MCP_PREFIX = "mcp__swarm__"
 # Tools that always need operator approval via the drone rules engine.
 _ALWAYS_ESCALATE_TOOLS = frozenset({"Bash"})
 
+# TOOLS THAT EXIST TO REACH A HUMAN, AND SO CAN NEVER BE AUTO-APPROVED.
+#
+# Distinct from _ALWAYS_ESCALATE_TOOLS on purpose. That set only guards the
+# no-rules-configured branch; a matching rule still approves, and Bash DEPENDS on that
+# (drones approve safe Bash by rule constantly). This set is checked BEFORE rules run,
+# so no rule, no queen delegation and no empty config can answer for the operator.
+#
+# WHY THIS EXISTS (task #1443). AskUserQuestion was approvable like any other tool. The
+# drone's approval response for Claude is "\r" — a bare Enter — and Enter on an option
+# picker selects the HIGHLIGHTED option. So the escalation returned a verbatim option
+# label the operator never chose, identically every time it was re-asked, while a real
+# human answer to another question in the same set passed through. 400 occurrences since
+# 2026-07-13; it went unnoticed because the highlighted option is often plausible.
+#
+# Fabricated answers drove real production actions: a live fulfilment order, six deploys,
+# a D365 write instruction, and a programme-level ruling. An escalation path that answers
+# itself makes every "ask the operator" guard rail decorative.
+#
+# THE RULE: if a tool's purpose is to obtain a human decision, no automation may supply
+# that decision. Adding to this set should be argued, not assumed — but the bar for
+# membership is exactly that question.
+_NEVER_AUTO_APPROVE = frozenset({"AskUserQuestion"})
+
 
 def register(app: web.Application) -> None:
     app.router.add_post("/api/hooks/approval", handle_approval)
@@ -306,6 +329,21 @@ def _evaluate_rules(
     drone_config = d.config.drones
     worker = _identify_worker(d, body)
     worker_name = worker.name if worker else "unknown"
+
+    # BEFORE any rule evaluation — see _NEVER_AUTO_APPROVE. Checked here rather than in
+    # the branches below because there are three separate ways to reach "approve" (rule
+    # match, queen delegation, and no-rules-configured) and a guard placed in one of them
+    # leaves the other two open. That is precisely how this defect survived: the
+    # no-rules branch already consulted _ALWAYS_ESCALATE_TOOLS while the rule-matched
+    # branch did not.
+    if tool_name in _NEVER_AUTO_APPROVE:
+        _log_hook_decision(d, tool_name, "passthrough", "never auto-approved", worker_name)
+        return web.json_response(
+            {
+                "decision": "passthrough",
+                "reason": (f"{tool_name} asks a human for a decision — drones never answer it"),
+            }
+        )
 
     # Collect per-worker + global rules
     worker_rules: list[Any] = []
