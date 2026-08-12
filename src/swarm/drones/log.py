@@ -139,6 +139,11 @@ class SystemAction(Enum):
     # loop (the from-worker's repo can't satisfy the to-worker's
     # criteria). Logged here so the suppression is auditable.
     GOAL_SKIPPED = "GOAL_SKIPPED"
+    # #1536: an armed native /goal was cleared because it no longer matched the
+    # worker's ACTIVE task. Goals were arm-only until this existed: nothing sent
+    # `/goal clear` on park, complete, block or reassign, so a goal outlived its
+    # task and kept grading the worker on criteria for work it had set down.
+    GOAL_CLEARED = "GOAL_CLEARED"
     # Task #529: a worker-reported blocker was auto-cleared by the
     # IdleWatcher because either the blocker target became done /
     # failed / removed, OR a new inbox message arrived after the

@@ -159,6 +159,11 @@ class TaskCoordinator:
 
     def __init__(self, daemon: SwarmDaemon) -> None:
         self._d = daemon
+        # #1536: worker name -> task number whose acceptance criteria are
+        # currently armed as that worker's native ``/goal``. Needed because
+        # swarm previously had NO idea what was armed: it sent ``/goal`` and
+        # forgot, so nothing could tell a live goal from a stale one.
+        self._armed_goals: dict[str, int] = {}
 
     # ----- assign -----
 
@@ -639,6 +644,7 @@ class TaskCoordinator:
             proc = d._require_worker(worker_name).process
             if proc and not proc.is_user_active:
                 await proc.send_enter()
+            self._armed_goals[worker_name] = task.number
             d.drone_log.add(
                 SystemAction.GOAL_SET,
                 worker_name,
@@ -652,6 +658,90 @@ class TaskCoordinator:
                 task.number,
                 worker_name,
                 exc_info=True,
+            )
+
+    async def _disarm_goal(self, worker_name: str, reason: str) -> None:
+        """Clear a worker's armed native ``/goal``.
+
+        ``/goal clear`` is the provider's own un-arm form — confirmed against
+        the installed Claude Code 2.1.228, whose goal command advertises
+        ``argumentHint: "[<condition> | clear]"`` and whose clear path removes
+        the registered Stop hooks and nulls ``activeGoal``.
+
+        Best-effort and always forgets the tracking entry, even on failure. A
+        disarm that cannot be delivered (worker gone, PTY dead) must not leave
+        a phantom entry that suppresses future re-arming — the failure mode
+        this fixes is a goal that outlives its task, so erring toward "not
+        armed" is the safe direction.
+        """
+        self._armed_goals.pop(worker_name, None)
+        d = self._d
+        try:
+            await d.send_to_worker(worker_name, "/goal clear", automated=True, _log_operator=False)
+            await asyncio.sleep(0.3)
+            proc = d._require_worker(worker_name).process
+            if proc and not proc.is_user_active:
+                await proc.send_enter()
+        except Exception:
+            _log.warning(
+                "native /goal clear failed for %s (%s)", worker_name, reason, exc_info=True
+            )
+            return
+        d.drone_log.add(
+            SystemAction.GOAL_CLEARED,
+            worker_name,
+            f"goal cleared: {reason}",
+            category=LogCategory.TASK,
+        )
+
+    async def reconcile_goals(self) -> None:
+        """Disarm any goal that no longer matches its worker's ACTIVE task (#1536).
+
+        WHY THIS IS A RECONCILER AND NOT A CALL-SITE PATCH. A task stops being a
+        worker's active task through at least eight different mutators — park,
+        complete, force_complete, fail, unassign, release, block_on_external,
+        block_for_operator, reassign_worker — and ``TaskBoard`` is synchronous, so
+        none of them can send to a worker anyway. Patching them individually is
+        the same mistake ``hooks.py`` documents for ``_NEVER_AUTO_APPROVE``: a
+        guard placed in one of several paths leaves the rest open, and that is
+        precisely how the original defect survived. So this asserts the INVARIANT
+        instead of guarding the transitions:
+
+            a worker has an armed goal IFF that goal belongs to its ACTIVE task.
+
+        THE INCIDENT (2026-08-12). #1510 was auto-dispatched at 15:12:59 and its
+        goal armed the same second. The operator had ruled it parked; it was
+        parked minutes later, and NOTHING disarmed the goal. Worse, arming is
+        asymmetric — it happens only on the dispatch path, never on a
+        worker-asserted ``swarm_start_task`` — so the two tasks the worker
+        self-started afterwards armed nothing and never displaced the stale goal.
+        It went on grading the worker against #1510's criteria for the rest of
+        the session: nine firings, every one pushing to override the ruling.
+
+        DELIBERATELY NOT FIXED HERE: the arming asymmetry. Making worker-asserted
+        starts arm goals too would restore symmetry, but the evaluator running
+        these goals is the provider's, and it demonstrably reached opposite
+        verdicts on identical evidence across nine passes. Arming MORE goals
+        widens the blast radius of an unreliable judge. Clearing stale ones is
+        the strict improvement; symmetry is not.
+        """
+        d = self._d
+        board = getattr(d, "task_board", None)
+        if board is None or not self._armed_goals:
+            return
+        for worker_name, armed_number in list(self._armed_goals.items()):
+            try:
+                current = board.current_task_for_worker(worker_name)
+            except Exception:
+                _log.warning(
+                    "goal reconcile: task lookup failed for %s", worker_name, exc_info=True
+                )
+                continue
+            if current is not None and current.number == armed_number:
+                continue  # armed goal matches the active task — nothing to do
+            now_on = f"#{current.number}" if current is not None else "no active task"
+            await self._disarm_goal(
+                worker_name, f"#{armed_number} is no longer active ({worker_name} now on {now_on})"
             )
 
     # ----- handoff -----

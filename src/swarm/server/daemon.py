@@ -1089,6 +1089,17 @@ class SwarmDaemon(EventEmitter):
                     raise
                 except Exception:
                     _log.warning("periodic invariant reconcile failed", exc_info=True)
+                # #1536: same sweep, separate try — a goal-reconcile failure must
+                # not suppress the INV-1/2 repair above, and vice versa. Rides
+                # this loop rather than its own because the invariant it asserts
+                # ("armed goal belongs to the ACTIVE task") is only violated by
+                # the same task-state churn this loop already exists to catch.
+                try:
+                    await self.reconcile_goals()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    _log.warning("periodic goal reconcile failed", exc_info=True)
         except asyncio.CancelledError:
             return
 
@@ -2541,6 +2552,10 @@ class SwarmDaemon(EventEmitter):
         self, task: SwarmTask, worker_name: str, worker_prov: object
     ) -> None:
         await self.tasks_coord._maybe_seed_goal(task, worker_name, worker_prov)
+
+    async def reconcile_goals(self) -> None:
+        """#1536: clear armed native goals that no longer match an ACTIVE task."""
+        await self.tasks_coord.reconcile_goals()
 
     async def _spawn_handoff_task(self, recipient: str, message: object) -> bool:
         return await self.tasks_coord.spawn_handoff_task(recipient, message)
