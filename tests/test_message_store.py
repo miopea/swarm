@@ -77,8 +77,13 @@ class TestBroadcast:
 
 class TestMcpWildcardHandler:
     """End-to-end: ``swarm_send_message`` with ``to="*"`` must fan out via
-    MessageStore.broadcast() and report the recipient count back to the
-    caller."""
+    MessageStore.broadcast() and report the recipient count back to the caller.
+
+    SENDER IS THE QUEEN as of the 2026-08-12 ruling that broadcast is Queen-only.
+    These tests are about fan-out MECHANICS — roster derivation, recipient count,
+    offline delivery — which still matter, so they were retargeted rather than
+    deleted. A worker's broadcast is refused before any of this runs; that path is
+    covered in tests/test_broadcast_is_queen_only.py."""
 
     def test_wildcard_fans_out_and_reports_count(self, tmp_path: Path) -> None:
         from unittest.mock import MagicMock
@@ -96,12 +101,12 @@ class TestMcpWildcardHandler:
             def __init__(self, name: str) -> None:
                 self.name = name
 
-        d.config.workers = [_W("hub"), _W("platform"), _W("admin")]
-        d.workers = [_W("hub"), _W("platform"), _W("admin")]
+        d.config.workers = [_W("queen"), _W("platform"), _W("admin")]
+        d.workers = [_W("queen"), _W("platform"), _W("admin")]
 
         result = handle_tool_call(
             d,
-            "hub",
+            "queen",
             "swarm_send_message",
             {"to": "*", "type": "warning", "content": "stop"},
         )
@@ -111,7 +116,7 @@ class TestMcpWildcardHandler:
         # Verify state: each non-sender has it in their inbox
         assert len(store.get_unread("platform")) == 1
         assert len(store.get_unread("admin")) == 1
-        assert store.get_unread("hub") == []
+        assert store.get_unread("queen") == []
 
     def test_wildcard_with_no_other_workers_reports_gracefully(self, tmp_path: Path) -> None:
         from unittest.mock import MagicMock
@@ -128,12 +133,12 @@ class TestMcpWildcardHandler:
             def __init__(self, name: str) -> None:
                 self.name = name
 
-        d.workers = [_W("hub")]  # only sender
-        d.config.workers = [_W("hub")]
+        d.workers = [_W("queen")]  # only sender
+        d.config.workers = [_W("queen")]
 
         result = handle_tool_call(
             d,
-            "hub",
+            "queen",
             "swarm_send_message",
             {"to": "*", "type": "finding", "content": "alone"},
         )
@@ -164,12 +169,12 @@ class TestMcpWildcardHandler:
 
         # hub + admin are live; platform + realtruth are registered but
         # their PTYs aren't running right now.
-        d.config.workers = [_W("hub"), _W("admin"), _W("platform"), _W("realtruth")]
-        d.workers = [_W("hub"), _W("admin")]
+        d.config.workers = [_W("queen"), _W("admin"), _W("platform"), _W("realtruth")]
+        d.workers = [_W("queen"), _W("admin")]
 
         result = handle_tool_call(
             d,
-            "hub",
+            "queen",
             "swarm_send_message",
             {"to": "*", "type": "finding", "content": "heads up"},
         )
@@ -182,7 +187,7 @@ class TestMcpWildcardHandler:
         assert len(store.get_unread("admin")) == 1
         assert len(store.get_unread("platform")) == 1
         assert len(store.get_unread("realtruth")) == 1
-        assert store.get_unread("hub") == []
+        assert store.get_unread("queen") == []
 
 
 class TestSendWildcardStillWorks:

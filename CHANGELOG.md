@@ -8,6 +8,40 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Changes
 
+- **Broadcast is Queen-only.** A worker sending `swarm_send_message` to `*` is now
+  refused before anything is written; only the Queen can fan out. Operator ruling
+  2026-08-12: "this is a constant pain point".
+
+  The existing #647 gate was not enough because it is a *content* check — it reads
+  the message for directive or authority language, so anything benign-sounding still
+  reached every inbox, and fan-out was governed by phrasing rather than by authority.
+  A broadcast's cost to the fleet does not depend on how politely it is worded. The
+  new check does not read the message at all; a polite note and a naked directive are
+  refused identically.
+
+  The refusal names the way forward rather than just denying — send to the workers
+  actually affected, or hand it to the Queen with `swarm_note_to_queen` and say you
+  think it warrants a broadcast. A worker that cannot see the alternative rephrases
+  and retries, which is how the #647 gate ended up being routed around.
+
+  The tool surface changed with it, since a tool that advertises what it refuses just
+  trains workers to hit the refusal: the description no longer says "prefer direct
+  messages over `*` broadcast", the `to` field says `*` is Queen-only, and the
+  `"to": "*"` schema example is gone. `/swarm-finding` hardcoded `to="*"` and would
+  have broken outright — it now names affected peers, or routes to the Queen.
+
+  `POST /api/messages/send` refuses `*` only when `from` is a known worker that is not
+  the Queen. The operator's own broadcasts (`from: operator`, what the dashboard sends)
+  are untouched. That route is a guardrail rather than a boundary — `from` is
+  self-declared — and the enforcing check is the MCP verb workers actually call.
+
+  Two branches are now unreachable and left in place deliberately, recorded here so
+  they are not mistaken for live paths: `_handle_broadcast`'s queen-relay/mark-read
+  logic (the only broadcaster is the Queen, and the roster excludes the sender, so she
+  is never among her own recipients), and #647's directive-language-on-broadcast half
+  (workers are refused earlier; the Queen is exempt from that gate by design). #647's
+  authority-claim check on direct 1:1 messages is unaffected and still tested.
+
 ### Fixes
 
 ## [2026.8.12] - 2026-08-12

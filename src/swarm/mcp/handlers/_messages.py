@@ -39,15 +39,17 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "swarm_send_message",
         "description": (
-            "Send a direct message to another worker (or broadcast to '*'). Use this whenever "
-            "you learn something that affects another worker's ability to do their job "
+            "Send a direct message to ONE named worker. Use this whenever you learn "
+            "something that affects another worker's ability to do their job "
             "correctly. Message types:\n"
             "  - 'finding'    — a discovery that might be useful (schema shape, gotcha, pattern)\n"
             "  - 'warning'    — you are about to change something that will break their build\n"
             "  - 'dependency' — they need to do X before you can finish Y (blocks your task)\n"
             "  - 'status'     — routine progress update, not action-required\n"
-            "Prefer direct messages over '*' broadcast — broadcast only for changes that "
-            "truly affect every worker (e.g., a shared type signature changed)."
+            "BROADCAST IS QUEEN-ONLY. Sending to '*' is refused for workers. If something "
+            "genuinely affects everyone, send it to the Queen with swarm_note_to_queen and "
+            "say you think it warrants a broadcast — she has the fan-out authority and the "
+            "context to judge whether it does."
         ),
         "inputSchema": {
             "type": "object",
@@ -55,8 +57,8 @@ TOOLS: list[dict[str, Any]] = [
                 "to": {
                     "type": "string",
                     "description": (
-                        "Recipient worker name (e.g. 'hub', 'platform'), or '*' for "
-                        "broadcast to all workers."
+                        "Recipient worker name (e.g. 'hub', 'platform'). One worker. "
+                        "'*' is Queen-only and will be refused."
                     ),
                 },
                 "type": {
@@ -83,7 +85,7 @@ TOOLS: list[dict[str, Any]] = [
                     ),
                 },
                 {
-                    "to": "*",
+                    "to": "hub",
                     "type": "finding",
                     "content": (
                         "The /api/v1/contacts endpoint now requires X-Tenant-Id "
@@ -299,6 +301,41 @@ def _handle_send_message(
         return [{"type": "text", "text": "Missing 'to' or 'content'"}]
     from swarm.drones.log import LogCategory, SystemAction
     from swarm.worker.worker import QUEEN_WORKER_NAME
+
+    # BROADCAST IS A QUEEN CAPABILITY, NOT A WORKER ONE (operator ruling
+    # 2026-08-12: "this is a constant pain point; only the queen can broadcast").
+    #
+    # DISTINCT FROM THE #647 GATE BELOW, WHICH IS WHY THAT ONE WAS NOT ENOUGH.
+    # #647 inspects the CONTENT and blocks directive/authority language. A worker
+    # with something benign-sounding still reached every inbox, so fan-out was
+    # governed by phrasing rather than by authority — and the fleet-wide cost of a
+    # broadcast does not depend on how politely it is worded. This is a capability
+    # check: it does not read the message at all.
+    #
+    # Refuses BEFORE any write and returns the resolving path rather than a bare
+    # "denied" — a worker that cannot see what to do instead just rephrases and
+    # retries, which is how the #647 gate ended up being routed around.
+    if recipient == "*" and worker_name != QUEEN_WORKER_NAME:
+        d.drone_log.add(
+            SystemAction.OPERATOR,
+            worker_name,
+            f"broadcast refused (queen-only): {content[:80]}",
+            category=LogCategory.MESSAGE,
+            metadata={"msg_type": msg_type, "recipient": "*", "refused": "queen_only"},
+        )
+        return [
+            {
+                "type": "text",
+                "text": (
+                    "Broadcast to '*' is Queen-only — nothing was sent, and no worker "
+                    "received this. Two ways forward: send it directly to the workers it "
+                    "actually affects (naming them costs you a sentence and spares "
+                    "everyone else), or if you believe it genuinely affects the whole "
+                    "fleet, use swarm_note_to_queen to hand it to the Queen and say you "
+                    "think it warrants a broadcast. She has the fan-out authority."
+                ),
+            }
+        ]
 
     # Mass-broadcast gate (task #647). A worker cannot issue a swarm-wide
     # directive or claim operator authority. Authority-claim patterns gate any

@@ -40,6 +40,23 @@ async def handle_send_message(request: web.Request) -> web.Response:
     if not content:
         return json_error("missing content", status=400)
 
+    # Broadcast is Queen-only for WORKERS (operator ruling 2026-08-12). The
+    # operator keeps it: ``from`` defaults to "operator" and the dashboard sends
+    # that, so gating on "queen only" here would have taken away the operator's
+    # own broadcast — the request was to stop WORKERS fanning out, not to stop
+    # the human doing it. So this refuses only a sender that is a known worker
+    # and is not the Queen; "operator" and any unrecognised sender are untouched.
+    #
+    # NOT A SECURITY BOUNDARY, and worth saying so rather than implying one:
+    # ``from`` is self-declared in the request body, so this is a guardrail on
+    # the honest path. The enforcing check is in the MCP verb, which is what
+    # workers actually call.
+    if recipient == "*":
+        from swarm.worker.worker import QUEEN_WORKER_NAME
+
+        known_workers = {w.name for w in getattr(d, "workers", [])}
+        if sender in known_workers and sender != QUEEN_WORKER_NAME:
+            return json_error("broadcast is Queen-only; send to named recipients", status=403)
     # Wildcard = fan-out to every worker (minus sender) so each row has
     # its own read_at column.  The legacy single-row wildcard was first-
     # reader-wins — most workers never saw the broadcast.

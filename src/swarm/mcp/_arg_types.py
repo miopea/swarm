@@ -41,9 +41,13 @@ class CheckMessagesArgs(TypedDict, total=False):
 
 
 class SendMessageArgs(TypedDict, total=False):
-    """``swarm_send_message`` — direct or broadcast worker message."""
+    """``swarm_send_message`` — a direct worker-to-worker message.
 
-    to: str  # recipient name or "*" for broadcast
+    Broadcast (``to="*"``) is Queen-only as of 2026-08-12; a worker sending it is
+    refused before any write.
+    """
+
+    to: str  # recipient worker name; "*" is Queen-only
     type: str  # "finding" | "warning" | "dependency" | "status"
     content: str
 

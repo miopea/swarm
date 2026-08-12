@@ -723,14 +723,21 @@ class TestSendMessageQueenAutoRelay:
         d.message_store.send.assert_called_once()
         d.send_to_worker.assert_not_called()
 
-    def test_broadcast_that_includes_queen_auto_relays_to_her(self):
-        """``to="*"`` broadcasts hit every worker incl. queen. The queen
-        still gets the relay so the broadcast doesn't silently sit in
-        her inbox."""
+    def test_worker_broadcast_is_refused_so_nothing_relays(self):
+        """REWRITTEN 2026-08-12: broadcast is Queen-only, so this can no longer relay.
+
+        This used to assert that a WORKER's broadcast reached the queen and
+        auto-relayed into her PTY. A worker can no longer broadcast at all, so the
+        refusal must also mean no fan-out and no relay — a gate that blocked the
+        message but still poked the queen would be worse than no gate.
+
+        NOTE FOR WHOEVER TOUCHES _handle_broadcast: its queen-relay branch is now
+        UNREACHABLE in production. The only permitted broadcaster is the Queen, and
+        the roster excludes the sender, so she is never among her own recipients.
+        Left in place rather than removed here — that is a separate change from the
+        one the operator asked for.
+        """
         d = self._daemon()
-        # Sender "hub" is filtered from the roster [queen, hub, platform], so
-        # broadcast sees recipients=[queen, platform] and returns one id each
-        # (in roster order). The relay targets the queen's id (index 0).
         d.message_store.broadcast = MagicMock(return_value=["queen-id", "platform-id"])
         handle_tool_call(
             d,
@@ -738,10 +745,8 @@ class TestSendMessageQueenAutoRelay:
             "swarm_send_message",
             {"to": "*", "type": "finding", "content": "Heads up everyone"},
         )
-        d.message_store.broadcast.assert_called_once()
-        # Queen is in the configured roster so she gets the relay.
-        d.send_to_worker.assert_called_once()
-        assert d.send_to_worker.call_args.args[0] == "queen"
+        d.message_store.broadcast.assert_not_called()
+        d.send_to_worker.assert_not_called()
 
     # ------------------------------------------------------------------
     # Task #277 — auto-relay marks the queen's row read at delivery time.
@@ -788,12 +793,11 @@ class TestSendMessageQueenAutoRelay:
         )
         d.message_store.mark_read.assert_called_once_with("queen", ["note-1"])
 
-    def test_broadcast_including_queen_marks_queen_row_read(self):
-        """For ``to="*"`` the queen's row needs to be identified from
-        the broadcast result so mark_read targets her id only."""
+    def test_worker_broadcast_refusal_touches_no_inbox(self):
+        """REWRITTEN 2026-08-12, same reason as above: a refused broadcast must not
+        mark anything read either. Paired with it so the refusal is pinned across
+        both side effects the old broadcast path had, not just the delivery."""
         d = self._daemon()
-        # Roster minus sender "hub" → [queen, platform]; broadcast returns one
-        # id per recipient in roster order, so the queen's id is at index 0.
         d.message_store.broadcast = MagicMock(return_value=["queen-id", "platform-id"])
         handle_tool_call(
             d,
@@ -801,7 +805,7 @@ class TestSendMessageQueenAutoRelay:
             "swarm_send_message",
             {"to": "*", "type": "finding", "content": "Heads up everyone"},
         )
-        d.message_store.mark_read.assert_called_once_with("queen", ["queen-id"])
+        d.message_store.mark_read.assert_not_called()
 
     def test_regular_worker_message_does_not_mark_queen_read(self):
         """Worker-to-worker messages must not touch the queen's inbox."""
@@ -857,6 +861,13 @@ class TestBroadcastGate:
             for call in d.drone_log.add.call_args_list
         )
 
+    # #1538-adjacent, 2026-08-12 operator ruling: BROADCAST IS QUEEN-ONLY. A worker
+    # sending to '*' is now refused by a CAPABILITY check that runs BEFORE #647's
+    # content gate, so these no longer reach the gate at all. That is a strictly
+    # stronger guarantee — #647 blocked on what the message SAID, so a benign-
+    # sounding broadcast still fanned out; the capability check does not read the
+    # message. #647 remains live and tested on the DIRECT path (authority claims
+    # gate at any recipient count) and for the Queen, who may still broadcast.
     def test_operator_directive_broadcast_blocked(self):
         d = self._daemon()
         res = handle_tool_call(
@@ -867,8 +878,7 @@ class TestBroadcastGate:
         )
         d.message_store.broadcast.assert_not_called()
         d.message_store.send.assert_not_called()
-        assert "GATED" in res[0]["text"]
-        assert self._gated_action_logged(d)
+        assert "Queen-only" in res[0]["text"]
 
     def test_authority_claim_blocked_even_direct(self):
         """Authority claims gate regardless of recipient count (1:1 too)."""
@@ -891,12 +901,14 @@ class TestBroadcastGate:
             {"to": "*", "type": "finding", "content": "Everyone should work in staging now"},
         )
         d.message_store.broadcast.assert_not_called()
-        assert "GATED" in res[0]["text"]
+        assert "Queen-only" in res[0]["text"]
 
-    def test_coordination_broadcast_delivered(self):
-        """A finding about the sender's own change passes the gate."""
+    def test_coordination_broadcast_refused_for_a_worker(self):
+        """INVERTED 2026-08-12. This used to assert that a benign-sounding worker
+        broadcast WAS delivered — which is precisely the behaviour the operator
+        removed. Content is irrelevant now; the sender is what decides."""
         d = self._daemon()
-        handle_tool_call(
+        res = handle_tool_call(
             d,
             "platform",
             "swarm_send_message",
@@ -906,8 +918,25 @@ class TestBroadcastGate:
                 "content": "I changed shared API /v1/contacts — response is now {data,meta}.",
             },
         )
+        d.message_store.broadcast.assert_not_called()
+        assert "Queen-only" in res[0]["text"]
+
+    def test_the_same_coordination_broadcast_is_delivered_for_the_queen(self):
+        """POSITIVE CONTROL for the inversion above — identical content, Queen sender.
+        Without this, the change would read as "broadcast removed" rather than
+        "broadcast moved to the Queen"."""
+        d = self._daemon()
+        handle_tool_call(
+            d,
+            "queen",
+            "swarm_send_message",
+            {
+                "to": "*",
+                "type": "finding",
+                "content": "I changed shared API /v1/contacts — response is now {data,meta}.",
+            },
+        )
         d.message_store.broadcast.assert_called_once()
-        assert not self._gated_action_logged(d)
 
     def test_directive_passes_when_direct(self):
         """'everyone should' to a single worker is coordination, not a swarm directive."""
