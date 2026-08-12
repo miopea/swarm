@@ -64,7 +64,24 @@ ALWAYS_ESCALATE = re.compile(
     r"|git\s+(push\s+.*--force|reset\s+--hard)"
     r"|--no-verify"
     r"|`\s*DROP\s"  # backtick-escaped SQL
-    r"|`\s*TRUNCATE\s",  # backtick-escaped SQL
+    r"|`\s*TRUNCATE\s"  # backtick-escaped SQL
+    # #1526: SQL WRITES THAT ARE NOT DELETIONS. Measured 2026-08-12 against the
+    # live rule list: `psql -c "UPDATE \"user\" SET hub_role='ADMIN';"` and
+    # `INSERT INTO \"user\" ...` BOTH auto-approved, because the net above only
+    # covered DROP/TRUNCATE/ALTER/DELETE and user rule #3 (`Bash|Read|Write|...`)
+    # approves every remaining Bash call. A worker could grant itself production
+    # ADMIN with no operator involvement. Deletion is not the only destructive
+    # verb — a privilege UPDATE is worse than a row DELETE.
+    #
+    # DELIBERATELY SHAPED TO SQL, NOT TO THE WORDS. A bare `UPDATE` or
+    # `INSERT INTO` would fire on `npm update`, `apt-get update` and any prose
+    # containing "insert into", and this file's own rule is that an
+    # over-triggering guard gets switched off and then protects nothing. So
+    # UPDATE requires its SET clause, and INSERT requires a column list or a
+    # VALUES/SELECT source — forms that essentially only occur in real SQL.
+    r"|UPDATE\s+\S+\s+SET\s"
+    r"|INSERT\s+INTO\s+\S+\s*\("
+    r"|INSERT\s+INTO\s+\S+\s+(VALUES|SELECT)\b",
     re.IGNORECASE,
 )
 

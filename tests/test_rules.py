@@ -1561,6 +1561,15 @@ class TestAlwaysEscalatePatterns:
             "git push origin --force",
             "git reset --hard",
             "--no-verify",
+            # #1526: SQL writes that are not deletions. Both of the first two
+            # AUTO-APPROVED against the live rule list before this was added —
+            # a worker could grant itself production ADMIN unsupervised.
+            'psql -c "UPDATE \\"user\\" SET hub_role=\'ADMIN\';"',
+            "UPDATE users SET password='x' WHERE id=1",
+            "update members set email='a@b.c' where id=2",
+            "INSERT INTO users (email) VALUES ('x@y.z')",
+            "insert into audit_log (actor) values ('sys')",
+            "INSERT INTO audit SELECT * FROM staging",
         ],
     )
     def test_always_escalates(self, text: str):
@@ -1582,6 +1591,16 @@ class TestAlwaysEscalatePatterns:
             "ls -la",
             "rm file.txt",  # no -r flag
             "truncated the results",  # not SQL TRUNCATE
+            # #1526 FALSE-POSITIVE CONTROLS. The UPDATE/INSERT patterns above are
+            # shaped to SQL rather than to the words precisely so these stay
+            # approvable. A guard that fires on `npm update` gets switched off
+            # within a day and then protects nothing.
+            "npm update",
+            "apt-get update && apt-get install -y postgresql",
+            "brew update",
+            "update the documentation before shipping",
+            'git commit -m "insert into the changelog"',
+            "cargo update -p serde",
         ],
     )
     def test_not_always_escalated(self, text: str):
