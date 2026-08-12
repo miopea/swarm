@@ -20,6 +20,32 @@ if TYPE_CHECKING:
 
 _log = get_logger("drones.log")
 
+
+def truncate_for_log(text: str, limit: int) -> str:
+    """Cut *text* to *limit* chars, DECLARING the cut when one happens (#1524).
+
+    A truncated audit field that looks complete is worse than an absent one. An
+    absent field forces you to find another instrument; a silently-cut field lets
+    you run a check that cannot fire and then believe its answer.
+
+    That is not hypothetical. GOAL_SET logged ``condition[:120]`` while the phrase
+    distinguishing the two goal variants sat around index 299, so
+    ``detail LIKE '%SATISFIES this goal%'`` could not match EITHER variant. It
+    reported "old condition" for old and new alike, and that false negative reached
+    the operator twice — two rounds of reporting on a query with no positive
+    control. Same class as a denial logged at INFO under a WARNING daemon: present,
+    and reaching nobody.
+
+    Returns *text* unchanged when it fits, so a complete value is never decorated
+    with a claim of truncation. When it does cut, the suffix carries the TRUE total
+    length, which is what lets a reader tell how much is missing rather than only
+    that something is.
+    """
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}…(truncated, {len(text)} chars total)"
+
+
 _DEFAULT_LOG_PATH = Path.home() / ".swarm" / "system.jsonl"
 _DEFAULT_MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 _DEFAULT_MAX_ROTATIONS = 2

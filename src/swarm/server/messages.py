@@ -303,6 +303,32 @@ def build_task_message(
 # (per the docs) carry an explicit runaway bound. ≤ 4000 chars, one line.
 _GOAL_MAX_LEN = 4000
 
+# #1524: the phrase that distinguishes a condition carrying the blocker exit
+# (2026.8.11.4 onward) from a bare turn-cap one. Held as a constant because it is
+# used BOTH to build the exits clause and by ``condition_has_blocker_exit`` to
+# detect it, so the detector cannot drift from the wording it detects. If someone
+# rewords the exits and drops this marker, the flag reads False — which is the
+# truthful answer about a condition that no longer says a blocker satisfies it,
+# not a bug in the detector.
+_BLOCKER_EXIT_MARKER = "SATISFIES this goal"
+
+
+def condition_has_blocker_exit(condition: str) -> bool:
+    """True when *condition* tells the worker a declared blocker satisfies the goal.
+
+    Exists because buzz_log could not answer this. GOAL_SET truncated the condition
+    to 120 chars while the marker sits around index 299, so the natural check
+    (``detail LIKE '%SATISFIES this goal%'``) COULD NOT MATCH EITHER VARIANT — it
+    returned "old" for old and new conditions identically, and that false negative
+    was reported to the operator twice before anyone noticed the pattern was
+    unreachable. See #1524.
+
+    Not tautological despite the current renderer always appending the exits: the
+    ``budget < 1`` path in :func:`render_goal_condition` drops them, and stored
+    conditions predating 2026.8.11.4 never had them.
+    """
+    return _BLOCKER_EXIT_MARKER in condition
+
 
 def render_goal_condition(criteria: list[str], *, max_turns: int) -> str:
     """Render a task's acceptance criteria as a one-line native /goal condition.
@@ -333,7 +359,7 @@ def render_goal_condition(criteria: list[str], *, max_turns: int) -> str:
     exits = (
         f" — or you are blocked on something continuing cannot resolve"
         f" (an operator decision, an external dependency, another worker's work):"
-        f" say so plainly and stop; that SATISFIES this goal rather than failing it."
+        f" say so plainly and stop; that {_BLOCKER_EXIT_MARKER} rather than failing it."
         f" Otherwise stop after {max_turns} turns and report what's blocking."
     )
 

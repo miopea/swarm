@@ -630,7 +630,13 @@ class TaskCoordinator:
             )
             return
         try:
-            from swarm.server.messages import render_goal_condition
+            import hashlib
+
+            from swarm.drones.log import truncate_for_log
+            from swarm.server.messages import (
+                condition_has_blocker_exit,
+                render_goal_condition,
+            )
 
             condition = render_goal_condition(
                 task.acceptance_criteria, max_turns=drones.native_goal_max_turns
@@ -645,12 +651,28 @@ class TaskCoordinator:
             if proc and not proc.is_user_active:
                 await proc.send_enter()
             self._armed_goals[worker_name] = task.number
+            # #1524: the detail used to be a bare ``condition[:120]``, which made
+            # buzz_log unusable as evidence of WHICH condition was seeded — the
+            # phrase distinguishing the variants sits around index 299, so every
+            # LIKE check against it was unreachable and returned "old" for both.
+            # The metadata below is the trustworthy half: a query answers the
+            # question without reading the condition text at all, and the fields are
+            # FIXED SIZE, so a 4000-char condition cannot bloat the row. The detail
+            # stays short for human reading but now declares its own truncation.
             d.drone_log.add(
                 SystemAction.GOAL_SET,
                 worker_name,
-                f"#{task.number} goal armed: {condition[:120]}",
+                f"#{task.number} goal armed: {truncate_for_log(condition, 120)}",
                 category=LogCategory.TASK,
-                metadata={"task_id": task.id, "task_number": task.number},
+                metadata={
+                    "task_id": task.id,
+                    "task_number": task.number,
+                    "goal_has_blocker_exit": condition_has_blocker_exit(condition),
+                    # Identifies the exact variant independent of wording, so this
+                    # stays meaningful after the next edit to the exits text.
+                    "condition_sha": hashlib.sha256(condition.encode()).hexdigest()[:8],
+                    "condition_len": len(condition),
+                },
             )
         except Exception:
             _log.warning(
