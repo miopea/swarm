@@ -189,8 +189,11 @@ class TestViewWorkerState:
         result = QUEEN_HANDLERS["queen_view_worker_state"](
             daemon, QUEEN_WORKER_NAME, {"worker": "ghost"}
         )
-        # Error path: legacy list shape.
-        assert isinstance(result, list)
+        # #1432: the not-found path now uses the dict shape WITH a sidecar, so a
+        # client can branch on a field instead of on the response's type. This
+        # assertion used to require the legacy bare list.
+        assert isinstance(result, dict)
+        assert result["structuredContent"]["error"] == "not_found"
         assert "not found" in _text(result)
 
     def test_targeted_returns_body_with_pty_tail(self, daemon: MagicMock) -> None:

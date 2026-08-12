@@ -99,9 +99,26 @@ def _handle_view_worker_state(
 
     Claude Code 2.1.x prefers ``structuredContent`` when present, so the
     Queen sees the same data both as human-readable text (for thread
-    logs) and as queryable JSON (for reasoning). On the not-found error
-    path we fall back to the legacy list shape — there's no structured
-    payload to deliver and an empty/null sidecar would mislead clients.
+    logs) and as queryable JSON (for reasoning).
+
+    THE NOT-FOUND PATH ALSO CARRIES A SIDECAR (#1432), REVERSING AN EARLIER
+    DECISION. It used to return the bare list shape on the reasoning that
+    "an empty/null sidecar would mislead clients". That reasoning had it
+    backwards: with no ``structuredContent`` key at all, the natural way to
+    consume this tool — ``result["structuredContent"]["worker"]`` — RAISES
+    on a mistyped worker name instead of reading an error. The Queen is the
+    only caller and typos are routine, so it was reachable in normal use.
+    2026.8.10.20 sharpened it by putting ``pty_tail`` in the structured
+    payload, which made that payload the whole reason to call the tool.
+
+    THE RULE, narrower than "every handler": WITHIN A TOOL THAT EVER EMITS
+    ``structuredContent``, EVERY EXIT EMITS IT. A client should branch on a
+    FIELD, never on the response's Python type. This deliberately diverges
+    from the bare-list convention used by most ``queen_handlers`` returns
+    (51 bare lists vs 7 structured dicts at the time of writing) — those
+    handlers never emit a sidecar on ANY path, so they are already
+    self-consistent and are left alone. The inconsistency only bites where
+    a tool invites a client into ``structuredContent`` and then withdraws it.
     """
     err = _assert_queen(worker_name)
     if err:
@@ -151,8 +168,15 @@ def _handle_view_worker_state(
 
     worker = next((w for w in d.workers if w.name == target), None)
     if worker is None:
-        # Error path: legacy list shape, no half-built sidecar.
-        return [{"type": "text", "text": f"Worker '{target}' not found."}]
+        # #1432: dict shape WITH a sidecar — see the rule in this handler's
+        # docstring. ``error`` is the discriminator a client branches on;
+        # ``requested`` echoes the name that missed, so a typo is legible
+        # without re-reading the text block. The text block itself is
+        # unchanged, so text-only clients see exactly what they saw before.
+        return {
+            "content": [{"type": "text", "text": f"Worker '{target}' not found."}],
+            "structuredContent": {"worker": None, "error": "not_found", "requested": target},
+        }
 
     pty_tail = ""
     if worker.process is not None:

@@ -234,16 +234,83 @@ def test_view_worker_state_single_worker_returns_structured() -> None:
     assert sc["worker"]["kind"] == "claude"
 
 
-def test_view_worker_state_unknown_worker_omits_structured() -> None:
-    """Error path falls back to plain text — no half-built sidecar."""
+def test_view_worker_state_unknown_worker_carries_structured() -> None:
+    """#1432. REVERSES THIS FILE'S EARLIER ASSERTION, DELIBERATELY.
+
+    The previous version of this test asserted the opposite — that the not-found
+    path returns the bare list so "older clients don't see misleading empty
+    structures". That reasoning was backwards. With no ``structuredContent`` key
+    at all, the natural way to consume this tool
+    (``result["structuredContent"]["worker"]``) RAISES on a mistyped worker name
+    instead of reading an error, and the Queen is the only caller.
+
+    The contract now: a client branches on a FIELD, never on the response's type.
+    """
     from swarm.mcp.queen_tools import _handle_view_worker_state
 
     daemon = _make_queen_daemon(workers=[], tasks=[])
     result = _handle_view_worker_state(daemon, "queen", {"worker": "ghost"})
 
-    # On the not-found error path the function returns the legacy
-    # list[dict] so older clients don't see misleading empty structures.
-    if isinstance(result, dict):
-        assert "structuredContent" not in result or result["structuredContent"] is None
-    else:
-        assert result[0]["text"].startswith("Worker 'ghost' not found")
+    assert isinstance(result, dict), "not-found must use the dict shape, not the legacy list"
+    sc = result["structuredContent"]
+    # THE POINT OF THE TICKET: reading the sidecar does not raise.
+    assert sc["worker"] is None
+    assert sc["error"] == "not_found"
+    assert sc["requested"] == "ghost"
+
+
+def test_view_worker_state_not_found_is_distinguishable_from_success() -> None:
+    """AC2: the two outcomes must not be confusable by a client reading the sidecar.
+
+    Asserts both directions from one daemon, so a change that made success look
+    like an error (or vice versa) fails here rather than in production.
+    """
+    from swarm.mcp.queen_tools import _handle_view_worker_state
+
+    daemon = _make_queen_daemon(workers=[_fake_worker("alpha", state="RESTING")], tasks=[])
+
+    found = _handle_view_worker_state(daemon, "queen", {"worker": "alpha"})["structuredContent"]
+    missing = _handle_view_worker_state(daemon, "queen", {"worker": "ghost"})["structuredContent"]
+
+    # Same discriminator read on both, opposite answers — no type sniffing.
+    assert found.get("error") is None
+    assert missing.get("error") == "not_found"
+    assert found["worker"] is not None
+    assert missing["worker"] is None
+    assert found["worker"]["name"] == "alpha"
+
+
+def test_view_worker_state_not_found_text_block_is_unchanged() -> None:
+    """The human-readable half of the contract did NOT change in #1432.
+
+    Only the sidecar was added. A text-only client (or a thread log) must read
+    exactly what it read before, or this was a breaking change and not a fix.
+    """
+    from swarm.mcp.queen_tools import _handle_view_worker_state
+
+    daemon = _make_queen_daemon(workers=[], tasks=[])
+    result = _handle_view_worker_state(daemon, "queen", {"worker": "ghost"})
+
+    assert result["content"] == [{"type": "text", "text": "Worker 'ghost' not found."}]
+
+
+def test_view_worker_state_not_found_envelope_carries_structured() -> None:
+    """Proves it at the DISPATCHER, not just the handler.
+
+    ``_handle_tools_call`` only surfaces ``structuredContent`` when it is not
+    None (server.py), so a handler can return a sidecar that never reaches the
+    wire. This drives the same function that builds the JSON-RPC envelope —
+    the seam where the contract actually lives.
+    """
+    from swarm.mcp.server import _handle_tools_call
+
+    daemon = _make_queen_daemon(workers=[], tasks=[])
+    envelope = _handle_tools_call(
+        daemon,
+        "queen",
+        {"name": "queen_view_worker_state", "arguments": {"worker": "ghost"}},
+    )
+
+    assert "structuredContent" in envelope, "sidecar was dropped between handler and wire"
+    assert envelope["structuredContent"]["error"] == "not_found"
+    assert envelope["content"] == [{"type": "text", "text": "Worker 'ghost' not found."}]

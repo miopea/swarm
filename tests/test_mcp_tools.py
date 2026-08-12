@@ -1422,7 +1422,10 @@ class TestQueenReadOnlyTools:
         result = handle_tool_call(
             queen_daemon, "queen", "queen_view_worker_state", {"worker": "ghost"}
         )
-        assert "not found" in result[0]["text"].lower()
+        # #1432: not-found returns the dict shape with a sidecar, so the text
+        # block lives under "content" rather than at result[0].
+        assert "not found" in result["content"][0]["text"].lower()
+        assert result["structuredContent"]["error"] == "not_found"
 
     def test_queen_view_task_board_empty(self, queen_daemon):
         result = handle_tool_call(queen_daemon, "queen", "queen_view_task_board", {})
