@@ -1435,14 +1435,24 @@ class TestQueenReadOnlyTools:
         result = handle_tool_call(
             queen_daemon, "queen", "queen_view_messages", {"since_seconds": 60}
         )
-        assert "no messages" in result[0]["text"].lower()
+        # #1535: the empty path now carries structuredContent like the populated
+        # path. This asserted result[0]["text"] with no searchable phrase, which is
+        # why grep could not find it and only the full suite did.
+        assert "no messages" in result["content"][0]["text"].lower()
+        assert result["structuredContent"]["messages"] == []
+        assert result["structuredContent"]["count"] == 0
 
     def test_queen_view_message_stream_empty(self, queen_daemon):
         """No messages in the window → graceful empty response."""
         result = handle_tool_call(
             queen_daemon, "queen", "queen_view_message_stream", {"since_seconds": 60}
         )
-        assert "no messages" in result[0]["text"].lower()
+        # #1535: the empty path now carries structuredContent like the populated
+        # path. This asserted result[0]["text"] with no searchable phrase, which is
+        # why grep could not find it and only the full suite did.
+        assert "no messages" in result["content"][0]["text"].lower()
+        assert result["structuredContent"]["messages"] == []
+        assert result["structuredContent"]["count"] == 0
 
     def test_queen_view_message_stream_actionable_filter(self, queen_daemon):
         """Task #235 Phase 2: ``actionable_only=true`` must filter to
@@ -1581,13 +1591,23 @@ class TestQueenReadOnlyTools:
         result = handle_tool_call(
             queen_daemon, "queen", "queen_view_buzz_log", {"since_seconds": 60}
         )
-        assert "no buzz" in result[0]["text"].lower()
+        # #1535: the empty path now carries structuredContent like the populated
+        # path. This asserted result[0]["text"] with no searchable phrase, which is
+        # why grep could not find it and only the full suite did.
+        assert "no buzz" in result["content"][0]["text"].lower()
+        assert result["structuredContent"]["entries"] == []
+        assert result["structuredContent"]["count"] == 0
 
     def test_queen_view_drone_actions_empty(self, queen_daemon):
         result = handle_tool_call(
             queen_daemon, "queen", "queen_view_drone_actions", {"since_seconds": 60}
         )
-        assert "no recent" in result[0]["text"].lower()
+        # #1535: the empty path now carries structuredContent like the populated
+        # path. This asserted result[0]["text"] with no searchable phrase, which is
+        # why grep could not find it and only the full suite did.
+        assert "no recent" in result["content"][0]["text"].lower()
+        assert result["structuredContent"]["actions"] == []
+        assert result["structuredContent"]["count"] == 0
 
     def test_queen_query_learnings_returns_recorded(self, queen_daemon):
         queen_daemon.queen_chat.add_learning(

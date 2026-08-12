@@ -111,7 +111,25 @@ def _handle_view_buzz_log(
     params.append(limit)
     rows = d.swarm_db.fetchall(" ".join(sql_parts), tuple(params))
     if not rows:
-        return [{"type": "text", "text": "No buzz entries match."}]
+        # #1535: zero rows is a SUCCESSFUL query, so it carries the same shape the
+        # populated path does — just empty. It used to return the bare list, and on
+        # 2026-08-12 the operator got that shape back from a buzz_log read and
+        # concluded their own SQL was wrong. It wasn't. A tool the fleet is observed
+        # with must not fail in a way that looks like the reader's mistake.
+        # No error discriminator: nothing went wrong.
+        return {
+            "content": [{"type": "text", "text": "No buzz entries match."}],
+            "structuredContent": {
+                "entries": [],
+                "count": 0,
+                "filters": {
+                    "worker": worker_filter or None,
+                    "category": category_filter or None,
+                    "since_seconds": since,
+                    "limit": limit,
+                },
+            },
+        }
     lines = [
         f"[{r['category']}] {r['worker_name'] or '-'}: {r['action']} — {(r['detail'] or '')[:120]}"
         for r in rows
@@ -162,7 +180,21 @@ def _handle_view_drone_actions(
     params.append(limit)
     rows = d.swarm_db.fetchall(" ".join(sql_parts), tuple(params))
     if not rows:
-        return [{"type": "text", "text": "No recent drone actions."}]
+        # #1535 — see the note on the buzz-log handler above. Same rule, and the
+        # `filters` echo matters as much as the empty list: a client reading
+        # structuredContent["filters"]["worker"] would raise here too.
+        return {
+            "content": [{"type": "text", "text": "No recent drone actions."}],
+            "structuredContent": {
+                "actions": [],
+                "count": 0,
+                "filters": {
+                    "worker": worker_filter or None,
+                    "since_seconds": since,
+                    "limit": limit,
+                },
+            },
+        }
     lines = [
         f"{r['worker_name'] or '-'}: {r['action']} — {(r['detail'] or '')[:120]}" for r in rows
     ]

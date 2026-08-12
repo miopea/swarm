@@ -111,6 +111,15 @@ def _handle_view_worker_state(
     2026.8.10.20 sharpened it by putting ``pty_tail`` in the structured
     payload, which made that payload the whole reason to call the tool.
 
+    #1535 ADDED ``mode``, which is "summary" or "single" on EVERY structured exit.
+    This tool has two genuinely different result shapes — the summary keys
+    ``workers`` (plural), a targeted lookup keys ``worker`` (singular) — so
+    ``structuredContent["worker"]`` still raised on the summary path even after
+    #1432. Rather than pad the summary with a null ``worker`` (a payload carrying
+    both a null ``worker`` and a populated ``workers`` reads like a bug), the shape
+    now says which shape it is. That is the rule below applied literally: read a
+    FIELD to learn what you have, never infer it from which key happens to exist.
+
     THE RULE, narrower than "every handler": WITHIN A TOOL THAT EVER EMITS
     ``structuredContent``, EVERY EXIT EMITS IT. A client should branch on a
     FIELD, never on the response's Python type. This deliberately diverges
@@ -163,7 +172,7 @@ def _handle_view_worker_state(
         text = "\n".join(summaries) if summaries else "No workers."
         return {
             "content": [{"type": "text", "text": text}],
-            "structuredContent": {"workers": workers_payload},
+            "structuredContent": {"mode": "summary", "workers": workers_payload},
         }
 
     worker = next((w for w in d.workers if w.name == target), None)
@@ -175,7 +184,12 @@ def _handle_view_worker_state(
         # unchanged, so text-only clients see exactly what they saw before.
         return {
             "content": [{"type": "text", "text": f"Worker '{target}' not found."}],
-            "structuredContent": {"worker": None, "error": "not_found", "requested": target},
+            "structuredContent": {
+                "mode": "single",
+                "worker": None,
+                "error": "not_found",
+                "requested": target,
+            },
         }
 
     pty_tail = ""
@@ -200,6 +214,7 @@ def _handle_view_worker_state(
     return {
         "content": [{"type": "text", "text": body}],
         "structuredContent": {
+            "mode": "single",
             "worker": {
                 "name": worker.name,
                 "kind": worker.kind,

@@ -155,7 +155,20 @@ def _handle_view_messages(
     params.append(limit)
     rows = d.swarm_db.fetchall(" ".join(sql_parts), tuple(params))
     if not rows:
-        return [{"type": "text", "text": "No messages match."}]
+        # #1535: empty is a successful query and carries the populated shape, empty.
+        return {
+            "content": [{"type": "text", "text": "No messages match."}],
+            "structuredContent": {
+                "messages": [],
+                "count": 0,
+                "filters": {
+                    "worker": worker_filter or None,
+                    "since_seconds": since,
+                    "limit": limit,
+                    "full_body": full,
+                },
+            },
+        }
     lines: list[str] = []
     payload: list[dict[str, Any]] = []
     for r in rows:
@@ -225,8 +238,28 @@ def _handle_view_message_stream(
         "SELECT * FROM messages WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?",
         (since_ts, limit * 4 if actionable_only else limit),
     )
+
+    # #1535: this handler has THREE zero-result exits — no rows at all, and two
+    # more where rows existed but rendered to nothing. The ticket's list named only
+    # two of them; converting a subset would leave exactly the hole this rule
+    # exists to close, so they share one builder and cannot drift apart.
+    def _empty(text: str) -> HandlerResult:
+        return {
+            "content": [{"type": "text", "text": text}],
+            "structuredContent": {
+                "messages": [],
+                "count": 0,
+                "filters": {
+                    "since_seconds": since,
+                    "limit": limit,
+                    "actionable_only": actionable_only,
+                    "full_body": full,
+                },
+            },
+        }
+
     if not rows:
-        return [{"type": "text", "text": "No messages in window."}]
+        return _empty("No messages in window.")
 
     worker_state = _message_stream_worker_states(d)
     lines = _render_message_stream_rows(
@@ -238,8 +271,8 @@ def _handle_view_message_stream(
     )
     if not lines:
         if actionable_only:
-            return [{"type": "text", "text": "No actionable messages."}]
-        return [{"type": "text", "text": "No messages in window."}]
+            return _empty("No actionable messages.")
+        return _empty("No messages in window.")
     structured_rows = _structured_message_stream_rows(
         rows,
         worker_state=worker_state,
