@@ -113,10 +113,12 @@ def test_reconcile_demotes_extra_active_and_idle_active(board):
 
     repairs = board.reconcile_invariants(working_workers={"w2"})
 
-    # w1: collapsed to exactly one ACTIVE, and since w1 not working that
-    # one is also demoted → zero ACTIVE for w1.
+    # #1538: w1 collapses to EXACTLY ONE ACTIVE (INV-1), and that survivor is
+    # KEPT. w1 is merely paused — not in `working`, but not absent either — and a
+    # pause is not abandonment. This assertion used to expect zero, which encoded
+    # the demotion that was undoing workers' own start assertions.
     w1_active = [t for t in board.tasks_for_worker("w1") if t.status == TaskStatus.ACTIVE]
-    assert w1_active == []
+    assert len(w1_active) == 1
     # w2 working → its single ACTIVE preserved.
     assert board.get(c.id).status == TaskStatus.ACTIVE
     # operator-action demoted out of ACTIVE.
@@ -124,6 +126,23 @@ def test_reconcile_demotes_extra_active_and_idle_active(board):
     # repairs reported for audit/buzz, and idempotent on re-run.
     assert repairs
     assert board.reconcile_invariants(working_workers={"w2"}) == []
+
+
+def test_reconcile_demotes_the_survivor_only_when_the_worker_is_absent(board):
+    """#1538 control for the test above: absence, not pause, empties the row.
+
+    Same corrupt shape, same call — the ONLY difference is that w1 is reported
+    absent. Without this pairing, the changed assertion above would look like the
+    invariant was simply weakened.
+    """
+    a = _assigned(board, "a", "w1")
+    b = _assigned(board, "b", "w1")
+    a.status = TaskStatus.ACTIVE
+    b.status = TaskStatus.ACTIVE
+
+    board.reconcile_invariants(working_workers=set(), absent_workers={"w1"})
+
+    assert [t for t in board.tasks_for_worker("w1") if t.status == TaskStatus.ACTIVE] == []
 
 
 def test_reconcile_blocked_when_blocker_binding(board):

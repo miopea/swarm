@@ -948,14 +948,17 @@ class TaskBoard(EventEmitter):
         *,
         working_workers: set[str] | None = None,
         blocked_task_ids: set[str] | None = None,
+        absent_workers: set[str] | None = None,
     ) -> list[dict[str, str]]:
         """#405 reconciliation — repair INV-1/2/3 + operator-action drift.
 
         * Operator-action task ACTIVE → demote to ASSIGNED (never ACTIVE).
         * INV-1: >1 ACTIVE per worker → keep the most recently updated,
           demote the rest to ASSIGNED.
-        * INV-2: ACTIVE task whose worker is not in *working_workers* →
-          BLOCKED if its id is in *blocked_task_ids*, else ASSIGNED.
+        * INV-2: ACTIVE task whose worker is ABSENT (*absent_workers* —
+          SLEEPING/STUNG) → BLOCKED if its id is in *blocked_task_ids*, else
+          ASSIGNED. A worker that is merely paused is NOT absent (#1538); see
+          :meth:`_recon_inv2` for why that distinction is the whole fix.
         * #1527: a dispatch was REQUESTED but the task never reached ACTIVE →
           report it and discharge the claim (see :meth:`_recon_stalled_dispatch`).
 
@@ -970,7 +973,13 @@ class TaskBoard(EventEmitter):
         with self._lock:
             self._recon_operator_action(now, repairs)
             self._recon_inv1(now, repairs)
-            self._recon_inv2(working_workers or set(), blocked_task_ids or set(), now, repairs)
+            self._recon_inv2(
+                working_workers or set(),
+                blocked_task_ids or set(),
+                now,
+                repairs,
+                absent=absent_workers,
+            )
             self._recon_stalled_dispatch(now, repairs)
             if repairs:
                 self._persist()
@@ -1090,9 +1099,41 @@ class TaskBoard(EventEmitter):
         blocked: set[str],
         now: float,
         repairs: list[dict[str, str]],
+        absent: set[str] | None = None,
     ) -> None:
-        """ACTIVE while worker not working → BLOCKED (if blocker binding)
-        else ASSIGNED."""
+        """ACTIVE while its worker is ABSENT → BLOCKED (if blocker binding) else ASSIGNED.
+
+        #1538: A PAUSE IS NOT ABANDONMENT. This used to demote whenever the worker
+        was not BUZZING/WAITING, which meant every ordinary RESTING moment — at the
+        prompt, thinking, between turns, waiting on an operator answer — was read as
+        a violation and a CORRECT row was "repaired". ACTIVE means "this is the task
+        I am on", not "I am mid-token-generation".
+
+        It was the steady state, not an edge case: 404 of 418 TASK_RECONCILED rows
+        were this demotion, and three workers were sitting in the demoted state when
+        it was measured. It also looked like a bug in ``swarm_start_task`` — the
+        worker asserts, sees success, and a later read shows ASSIGNED with nothing
+        connecting the two. docs/specs/worker-asserted-active.md §3 already had the
+        rule: "once a worker has asserted, the daemon demoting it is the daemon
+        overruling the only party that knows what is running." Its AC-4 shipped
+        without a test and its AC-8 deliberately left the reconcilers alone, so this
+        path was never measured against it.
+
+        WHAT STILL GETS REPAIRED, because #405 filed INV-2 for a real reason: a
+        worker that is SLEEPING or STUNG is absent rather than pausing, and its stale
+        ACTIVE row is still demoted. The boundary is not re-invented here — the state
+        machine already draws it, promoting RESTING → SLEEPING after
+        ``sleeping_threshold`` (worker.py). Inheriting that gives the grace period a
+        single operator-tunable definition instead of a second, drifting one.
+
+        THE BLOCKER BRANCH IS DELIBERATELY UNCHANGED and still fires for a merely
+        RESTING worker: a live blocker binding means the worker said it cannot
+        proceed, which is a fact about the work rather than about the pause.
+
+        ``absent`` is None only for legacy callers; that degrades to never demoting,
+        which is the safe direction — a row left ACTIVE is visible, a row wrongly
+        demoted is not.
+        """
         for task in self._tasks.values():
             if task.status != TaskStatus.ACTIVE or not task.assigned_worker:
                 continue
@@ -1103,11 +1144,11 @@ class TaskBoard(EventEmitter):
                 repairs.append(
                     self._repair(task, "blocked", f"INV-2: {task.assigned_worker} idle + blocker")
                 )
-            else:
+            elif task.assigned_worker in (absent or set()):
                 task.status = TaskStatus.ASSIGNED
                 task.updated_at = now
                 repairs.append(
-                    self._repair(task, "assigned", f"INV-2: {task.assigned_worker} not working")
+                    self._repair(task, "assigned", f"INV-2: {task.assigned_worker} absent")
                 )
 
     def reconcile_active_per_worker(self) -> dict[str, list[str]]:

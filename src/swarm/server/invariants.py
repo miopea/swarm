@@ -68,11 +68,45 @@ class InvariantReconciler:
     def working_workers(self) -> set[str]:
         """Workers genuinely engaged on a turn (BUZZING/WAITING).
 
-        Anything else (RESTING/SLEEPING/STUNG) cannot legitimately hold
-        an ACTIVE task (#405 INV-2).
+        #1538 CORRECTED THIS DOCSTRING'S CLAIM. It used to say "anything else
+        (RESTING/SLEEPING/STUNG) cannot legitimately hold an ACTIVE task", and
+        INV-2 demoted on that basis. It is false: ACTIVE means "this is the task
+        I am on", not "I am mid-token-generation", so a RESTING worker at its
+        prompt still owns its task. See :meth:`absent_workers`, which is what
+        INV-2 now demotes on.
         """
         workers: list[Worker] = self._get_workers()
         return {w.name for w in workers if w.state in (WorkerState.BUZZING, WorkerState.WAITING)}
+
+    def absent_workers(self) -> set[str]:
+        """Workers that are ABSENT rather than merely paused (#1538).
+
+        The distinction INV-2 actually needs is OWNED vs ABANDONED, not BUSY vs
+        IDLE. SLEEPING and STUNG mean absence — the first is RESTING that has
+        outlasted ``sleeping_threshold``, the second is a dead process. RESTING
+        alone is a pause and must not cost a worker its ACTIVE row.
+
+        The grace period is NOT re-invented here: the state machine already
+        promotes RESTING → SLEEPING after ``sleeping_threshold`` (worker.py), so
+        keying off SLEEPING inherits one operator-tunable definition instead of
+        adding a second that would drift from it.
+
+        READS ``display_state``, NOT ``state``, AND THAT IS LOAD-BEARING. SLEEPING
+        is DERIVED — ``Worker.state`` is never set to it; it stays RESTING and
+        ``display_state`` rewrites it once ``state_duration`` passes the threshold
+        (worker.py:333-341). Matching on ``state`` here would silently never see a
+        sleeping worker, so this would only ever fire for STUNG and #405's
+        stale-row repair would quietly stop working — a guard that under-fires and
+        reports nothing looks exactly like a guard with nothing to do.
+
+        Consequence worth knowing: ``display_state`` never returns SLEEPING for the
+        Queen (she is always-on by design), so her ACTIVE rows are only ever
+        demoted when STUNG.
+        """
+        workers: list[Worker] = self._get_workers()
+        return {
+            w.name for w in workers if w.display_state in (WorkerState.SLEEPING, WorkerState.STUNG)
+        }
 
     def blocked_task_ids(self) -> set[str]:
         """IDs of ACTIVE/ASSIGNED tasks with a live ``swarm_report_blocker``
@@ -119,6 +153,7 @@ class InvariantReconciler:
             repairs = self._task_board.reconcile_invariants(
                 working_workers=self.working_workers(),
                 blocked_task_ids=self.blocked_task_ids(),
+                absent_workers=self.absent_workers(),
             )
         except Exception:
             _log.warning("invariant reconciliation failed", exc_info=True)

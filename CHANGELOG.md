@@ -10,6 +10,67 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Fixes
 
+## [2026.8.12] - 2026-08-12
+
+### Features
+
+### Changes
+
+- `queen_view_worker_state` declares its shape. Every structured exit now carries
+  `mode` (`"summary"` or `"single"`), because the tool has two genuinely different
+  result shapes — a summary keys `workers`, a targeted lookup keys `worker` — and
+  a client had to infer which it held from whichever key happened to exist. A
+  client should read a field to learn its shape, never the response's type (#1535).
+- Task rows carry `dispatch_requested_at` (schema v20, nullable, additive). Without
+  a marker, "ASSIGNED and not started" is indistinguishable from ordinary queued
+  work, so nothing could tell a failed dispatch from a task waiting its turn
+  (#1527).
+- `GOAL_SET` records `goal_has_blocker_exit`, `condition_sha` and `condition_len`
+  in metadata, so a query can establish which goal condition was seeded without
+  reading the condition text. New shared `truncate_for_log()` appends
+  `…(truncated, N chars total)` wherever a log detail is cut (#1524).
+
+### Fixes
+
+- INV-2 no longer demotes a paused worker's ACTIVE task. It treated anything
+  outside BUZZING/WAITING as unable to "legitimately hold an ACTIVE task", but
+  ACTIVE means *this is the task I am on*, not *I am mid-token-generation* — so
+  every ordinary pause at the prompt was read as a violation and a correct row was
+  "repaired". It was the steady state, not an edge case: 404 of 418
+  `TASK_RECONCILED` rows were this demotion, and three workers were sitting in the
+  demoted state when it was measured. It also read as a bug in `swarm_start_task`,
+  because the worker asserts, sees success, and a later read shows ASSIGNED with
+  nothing connecting the two. Demotion now requires absence (SLEEPING/STUNG),
+  reusing the state machine's existing `sleeping_threshold` boundary rather than
+  inventing a second grace period. `docs/specs/worker-asserted-active.md` §3 had
+  already stated the rule; its AC-4 shipped without a test (#1538).
+- `queen_reassign_task(start=true)` no longer claims a dispatch it cannot know
+  happened. `_fire_async` returns before the dispatch runs and the synchronous
+  precondition only covered a non-ASSIGNED status, so a dead worker process or PTY
+  write failure still read as success. The verb now says dispatch was REQUESTED,
+  failures land in the buzz log *and* on the task's own history rather than only a
+  daemon-log line nobody reads, and a new reconciler rule reports a claimed
+  dispatch that never reached ACTIVE — once, not every sweep (#1527).
+- An armed native `/goal` is cleared when its task stops being the worker's active
+  one. Goals were arm-only: there was exactly one `/goal` send in the codebase and
+  no clear path, so a goal outlived its task through park, complete, block and
+  reassign alike. Compounded by arming happening only on dispatch and never on a
+  worker-asserted start, a stale goal kept grading a worker on criteria for work it
+  had set down — nine times in one session, each pushing to override an operator
+  ruling (#1536).
+- SQL writes that are not deletions now always escalate. The safety net covered
+  DROP/TRUNCATE/ALTER and DELETE-without-WHERE — every destructive verb except the
+  two that change data in place — so `psql -c "UPDATE \"user\" SET hub_role='ADMIN'"`
+  auto-approved. Patterns are shaped to SQL rather than to the words, so `npm
+  update` and prose containing "insert into" stay approvable (#1526).
+- Zero-result and not-found exits carry `structuredContent` like their populated
+  path. `result["structuredContent"]["entries"]` raised the moment a filter matched
+  nothing, which is a routine answer rather than an error — and it misled a
+  buzz_log read into looking like the reader's own SQL was wrong. Empty is modelled
+  as a successful empty collection with no error discriminator; the not-found path
+  of `queen_view_worker_state` carries `worker: null` plus an `error` field
+  (#1432, #1535).
+
 ## [2026.8.11.4] - 2026-08-11
 
 ### Features
