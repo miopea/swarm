@@ -32,6 +32,14 @@ class TaskAction(Enum):
     REOPENED = "REOPENED"
     REMOVED = "REMOVED"
     EDITED = "EDITED"
+    # #1527: a dispatch was requested and the async call raised. Written so the
+    # failure lives on the TASK, next to the ASSIGNED row that made it look
+    # dispatched — previously the only trace was a daemon-log line nobody reads,
+    # and #1432's history showed ASSIGNED with no STARTED and no explanation.
+    DISPATCH_FAILED = "DISPATCH_FAILED"
+    # #1527: a requested dispatch never reached ACTIVE and the invariant swept it.
+    # Distinct from DISPATCH_FAILED: nothing raised, so this is the only signal.
+    DISPATCH_STALLED = "DISPATCH_STALLED"
 
 
 @dataclass

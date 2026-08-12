@@ -43,6 +43,11 @@ class InvariantReconciler:
       * Emits ``SystemAction.TASK_RECONCILED`` per repair and a
         ``TaskAction.UNASSIGNED`` history entry so the operator can
         audit the auto-corrections post-hoc.
+      * #1527: stalled-dispatch findings instead emit
+        ``TASK_DISPATCH_STALLED`` / ``TaskAction.DISPATCH_STALLED``,
+        because that rule REPORTS a dispatch that never landed rather
+        than moving a status — logging it as a reconcile would claim a
+        transition that never happened.
     """
 
     def __init__(
@@ -120,17 +125,25 @@ class InvariantReconciler:
             return
         for r in repairs:
             detail = f"{reason}: #{r['task_id'][:8]} {r['from']}→{r['to']} ({r['reason']})"
+            # #1527: a stalled-dispatch repair REPORTS, it does not move status, so
+            # it must not be logged as TASK_RECONCILED/UNASSIGNED — that would
+            # claim a status change that never happened and make the row unusable
+            # as evidence for the thing it exists to prove.
+            if r.get("kind") == "stalled_dispatch":
+                buzz_action = SystemAction.TASK_DISPATCH_STALLED
+                hist_action = TaskAction.DISPATCH_STALLED
+            else:
+                buzz_action = SystemAction.TASK_RECONCILED
+                hist_action = TaskAction.UNASSIGNED
             try:
                 self._drone_log.add(
-                    SystemAction.TASK_RECONCILED,
+                    buzz_action,
                     r.get("worker") or "system",
                     detail,
                     category=LogCategory.TASK,
                     metadata=dict(r),
                 )
-                self._task_history.append(
-                    r["task_id"], TaskAction.UNASSIGNED, actor="system", detail=detail
-                )
+                self._task_history.append(r["task_id"], hist_action, actor="system", detail=detail)
             except Exception:
                 _log.debug("reconcile audit log failed", exc_info=True)
         if repairs:

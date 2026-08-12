@@ -59,7 +59,12 @@ def test_dispatches_when_the_task_really_is_assigned() -> None:
     d = _daemon_with(TaskStatus.ASSIGNED)
     out = _text(_dispatch_after_reassign(d, _task(TaskStatus.ASSIGNED), "swarm", "platform"))
 
-    assert "dispatched" in out
+    # #1527 tightened this contract. The old assertion was `"dispatched" in out`,
+    # which passed on the wording "and dispatched" — a claim this function cannot
+    # make, since _fire_async returns before the dispatch runs. It now says
+    # REQUESTED, so assert the dispatch was actually FIRED (the real behaviour)
+    # rather than that a particular past-tense word appears in the prose.
+    assert "REQUESTED" in out, out
     assert "NOT dispatched" not in out
     d.assign_and_start_task.assert_called_once()
 

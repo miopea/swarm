@@ -15,6 +15,7 @@ call site.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any
 
@@ -244,7 +245,13 @@ def _resolve_task(d: SwarmDaemon, args: dict[str, Any]) -> SwarmTask | list[Text
     return task
 
 
-def _fire_async(coro: Coroutine[Any, Any, None], *, label: str = "") -> None:
+def _fire_async(
+    coro: Coroutine[Any, Any, None],
+    *,
+    label: str = "",
+    daemon: SwarmDaemon | None = None,
+    task: Any = None,
+) -> None:
     """Fire an async daemon method from a sync MCP handler context.
 
     Falls back to silently dropping the call if no event loop is
@@ -258,11 +265,15 @@ def _fire_async(coro: Coroutine[Any, Any, None], *, label: str = "") -> None:
     cost hub, public-website and root hours of idle time on urgent work.
     Failures are now logged with the caller's label. Silence is no longer a
     possible outcome.
+
+    #1527: pass ``daemon`` + ``task`` and a failure ALSO lands in-band — a buzz-log
+    entry and a row on the task's own history — because a daemon-log line is not a
+    state change and nobody reads it. See :func:`_log_async_failure`.
     """
     try:
         loop = asyncio.get_running_loop()
-        task = loop.create_task(coro)
-        task.add_done_callback(lambda t: _log_async_failure(t, label))
+        aio_task = loop.create_task(coro)
+        aio_task.add_done_callback(lambda t: _log_async_failure(t, label, daemon, task))
     except RuntimeError:
         try:
             coro.close()
@@ -270,13 +281,54 @@ def _fire_async(coro: Coroutine[Any, Any, None], *, label: str = "") -> None:
             pass
 
 
-def _log_async_failure(task: asyncio.Task[Any], label: str) -> None:
-    """Log a fire-and-forget failure instead of discarding it (#1486)."""
-    if task.cancelled():
+def _log_async_failure(
+    aio_task: asyncio.Task[Any],
+    label: str,
+    daemon: SwarmDaemon | None = None,
+    task: Any = None,
+) -> None:
+    """Report a fire-and-forget failure instead of discarding it (#1486, #1527).
+
+    The ``_log.error`` is #1486's fix and is unchanged. #1527 adds the in-band
+    half: the Queen is told a dispatch was requested, and if it fails the ONLY
+    prior trace was this log line — not the task, not the board, not the buzz
+    log. So the operator's evidence was a worker that stayed asleep, and #1432
+    sat ASSIGNED with no STARTED row and no explanation anywhere.
+
+    Both writes are individually guarded: this runs in an asyncio done-callback,
+    where an exception is swallowed by the event loop, so a failure to REPORT the
+    failure must not take the other report with it.
+    """
+    if aio_task.cancelled():
         return
-    exc = task.exception()
-    if exc is not None:
-        _log.error("async %s failed: %s", label or "call", exc, exc_info=exc)
+    exc = aio_task.exception()
+    if exc is None:
+        return
+    _log.error("async %s failed: %s", label or "call", exc, exc_info=exc)
+    if daemon is None:
+        return
+    from swarm.drones.log import LogCategory, SystemAction
+    from swarm.tasks.history import TaskAction
+
+    detail = f"{label or 'call'} failed: {exc}"
+    try:
+        daemon.drone_log.add(
+            SystemAction.TASK_DISPATCH_FAILED,
+            getattr(task, "assigned_worker", None) or "unknown",
+            detail[:300],
+            category=LogCategory.TASK,
+            metadata={"task_number": getattr(task, "number", None)},
+        )
+    except Exception:
+        _log.warning("could not buzz-log dispatch failure for %s", label, exc_info=True)
+    if task is None:
+        return
+    try:
+        daemon.task_history.append(
+            task.id, TaskAction.DISPATCH_FAILED, actor="queen", detail=detail[:300]
+        )
+    except Exception:
+        _log.warning("could not write dispatch-failure history for %s", label, exc_info=True)
 
 
 def _dispatch_after_reassign(
@@ -312,17 +364,33 @@ def _dispatch_after_reassign(
                 ),
             }
         ]
+    # #1527: stamp BEFORE firing. This is the marker the invariant reconciler uses
+    # to tell a claimed-but-failed dispatch from ordinary queued work; set after
+    # firing it could lose the race against a fast failure.
+    current.dispatch_requested_at = time.time()
+    d.task_board.persist(current)
     _fire_async(
         d.assign_and_start_task(task.id, to_worker, actor="queen"),
         label=f"dispatch #{task.number} -> {to_worker}",
+        daemon=d,
+        task=current,
     )
     return [
         {
             "type": "text",
+            # #1527: says REQUESTED, not "and dispatched". The old wording asserted
+            # an outcome this function cannot know — _fire_async returns before the
+            # dispatch runs, and the synchronous precondition above only covers
+            # status != ASSIGNED. Every other failure (dead worker process, PTY
+            # write failure, holder unreachable) happened after the string was
+            # composed and still read as success. Saying "requested" is
+            # deterministically true for every failure mode instead of true for
+            # all but the ones that matter.
             "text": (
-                f"Reassigned #{task.number} from {prev} → {to_worker} and dispatched. "
-                f"Dispatch is asynchronous — confirm #{task.number} reaches ACTIVE on the "
-                f"board; a failure now logs rather than vanishing."
+                f"Reassigned #{task.number} from {prev} → {to_worker}; dispatch REQUESTED. "
+                f"Dispatch is asynchronous, so this is not confirmation it started — "
+                f"confirm #{task.number} reaches ACTIVE on the board. A failure is written "
+                f"to the task's history and the buzz log, not just the daemon log."
             ),
         }
     ]
@@ -452,7 +520,13 @@ def _handle_reassign_task(
     # criteria are absent. Locally-created tasks already get criteria at creation, so
     # widening this would add a model call to flows that never lacked them.
     if getattr(task, "jira_key", "") and not task.acceptance_criteria:
-        _fire_async(d.tasks.apply_synthesized_criteria(task, actor="queen"))
+        _fire_async(
+            d.tasks.apply_synthesized_criteria(task, actor="queen"),
+            # #1527(D): unlabelled, this logged as "async call failed" with nothing
+            # naming the task or the operation — the same forensic dead end #1486
+            # closed for dispatch, in a smaller form.
+            label=f"synthesize criteria #{task.number}",
+        )
 
     d.drone_log.add(
         SystemAction.OPERATOR,

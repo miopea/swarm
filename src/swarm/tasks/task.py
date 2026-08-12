@@ -153,6 +153,16 @@ class SwarmTask:
     # (updated_at bumps on any edit, so it could demote a long-running job).
     # None for never-started / legacy tasks → callers fall back to created_at.
     started_at: float | None = None
+    # #1527: when a dispatch was REQUESTED for this task. Set at the moment the
+    # async dispatch is fired, cleared by ``activate()`` when it lands. A row that
+    # still carries this while ASSIGNED, past the threshold, had a dispatch claimed
+    # that never happened — the invariant reconciler sweeps those.
+    #
+    # WHY THIS NEEDS TO BE PERSISTED AT ALL: without a marker, ASSIGNED-and-not-
+    # started is indistinguishable from ordinary queued work, so no sweep could tell
+    # a failed dispatch from a task simply waiting its turn. That ambiguity is why
+    # #1432 sat ASSIGNED with no STARTED row and nothing noticed.
+    dispatch_requested_at: float | None = None
     depends_on: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     attachments: list[str] = field(default_factory=list)  # file paths

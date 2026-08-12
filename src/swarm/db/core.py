@@ -120,6 +120,7 @@ class SwarmDB:
             (17, self._migrate_v17_resolution_note),
             (18, self._migrate_v18_archived_at),
             (19, self._migrate_v19_jira_exported_status),
+            (20, self._migrate_v20_dispatch_requested_at),
         ]
         for version, migrate in migrations:
             if from_version < version:
@@ -477,6 +478,22 @@ class SwarmDB:
             _log.info("v18: added tasks.archived_at")
         except sqlite3.OperationalError:
             _log.debug("v18 migration: archived_at column likely already exists")
+
+    def _migrate_v20_dispatch_requested_at(self) -> None:
+        """v20 (#1527): add ``tasks.dispatch_requested_at`` — when a dispatch was
+        REQUESTED, so the invariant reconciler can tell a claimed-but-failed
+        dispatch from ordinary queued work. Without it, ASSIGNED-and-not-started
+        is ambiguous and no sweep can distinguish the two. Nullable; legacy rows
+        stay NULL and are treated as "never claimed", so the sweep cannot fire
+        retroactively on history it knows nothing about. ALTER wrapped in
+        try/except — fresh DBs already have it via SCHEMA_V1.
+        """
+        assert self._conn is not None
+        try:
+            self._conn.execute("ALTER TABLE tasks ADD COLUMN dispatch_requested_at REAL")
+            _log.info("v20: added tasks.dispatch_requested_at")
+        except sqlite3.OperationalError:
+            _log.debug("v20 migration: dispatch_requested_at column likely already exists")
 
     def _migrate_v14_started_at(self) -> None:
         """v14 (#611 P2): add ``tasks.started_at`` (when the task last went

@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 19
+CURRENT_VERSION = 20
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   updated_at        REAL,
   completed_at      REAL,
   started_at        REAL,
+  dispatch_requested_at REAL,
   resolution        TEXT NOT NULL DEFAULT '',
   block_reason      TEXT NOT NULL DEFAULT '',
   external_blocker_ref TEXT NOT NULL DEFAULT '',

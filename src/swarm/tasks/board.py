@@ -30,6 +30,14 @@ _PRIORITY_ORDER = {
     TaskPriority.LOW: 3,
 }
 
+# #1527: how long a claimed dispatch may sit ASSIGNED before the reconciler calls
+# it stalled. Generous on purpose — a real dispatch reaches ACTIVE in seconds
+# (assign → PTY write → state flip), so 120s is well clear of the happy path while
+# still catching a stranded row within two sweeps of the 90s reconcile interval.
+# Too tight and this cries wolf on a merely slow dispatch, which is how a useful
+# signal becomes noise the operator filters out.
+_DISPATCH_STALL_SECONDS = 120.0
+
 
 def _active_keep_key(t: SwarmTask) -> float:
     """Sort key (ascending) for which ACTIVE task to KEEP under INV-1: the
@@ -714,6 +722,10 @@ class TaskBoard(EventEmitter):
             # suppression is a pause, not a one-way door.
             if PARKED_TAG in task.tags:
                 task.tags = [t for t in task.tags if t != PARKED_TAG]
+            # #1527: the dispatch landed, so the claim is discharged. Clearing it
+            # here — the single ACTIVE chokepoint — is what keeps the stalled-
+            # dispatch sweep from firing on dispatches that actually WORKED.
+            task.dispatch_requested_at = None
             task.start()
             self._persist()
             self._notify()
@@ -944,6 +956,8 @@ class TaskBoard(EventEmitter):
           demote the rest to ASSIGNED.
         * INV-2: ACTIVE task whose worker is not in *working_workers* →
           BLOCKED if its id is in *blocked_task_ids*, else ASSIGNED.
+        * #1527: a dispatch was REQUESTED but the task never reached ACTIVE →
+          report it and discharge the claim (see :meth:`_recon_stalled_dispatch`).
 
         Deterministic + idempotent (a second call with the same inputs
         returns ``[]``). Returns one repair dict per change for the buzz
@@ -957,6 +971,7 @@ class TaskBoard(EventEmitter):
             self._recon_operator_action(now, repairs)
             self._recon_inv1(now, repairs)
             self._recon_inv2(working_workers or set(), blocked_task_ids or set(), now, repairs)
+            self._recon_stalled_dispatch(now, repairs)
             if repairs:
                 self._persist()
                 self._notify()
@@ -971,6 +986,53 @@ class TaskBoard(EventEmitter):
             "to": to,
             "reason": reason,
         }
+
+    def _recon_stalled_dispatch(self, now: float, repairs: list[dict[str, str]]) -> None:
+        """#1527: a dispatch was claimed and the task never reached ACTIVE.
+
+        THE GAP THIS FILLS. ``_fire_async``'s failure callback reports dispatches
+        that RAISE. It cannot see the ones that fail without raising, and it cannot
+        see failures originating outside that one call site. This can, because it
+        keys off state rather than off an exception: ``dispatch_requested_at`` set
+        while the task is still ASSIGNED means somebody claimed a dispatch that
+        never landed. ``activate()`` clears the marker, so a dispatch that WORKED
+        never reaches here.
+
+        REPORTS, DOES NOT RE-DISPATCH. A retry loop against a dead worker is worse
+        than a visible stranded row, and the reconciler runs unattended.
+
+        FIRES ONCE. The marker is cleared as the repair is recorded, so the sweep
+        does not re-report the same stranded row every 90 seconds — a repeating
+        alert on unactionable state is how operators learn to ignore alerts.
+
+        Legacy rows carry NULL and are treated as never-claimed, so enabling this
+        cannot retro-fire on history it knows nothing about.
+        """
+        for task in self._tasks.values():
+            claimed = task.dispatch_requested_at
+            if claimed is None or task.status != TaskStatus.ASSIGNED:
+                continue
+            if now - claimed < _DISPATCH_STALL_SECONDS:
+                continue  # still inside the window a normal dispatch takes
+            task.dispatch_requested_at = None
+            task.updated_at = now
+            repairs.append(
+                {
+                    "task_id": task.id,
+                    "worker": task.assigned_worker or "",
+                    "from": "assigned",
+                    "to": "assigned",
+                    # Explicit tag rather than letting the audit layer infer from
+                    # from==to: this repair REPORTS, it does not change status, so
+                    # logging it as TASK_RECONCILED/UNASSIGNED like the INV rules
+                    # would claim a status change that never happened.
+                    "kind": "stalled_dispatch",
+                    "reason": (
+                        f"dispatch was claimed {int(now - claimed)}s ago but #{task.number} "
+                        f"never reached ACTIVE — it was never actually dispatched"
+                    ),
+                }
+            )
 
     def _recon_operator_action(self, now: float, repairs: list[dict[str, str]]) -> None:
         """Operator-action tasks may never be ACTIVE."""

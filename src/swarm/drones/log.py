@@ -144,6 +144,15 @@ class SystemAction(Enum):
     # `/goal clear` on park, complete, block or reassign, so a goal outlived its
     # task and kept grading the worker on criteria for work it had set down.
     GOAL_CLEARED = "GOAL_CLEARED"
+    # #1527: a dispatch was requested and the async call raised. The Queen was
+    # told the task was dispatched; without this the contradiction existed only
+    # in the daemon log, so the operator's evidence was a worker that stayed
+    # asleep. Buzz-logged so it is in-band.
+    TASK_DISPATCH_FAILED = "TASK_DISPATCH_FAILED"
+    # #1527: a requested dispatch never reached ACTIVE within the threshold and
+    # the invariant reconciler swept it. Catches the failures that DON'T raise,
+    # which TASK_DISPATCH_FAILED cannot see.
+    TASK_DISPATCH_STALLED = "TASK_DISPATCH_STALLED"
     # Task #529: a worker-reported blocker was auto-cleared by the
     # IdleWatcher because either the blocker target became done /
     # failed / removed, OR a new inbox message arrived after the
