@@ -1570,6 +1570,27 @@ class TestAlwaysEscalatePatterns:
             "INSERT INTO users (email) VALUES ('x@y.z')",
             "insert into audit_log (actor) values ('sys')",
             "INSERT INTO audit SELECT * FROM staging",
+            # #1526 ROUND 2, and every one of these AUTO-APPROVED on the live rule
+            # list AFTER 814876c closed the UPDATE/INSERT hole — measured by dry-run
+            # against the 17 real rules, not reasoned from the regex. Deletion was
+            # never the only destructive verb, and neither is mutation: GRANT and
+            # CREATE USER hand out the privileges that make every later command safe
+            # to run, so they are the worse case, not a lesser one.
+            'psql -c "GRANT ALL PRIVILEGES ON DATABASE prod TO evil;"',
+            "GRANT SELECT ON members TO readonly",
+            "REVOKE ALL ON members FROM app",
+            'psql -c "CREATE USER evil WITH SUPERUSER;"',
+            "CREATE ROLE deployer;",
+            "ALTER USER postgres WITH SUPERUSER",
+            "DROP USER app_readonly",
+            "DROP ROLE readonly",
+            # Not SQL, same shape of hazard: each one grants durable access or
+            # destroys a device, and each auto-approved via the blanket Bash rule.
+            "chmod -R 777 /etc",
+            "chmod 777 /var/www",
+            "cat >> ~/.ssh/authorized_keys",
+            "dd if=/dev/zero of=/dev/sda",
+            "npm publish --access public",
         ],
     )
     def test_always_escalates(self, text: str):
@@ -1601,6 +1622,24 @@ class TestAlwaysEscalatePatterns:
             "update the documentation before shipping",
             'git commit -m "insert into the changelog"',
             "cargo update -p serde",
+            # #1526 ROUND 2 FALSE-POSITIVE CONTROLS, and they are the half that
+            # decides whether the patterns above survive. This file's own rule:
+            # a guard that fires on ordinary work gets switched off within a day
+            # and then protects nothing. Each pattern is shaped to its SQL or shell
+            # form rather than to the English word, so all of these stay approvable.
+            "chmod 755 script.sh",
+            "chmod +x build.sh",
+            "chmod 644 notes.md",
+            "dd if=input.img of=output.img",
+            "dd if=/dev/urandom of=seed.bin",
+            "grant access to the new hire",
+            "we should grant them read access",
+            'git commit -m "revoke stale tokens later"',
+            "create user documentation for the API",
+            "alter user expectations in the README",
+            "npm run publish:docs",
+            "ls -la ~/.ssh",
+            "cat ~/.ssh/config",
         ],
     )
     def test_not_always_escalated(self, text: str):

@@ -81,7 +81,36 @@ ALWAYS_ESCALATE = re.compile(
     # VALUES/SELECT source — forms that essentially only occur in real SQL.
     r"|UPDATE\s+\S+\s+SET\s"
     r"|INSERT\s+INTO\s+\S+\s*\("
-    r"|INSERT\s+INTO\s+\S+\s+(VALUES|SELECT)\b",
+    r"|INSERT\s+INTO\s+\S+\s+(VALUES|SELECT)\b"
+    # #1526 ROUND 2, 2026-08-13. Measured by DRY-RUN against the 17 live rules
+    # AFTER the block above shipped — every command below still auto-approved,
+    # because the blanket user rule (`Bash|Read|Write|Edit|Glob|Grep`) approves
+    # anything this net does not catch, and the net is a denylist.
+    #
+    # GRANTING IS WORSE THAN MUTATING, WHICH IS WHY THESE COME FIRST. An UPDATE
+    # changes one row; a GRANT or CREATE USER hands out the privilege that makes
+    # every later command safe to run, unsupervised and durable. #1526 was filed
+    # about `UPDATE members`, and `CREATE USER … WITH SUPERUSER` was sitting
+    # beside it the whole time.
+    #
+    # SHAPED TO THE SQL/SHELL FORM, NOT TO THE ENGLISH WORD — the same discipline
+    # as the UPDATE/INSERT block. GRANT/REVOKE need a privilege keyword, so
+    # "grant access to the new hire" does not fire; CREATE|ALTER USER need a
+    # following SQL clause, so "create user documentation" does not. An
+    # over-triggering guard gets switched off within a day and then protects
+    # nothing.
+    r"|GRANT\s+(ALL|SELECT|INSERT|UPDATE|DELETE|USAGE|CONNECT|EXECUTE|TEMPORARY|TRIGGER|CREATE)\b"
+    r"|REVOKE\s+(ALL|SELECT|INSERT|UPDATE|DELETE|USAGE|CONNECT|EXECUTE|TEMPORARY|TRIGGER|CREATE)\b"
+    r"|CREATE\s+(USER|ROLE)\s+\S+\s*(WITH|PASSWORD|SUPERUSER|LOGIN|NOLOGIN|;)"
+    r"|ALTER\s+(USER|ROLE)\s+\S+\s*(WITH|SET|PASSWORD|SUPERUSER|RENAME|;)"
+    r"|DROP\s+(USER|ROLE)\b"
+    # Not SQL, same shape of hazard: durable access, or an unrecoverable write.
+    # `chmod 777` needs the literal mode so `chmod 755`/`+x` stay approvable;
+    # `dd` needs a /dev/ TARGET so reading /dev/urandom into a file does not fire.
+    r"|chmod\s+(-[a-zA-Z]+\s+)*777\b"
+    r"|authorized_keys"
+    r"|\bdd\s+[^\n]*\bof=/dev/"
+    r"|npm\s+publish\b",
     re.IGNORECASE,
 )
 
