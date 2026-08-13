@@ -111,3 +111,58 @@ def test_the_refusal_names_the_roster():
 
     assert "hub" in out and "platform" in out
     assert "omit target_worker" in out
+
+
+# ---------------------------------------------------------------------------
+# The THIRD defect on this path: a declared parameter that was never read
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("given", ["high", "urgent", "low", "HIGH", " high "])
+def test_priority_reaches_create_task(given):
+    """`priority` is DECLARED in the schema, documented in the examples, and was
+    never read — so create_task's TaskPriority.NORMAL default applied to every
+    MCP-created task whatever the caller sent.
+
+    Reproduced live post-reload by #1574: filed `high`, landed `normal`, gating a
+    time-boxed page nobody would have re-prioritised because the call reported
+    success. Case and whitespace variants included because the schema's examples
+    are lowercase while the enum is not.
+    """
+    from swarm.tasks.task import TaskPriority
+
+    d = _daemon("platform")
+
+    _handle_create_task(d, "queen", {"title": "t", "priority": given})
+
+    assert d.create_task.call_args.kwargs["priority"] == TaskPriority(given.strip().lower())
+
+
+def test_priority_defaults_to_normal_when_absent():
+    """POSITIVE CONTROL. Without it, a fix that hard-coded HIGH would pass the
+    test above for the wrong reason."""
+    from swarm.tasks.task import TaskPriority
+
+    d = _daemon("platform")
+
+    _handle_create_task(d, "queen", {"title": "t"})
+
+    assert d.create_task.call_args.kwargs["priority"] == TaskPriority.NORMAL
+
+
+def test_an_unrecognised_priority_falls_back_rather_than_refusing():
+    """THE ASYMMETRY WITH target_worker, and it is deliberate.
+
+    An unusable priority is cosmetic — the task still needs to exist, and refusing
+    to file it would lose real work over a typo in a sort key. An unusable
+    target_worker produces an OWNERLESS task nobody is watching, which is why that
+    one refuses. Same handler, two arguments, two different right answers.
+    """
+    from swarm.tasks.task import TaskPriority
+
+    d = _daemon("platform")
+
+    _handle_create_task(d, "queen", {"title": "t", "priority": "extremely-urgent"})
+
+    d.create_task.assert_called_once()
+    assert d.create_task.call_args.kwargs["priority"] == TaskPriority.NORMAL

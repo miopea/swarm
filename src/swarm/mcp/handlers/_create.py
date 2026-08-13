@@ -17,7 +17,7 @@ from swarm.logging import get_logger
 from swarm.mcp._arg_types import CreateTaskArgs
 from swarm.mcp.types import TextContent
 from swarm.tasks.authority_guard import AuthorityVerdict, screen_task_authority
-from swarm.tasks.task import HOLD_TAG
+from swarm.tasks.task import HOLD_TAG, TaskPriority
 from swarm.worker.worker import QUEEN_WORKER_NAME
 
 if TYPE_CHECKING:
@@ -256,6 +256,30 @@ def _park_for_authority_review(
     ]
 
 
+def _coerce_priority(raw: object) -> TaskPriority:
+    """Turn the caller's ``priority`` string into a TaskPriority (#1543).
+
+    FALLS BACK TO NORMAL RATHER THAN REFUSING. An unrecognised priority is a
+    cosmetic mistake — the task still needs to exist, and refusing to file it would
+    lose real work over a typo in a sort key. That is the opposite trade from
+    ``target_worker``, where an unroutable value produces an OWNERLESS task nobody
+    is watching, so refusing is the safer failure there. Same handler, two
+    arguments, two different right answers.
+
+    Accepts the enum directly so a programmatic caller is not forced through a
+    string round-trip, and is case-insensitive because the schema's examples are
+    lowercase while the enum is not.
+    """
+    if isinstance(raw, TaskPriority):
+        return raw
+    if not raw:
+        return TaskPriority.NORMAL
+    try:
+        return TaskPriority(str(raw).strip().lower())
+    except ValueError:
+        return TaskPriority.NORMAL
+
+
 def _known_worker_names(d: SwarmDaemon) -> set[str]:
     """Every name a task can legitimately be routed to.
 
@@ -363,6 +387,18 @@ def _handle_create_task(
         attachments=attachments,
         tags=tags,
         actor=worker_name,
+        # #1543: `priority` is DECLARED in this tool's inputSchema, documented in its
+        # examples, and was never read — so `create_task`'s TaskPriority.NORMAL
+        # default applied to every MCP-created task no matter what the caller sent.
+        # Reproduced live post-reload by #1574, which was filed `high`, landed
+        # `normal`, and gates a time-boxed page nobody would have re-prioritised
+        # because the call reported success.
+        #
+        # Distinct from the other two defects on this path: `assigned_worker` is an
+        # UNDECLARED key dropped by a dispatcher that validates nothing, and
+        # `target_worker` was a declared key accepted but never resolved. This one is
+        # a declared key never read at all.
+        priority=_coerce_priority(args.get("priority")),
     )
     # Acceptance criteria flow through edit_task to keep create_task's
     # signature small. The field has lived on SwarmTask since v1 but
