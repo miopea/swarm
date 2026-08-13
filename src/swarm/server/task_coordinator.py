@@ -168,16 +168,31 @@ class TaskCoordinator:
     # ----- assign -----
 
     def check_ownership(self, worker_name: str) -> None:
-        """Check file ownership conflicts; raise in HARD_BLOCK, warn in WARNING mode."""
+        """Check file ownership conflicts; raise in HARD_BLOCK, warn in WARNING mode.
+
+        #1510 — THIS COULD NOT FIRE FOR ANY STATE THE SYSTEM CAN REACH.
+        It used to ask ``check_overlap(w, get_worker_files(w))``. But ``get_worker_files``
+        returns files where ``_owners[f] == w`` and ``check_overlap`` reports f only when
+        ``_owners[f] != w`` — mutually exclusive whenever ``_worker_files[w]`` equals
+        ``{f: _owners[f] == w}``, which every mutator (``claim``, ``release``,
+        ``release_file``, ``transfer``) maintains. So it returned silently in both modes.
+
+        IT HAD TESTS, AND THEY PASSED, WHICH IS THE PART WORTH REMEMBERING. They reached
+        the firing state by assigning ``_worker_files`` directly — a state ``claim`` will
+        not produce, as their own comment conceded. The guard was therefore verified
+        against a configuration that cannot occur, and a guard that never fires in
+        production looks exactly like a guard with nothing to do.
+
+        ``overlaps_for`` asks the question that was intended: which files did THIS worker
+        touch that belong to someone else. Direction matters — the owner of a contested
+        file is not the one to hold back.
+        """
         from swarm.coordination.ownership import OwnershipMode
 
         ownership = getattr(self._d, "file_ownership", None)
         if ownership is None or ownership.mode == OwnershipMode.OFF:
             return
-        worker_files = ownership.get_worker_files(worker_name)
-        if not worker_files:
-            return
-        overlaps = ownership.check_overlap(worker_name, worker_files)
+        overlaps = ownership.overlaps_for(worker_name)
         if not overlaps:
             return
         overlap_str = ", ".join(f"{o.file_path} (owned by {o.owner})" for o in overlaps[:3])

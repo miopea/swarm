@@ -48,12 +48,13 @@ class TestCheckOwnership:
 
         d = make_daemon()
         d.file_ownership = FileOwnershipMap(mode=OwnershipMode.WARNING)
-        # Simulate two workers each having claimed foo.py — claim() only
-        # records the first owner, so seed the second worker's
-        # _worker_files set directly to model the real-world race where
-        # both workers' dirty git state overlaps.
+        # #1510: this used to seed ``_worker_files["web"]`` BY HAND, because claim()
+        # will not put an intruder's file there. That forged a state the system cannot
+        # reach — in real operation ``_worker_files[w]`` is exactly ``{f: _owners[f]==w}``
+        # — so the guard passed its tests while being unable to fire in production.
+        # Two real claims produce the real artefact: a recorded Overlap.
         d.file_ownership.claim("api", {"src/foo.py"})
-        d.file_ownership._worker_files.setdefault("web", set()).add("src/foo.py")
+        d.file_ownership.claim("web", {"src/foo.py"})
         # Warning mode logs and returns — no raise
         d.tasks_coord.check_ownership("web")
 
@@ -62,8 +63,9 @@ class TestCheckOwnership:
 
         d = make_daemon()
         d.file_ownership = FileOwnershipMap(mode=OwnershipMode.HARD_BLOCK)
+        # Two REAL claims — see the note in the warning-mode test above (#1510).
         d.file_ownership.claim("api", {"src/foo.py"})
-        d.file_ownership._worker_files.setdefault("web", set()).add("src/foo.py")
+        d.file_ownership.claim("web", {"src/foo.py"})
         with pytest.raises(SwarmOperationError, match="File ownership conflict"):
             d.tasks_coord.check_ownership("web")
 

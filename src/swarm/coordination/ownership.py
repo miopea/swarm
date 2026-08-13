@@ -56,6 +56,25 @@ class FileOwnershipMap:
     Ownership is derived from two sources:
     1. Explicit claims (e.g., Queen assigns files during task distribution)
     2. Runtime tracking (conflict detection feeds changed files)
+
+    KEYS ARE REPO-RELATIVE PATHS, AND THAT IS DELIBERATE (#1510). They come from
+    ``get_changed_files``' ``git diff --name-only HEAD``. This map answers "will these
+    worktrees CONFLICT WHEN MERGED" — a question about a logical path in the repo.
+
+    IT IS NOT THE SAME MAP AS ``daemon.file_locks``, which ``swarm_claim_file`` and
+    ``routes/hooks._check_file_lock`` write. That one keys ``os.path.realpath`` ABSOLUTE
+    paths and answers "is another worker WRITING THIS EXACT FILE right now". Because
+    workers run in separate worktrees, ``src/foo.py`` in two checkouts is two files on
+    disk that will collide at merge — so the key formats are the semantics, not an
+    oversight. Unify on realpath and the merge predictor stops relating the checkouts;
+    unify on relative and the write lock starts blocking workers who share no file.
+    #1510 measured this and declined to merge them.
+
+    KNOWN ROUGH EDGE, left for the operator: both are driven by the single
+    ``coordination.file_ownership`` setting, so one knob governs two mechanisms with
+    different requirements. That is the shape #1571 had to split apart for INV-2. Note
+    only ``file_locks`` currently BLOCKS an edit — this map's owner data reaches
+    enforcement solely through ``TaskCoordinator.check_ownership`` at assign time.
     """
 
     def __init__(self, mode: OwnershipMode = OwnershipMode.WARNING) -> None:
@@ -154,6 +173,26 @@ class FileOwnershipMap:
     def get_worker_files(self, worker_name: str) -> set[str]:
         """Get all files owned by a worker."""
         return set(self._worker_files.get(worker_name, set()))
+
+    def overlaps_for(self, worker_name: str) -> list[Overlap]:
+        """Recorded overlaps where ``worker_name`` is the INTRUDER (#1510).
+
+        The direction is the point. ``platform`` OWNING a contested file is not a reason
+        to hold ``platform`` back — the worker to stop is the one that touched someone
+        else's file. Keying this on ``owner`` instead would block the victim.
+
+        Reads the overlap history rather than deriving anything: ``claim`` already records
+        an :class:`Overlap` at the moment it declines to reassign a file, and that is the
+        ONLY place the losing side is retained. ``_owners`` keeps the original owner and
+        ``_worker_files`` never gains the intruder's entry, which is exactly why the
+        previous "check my own files against myself" query could not see a conflict.
+
+        Note ``_overlaps`` is a capped history (100) with no expiry, so this can report a
+        conflict that has since been resolved. That is the fail-CLOSED direction for a
+        guard that until now never fired at all; a TTL picked by feel is what #1571 was
+        about, so it is left for the operator rather than invented here.
+        """
+        return [o for o in self._overlaps if o.intruder == worker_name]
 
     def check_overlap(self, worker_name: str, files: set[str]) -> list[Overlap]:
         """Check if files would conflict without claiming them."""
