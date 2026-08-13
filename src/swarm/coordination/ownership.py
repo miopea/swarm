@@ -48,6 +48,19 @@ class Overlap:
     owner: str
     intruder: str
     timestamp: float = field(default_factory=time.time)
+    # #1580: set when `release`/`release_file`/`transfer` settles this conflict.
+    # SEMANTIC, not a TTL — resolved at the moment it is resolved, never N minutes
+    # later. `timestamp` stays creation-only and nothing compares it to decide
+    # reporting; a duration picked by feel is the failure #1571 was filed for.
+    # Marked rather than deleted so the operator-facing history in `to_dict` keeps
+    # "these two collided and it is settled", while `overlaps_for` (enforcement)
+    # sees only what is still true.
+    resolved: bool = False
+
+    @property
+    def key(self) -> tuple[str, str, str]:
+        """Identity for dedupe: the same three parties on the same file."""
+        return (self.file_path, self.owner, self.intruder)
 
 
 class FileOwnershipMap:
@@ -113,13 +126,8 @@ class FileOwnershipMap:
                 continue
             existing = self._owners.get(f)
             if existing and existing != worker_name:
-                overlap = Overlap(
-                    file_path=f,
-                    owner=existing,
-                    intruder=worker_name,
-                )
+                overlap = self._record_overlap(f, existing, worker_name)
                 overlaps.append(overlap)
-                self._overlaps.append(overlap)
                 coalesced.setdefault(existing, []).append(f)
             else:
                 self._owners[f] = worker_name
@@ -141,29 +149,100 @@ class FileOwnershipMap:
                 extra,
             )
 
-        # Cap overlap history
-        if len(self._overlaps) > 100:
-            self._overlaps = self._overlaps[-100:]
-
+        self._trim_overlaps()
         return overlaps
 
+    # -- overlap bookkeeping (#1580) ----------------------------------------
+
+    _OVERLAP_CAP = 100
+
+    def _record_overlap(self, file_path: str, owner: str, intruder: str) -> Overlap:
+        """Record a conflict, DEDUPED by (file, owner, intruder).
+
+        MEASURED, not assumed. ``update_from_conflicts`` runs on every ownership poll and
+        this used to append unconditionally, so ONE persistent conflict produced one
+        record per cycle — five cycles, five identical records, reported five times. Worse,
+        with the cap that meant 120 cycles of a noisy conflict EVICTED a genuine unrelated
+        overlap outright, so ``overlaps_for`` missed a real conflict. Deduping bounds the
+        history by DISTINCT conflicts instead of by poll count.
+
+        A recurrence re-arms a previously resolved record: resolution is not permanent
+        forgiveness, or one release would immunise an intruder against that file forever.
+        """
+        key = (file_path, owner, intruder)
+        for existing in self._overlaps:
+            if existing.key == key:
+                existing.resolved = False
+                existing.timestamp = time.time()
+                return existing
+        overlap = Overlap(file_path=file_path, owner=owner, intruder=intruder)
+        self._overlaps.append(overlap)
+        return overlap
+
+    def _resolve_overlaps(self, file_paths: set[str], *, owner: str | None = None) -> None:
+        """Mark conflicts on ``file_paths`` settled — optionally only those owned by
+        ``owner``.
+
+        Marks rather than deletes so ``to_dict`` keeps the operator-facing history; see
+        :class:`Overlap`. ``owner`` narrows :meth:`release` to the files that worker
+        actually owned, which is what keeps it from clearing conflicts where that worker
+        was the INTRUDER — those sit on somebody else's file and are not settled by
+        releasing your own.
+        """
+        for o in self._overlaps:
+            if o.file_path in file_paths and (owner is None or o.owner == owner):
+                o.resolved = True
+
+    def _trim_overlaps(self) -> None:
+        """Cap the history, EVICTING RESOLVED RECORDS FIRST.
+
+        Order matters: a resolved backlog must never push out a live conflict, which is
+        the same silent under-firing that made dedupe necessary. Oldest-first within each
+        group, so trimming stays predictable.
+        """
+        if len(self._overlaps) <= self._OVERLAP_CAP:
+            return
+        live = [o for o in self._overlaps if not o.resolved]
+        done = [o for o in self._overlaps if o.resolved]
+        # Live records first; if live ALONE exceeds the cap the oldest live are dropped,
+        # because unbounded growth is the worse failure.
+        kept = live[-self._OVERLAP_CAP :]
+        room = self._OVERLAP_CAP - len(kept)
+        if room > 0:
+            # Guarded deliberately: `done[-0:]` is the WHOLE list, not an empty one, so
+            # an unguarded slice here would keep every resolved record at exactly the cap.
+            kept += done[-room:]
+        kept.sort(key=lambda o: o.timestamp)
+        self._overlaps = kept
+
     def release(self, worker_name: str) -> int:
-        """Release all files owned by a worker. Returns count released."""
+        """Release all files owned by a worker. Returns count released.
+
+        #1580: conflicts on the released files where ``worker_name`` was the OWNER are
+        settled — nobody owns them now. Conflicts where this worker was the INTRUDER are
+        deliberately left alone: those sit on files somebody else owns, and giving up your
+        own files says nothing about them.
+        """
         files = self._worker_files.pop(worker_name, set())
         count = 0
         for f in files:
             if self._owners.get(f) == worker_name:
                 del self._owners[f]
                 count += 1
+        self._resolve_overlaps(set(files), owner=worker_name)
         return count
 
     def release_file(self, file_path: str) -> str | None:
-        """Release a single file. Returns the previous owner or None."""
+        """Release a single file. Returns the previous owner or None.
+
+        #1580: the file has no owner now, so every conflict recorded on it is settled.
+        """
         owner = self._owners.pop(file_path, None)
         if owner:
             worker_files = self._worker_files.get(owner)
             if worker_files:
                 worker_files.discard(file_path)
+        self._resolve_overlaps({file_path})
         return owner
 
     def get_owner(self, file_path: str) -> str | None:
@@ -192,7 +271,7 @@ class FileOwnershipMap:
         guard that until now never fired at all; a TTL picked by feel is what #1571 was
         about, so it is left for the operator rather than invented here.
         """
-        return [o for o in self._overlaps if o.intruder == worker_name]
+        return [o for o in self._overlaps if o.intruder == worker_name and not o.resolved]
 
     def check_overlap(self, worker_name: str, files: set[str]) -> list[Overlap]:
         """Check if files would conflict without claiming them."""
@@ -224,7 +303,13 @@ class FileOwnershipMap:
         return all_overlaps
 
     def transfer(self, file_path: str, new_owner: str) -> str | None:
-        """Transfer ownership of a file. Returns old owner."""
+        """Transfer ownership of a file. Returns old owner.
+
+        #1580: every conflict on this path is settled, because each names an ``owner`` who
+        no longer owns the file. The ticket singles out ``intruder == new_owner`` as
+        definitively resolved — it is, but so is the general case, and one rule is easier
+        to reason about than two. Delegates to :meth:`release_file`, which does the marking.
+        """
         old_owner = self.release_file(file_path)
         self._owners[file_path] = new_owner
         self._worker_files.setdefault(new_owner, set()).add(file_path)
@@ -242,6 +327,7 @@ class FileOwnershipMap:
                     "owner": o.owner,
                     "intruder": o.intruder,
                     "timestamp": o.timestamp,
+                    "resolved": o.resolved,
                 }
                 for o in self._overlaps[-20:]
             ],
