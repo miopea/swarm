@@ -220,6 +220,10 @@ def handle_tool_call(
     handler = _HANDLERS.get(tool_name)
     if not handler:
         return [{"type": "text", "text": f"Unknown tool: {tool_name}"}]
+    # #1543: refuse BEFORE the handler runs. An argument the tool does not declare
+    # used to be dropped in silence with a success return.
+    if (arg_error := _unknown_argument_error(tool_name, arguments)) is not None:
+        return arg_error
     try:
         result = handler(daemon, worker_name, arguments)
     except Exception as e:
@@ -258,3 +262,80 @@ from swarm.mcp.queen_tools import QUEEN_HANDLERS, QUEEN_TOOLS  # noqa: E402
 TOOLS.extend(QUEEN_TOOLS)
 _HANDLERS.update(QUEEN_HANDLERS)
 _TOOL_NAMES.update(QUEEN_HANDLERS.keys())
+
+
+def _build_allowed_args() -> dict[str, set[str]]:
+    """tool name -> the argument keys its schema declares (#1543).
+
+    Built ONCE at import from the already-aggregated ``TOOLS``, because the
+    dispatcher runs on every call and re-deriving this per invocation would put a
+    dict comprehension over ~40 schemas in the hot path for no benefit.
+
+    A TOOL WITH NO USABLE SCHEMA IS OMITTED, and that omission means "accept
+    everything" downstream — see :func:`_unknown_argument_error`. Absent is not
+    empty.
+    """
+    allowed: dict[str, set[str]] = {}
+    for tool in TOOLS:
+        name = tool.get("name")
+        props = (tool.get("inputSchema") or {}).get("properties")
+        if name and isinstance(props, dict) and props:
+            allowed[name] = set(props)
+    return allowed
+
+
+_ALLOWED_ARGS: dict[str, set[str]] = _build_allowed_args()
+
+
+def _unknown_argument_error(tool_name: str, arguments: dict[str, Any]) -> HandlerResult | None:
+    """Refuse a call carrying an argument the tool does not declare (#1543).
+
+    THE DEFECT. Nothing validated argument keys anywhere, so ANY misspelled
+    parameter to ANY of ~40 verbs was silently discarded and the call still
+    returned success. Measured cost: five tasks in one session were created with
+    ``assigned_worker=<name>`` — a key ``swarm_create_task`` does not declare, it
+    declares ``target_worker`` — and every one landed ownerless while the named
+    workers slept. Three were launch-critical. A rejected argument would have been
+    fixed in seconds; a silently dropped one produced a fleet that looked correctly
+    idle.
+
+    Checked HERE rather than in each handler for the reason ``hooks.py`` records
+    for ``_NEVER_AUTO_APPROVE``: a guard placed in one of several paths leaves the
+    rest open, and there are ~40 of them. This also covers every FUTURE dropped
+    parameter, which is the actual requirement — fixing only ``assigned_worker``
+    would leave the next misspelling equally invisible.
+
+    **FAILS OPEN WHEN THE SCHEMA IS UNKNOWABLE.** A tool absent from
+    ``_ALLOWED_ARGS`` — no entry, no ``inputSchema``, no ``properties`` — accepts
+    everything. An absent schema means "could not determine what is allowed", NOT
+    "nothing is allowed"; refusing there would break the verb outright, which is a
+    worse failure than the one being fixed. This exact direction was got backwards
+    twice in one session on this ticket, so it is asserted by a test rather than
+    trusted to a comment.
+
+    Names the nearest declared argument, because that is what turns the refusal
+    into a fix: a caller told only "unknown argument" guesses again, which is the
+    loop that made the original silence expensive.
+    """
+    allowed = _ALLOWED_ARGS.get(tool_name)
+    if not allowed:
+        return None
+    unknown = sorted(k for k in arguments if k not in allowed)
+    if not unknown:
+        return None
+    import difflib
+
+    lines = []
+    for key in unknown:
+        close = difflib.get_close_matches(key, allowed, n=1, cutoff=0.6)
+        hint = f" — did you mean '{close[0]}'?" if close else ""
+        lines.append(f"unknown argument '{key}'{hint}")
+    return [
+        {
+            "type": "text",
+            "text": (
+                f"{tool_name}: " + "; ".join(lines) + ". Nothing was done.\n"
+                f"Accepted arguments: {', '.join(sorted(allowed))}"
+            ),
+        }
+    ]
