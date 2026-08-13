@@ -41,6 +41,12 @@ _KNOWN_TOP_KEYS = {
     "terminal",
     "resources",
     "sandbox",
+    # #1576: `serialize_config` writes this section, so omitting it here made every load
+    # warn "unrecognized key 'playbooks' … (typo?)" about our OWN output — the same defect
+    # already recorded for the jira v2 keys below. The section was never dropped (the
+    # loader parses it independently of this list); the warning was the whole bug, and it
+    # sent readers hunting for a typo that did not exist.
+    "playbooks",
 }
 
 _KNOWN_DRONE_KEYS = {

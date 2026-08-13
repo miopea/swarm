@@ -1639,3 +1639,105 @@ class TestEveryScalarFieldRoundTrips:
             if dropped:
                 lost[section] = dropped
         assert not lost, f"scalar config fields dropped on round-trip: {lost}"
+
+
+# ---------------------------------------------------------------------------
+# #1576 — the serializer must not emit a key the loader calls a typo
+# ---------------------------------------------------------------------------
+
+
+def _serialized_top_keys() -> set[str]:
+    from swarm.config.serialization import serialize_config
+
+    return set(serialize_config(HiveConfig()))
+
+
+def test_every_serialized_top_key_is_accepted_by_the_loader():
+    """THE DRIFT GUARD, and the reason this ticket exists at all.
+
+    `serialize_config` wrote a top-level `playbooks` section that `_KNOWN_TOP_KEYS` did
+    not contain, so every load warned "unrecognized key 'playbooks' … (typo?)" about the
+    system's OWN output — sending a reader hunting for a mistake in their file that does
+    not exist. `_known_keys.py` already records this exact class for the jira keys: "a
+    warning that trains the operator to ignore warnings."
+
+    ONE-WAY CONTAINMENT ON PURPOSE. The allow-list is deliberately a SUPERSET — 18 keys
+    (`jira`, `llms`, `sandbox`, `terminal`, …) are optional sections the serializer omits
+    when unset but a hand-written swarm.yaml may legitimately carry. Asserting set
+    equality would fail on all 18 and pressure someone into deleting valid keys to make
+    it pass.
+    """
+    from swarm.config._known_keys import _KNOWN_TOP_KEYS
+
+    missing = sorted(_serialized_top_keys() - _KNOWN_TOP_KEYS)
+
+    assert not missing, f"serialize_config emits top-level key(s) the loader rejects: {missing}"
+
+
+def test_a_round_trip_of_our_own_output_logs_no_unrecognized_key(tmp_path, caplog):
+    """ASSERTS THE OBSERVABLE, not the data structure — the spurious warning IS the defect.
+
+    A test that only checked `_KNOWN_TOP_KEYS` membership would pass if the warning were
+    ever emitted from somewhere else.
+    """
+    import logging
+
+    from swarm.config.loader import _parse_config
+    from swarm.config.serialization import serialize_config
+
+    p = tmp_path / "swarm.yaml"
+    p.write_text(yaml.safe_dump(serialize_config(HiveConfig())), encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        _parse_config(p)
+
+    complaints = [r.getMessage() for r in caplog.records if "unrecognized key" in r.getMessage()]
+    assert not complaints, f"loading our own serialized config warned: {complaints}"
+
+
+def test_a_genuine_typo_is_still_reported(tmp_path, caplog):
+    """POSITIVE CONTROL. Without it the fix could pass by silencing the warning wholesale,
+    which would remove the only protection against a real misspelling — and the test above
+    would go green for exactly the wrong reason."""
+    import logging
+
+    from swarm.config.loader import _parse_config
+    from swarm.config.serialization import serialize_config
+
+    data = serialize_config(HiveConfig())
+    data["playbookz"] = {}  # a real typo of the key this ticket is about
+    p = tmp_path / "swarm.yaml"
+    p.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING):
+        _parse_config(p)
+
+    assert any("playbookz" in r.getMessage() for r in caplog.records)
+
+
+def test_the_playbooks_section_survives_a_round_trip():
+    """RECORDS WHAT WAS ACTUALLY TRUE, because the ticket claimed otherwise.
+
+    #1576 was filed saying the section is DROPPED. It is not — `loader.py` parses
+    `playbooks` independently of the allow-list, which only drives the warning. All 13
+    fields survive. Pinned so nobody re-derives the stronger claim from the ticket text
+    and then dismisses the real defect when they cannot reproduce data loss.
+    """
+    from swarm.config.loader import _parse_config
+    from swarm.config.serialization import serialize_config
+
+    cfg = HiveConfig()
+    cfg.playbooks.enabled = not cfg.playbooks.enabled
+    cfg.playbooks.min_resolution_chars += 7
+    cfg.playbooks.auto_promote_uses += 7
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "swarm.yaml"
+        p.write_text(yaml.safe_dump(serialize_config(cfg)), encoding="utf-8")
+        back = _parse_config(p)
+
+    assert back.playbooks.enabled == cfg.playbooks.enabled
+    assert back.playbooks.min_resolution_chars == cfg.playbooks.min_resolution_chars
+    assert back.playbooks.auto_promote_uses == cfg.playbooks.auto_promote_uses
