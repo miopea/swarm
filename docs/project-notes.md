@@ -374,19 +374,18 @@ the client honours reconnect contracts.
 **The sleep threshold is not 5 minutes, and the two sources disagree — and the
 one the operator can edit is the one nothing reads.**
 
-- `worker/worker.py::SLEEPING_THRESHOLD` = **1200 s / 20 min**. This is the
-  effective threshold: `Worker.sleeping_threshold` defaults to it, and
-  `Worker.display_state` is the only place SLEEPING is derived.
-- `DroneConfig.sleeping_threshold` = **900 s / 15 min** (`config/models.py`,
-  same default in `config/loader.py`). It is validated, serialized, plumbed into
-  the per-worker config in `drones/rules.py`, and exposed in the config UI
-  labelled *"Seconds idle before RESTING → SLEEPING"* — and **no code reads it**.
-  Nothing ever assigns it onto `Worker.sleeping_threshold`.
+- `DroneConfig.sleeping_threshold` = **900 s / 15 min** is the effective threshold.
+  FIXED in #1415: `server/worker_service.py` now passes it onto every Worker at
+  construction, so `Worker.display_state` compares against the configured value.
+- `worker/worker.py::SLEEPING_THRESHOLD` = **1200 s / 20 min** is now only the
+  fallback for a `Worker` built without a config — fixtures and tests. It is not
+  what the daemon uses.
+- Since #1538 this is **not display-only**: INV-2 demotes a paused worker's ACTIVE
+  task once it reads SLEEPING, so the threshold also decides how long a pause may
+  last before the task returns to ASSIGNED.
 
-So editing the dashboard field changes nothing, and a worker sleeps at 20 minutes
-regardless. Verified by exhaustive grep; don't quote 5 or 15 minutes, and don't
-assume the two were reconciled. (Not fixed here — this is a doc pass. Anyone
-fixing it should decide which number is intended before wiring them together.)
+Previously the config field was labelled *"Seconds idle before RESTING → SLEEPING"*
+and no code read it — a worker slept at 20 minutes regardless of the setting.
 
 **State survives a daemon restart.** `state` *and* `state_since` are persisted
 best-effort by `db/worker_state_store.py` and restored on adoption, so a slept

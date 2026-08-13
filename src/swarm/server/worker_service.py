@@ -451,6 +451,18 @@ class WorkerService:
                         provider_name=prov_name,
                         kind=infer_worker_kind(proc.name),
                         process=proc,
+                        # #1415: the config field is LABELLED "seconds idle before
+                        # RESTING → SLEEPING" and, until this line, controlled nothing.
+                        # Nothing assigned it onto a Worker, so display_state always
+                        # compared against the 1200s dataclass default no matter what the
+                        # operator set. The dataclass default remains the fallback for
+                        # Workers built without a config (fixtures, tests).
+                        #
+                        # THIS IS NO LONGER DISPLAY-ONLY. #1538 keyed INV-2's task
+                        # demotion off SLEEPING, which derives from this threshold, so
+                        # the value now also decides how long a paused worker keeps its
+                        # ACTIVE task. Set it low and tasks demote after a short pause.
+                        sleeping_threshold=config.drones.sleeping_threshold,
                     )
                     # #1357: Worker.state defaults to BUZZING, so without this every
                     # restart claims all workers are actively working until the pilot's

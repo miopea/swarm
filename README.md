@@ -786,7 +786,7 @@ test:
 - **`custom_llms`** -- define custom AI CLI tools beyond the built-in claude/gemini/codex providers
 - **`provider_overrides`** -- customize state detection patterns, approval keys, and env settings per provider
 - **`drones.state_thresholds`** -- tunable hysteresis for state detection (buzzing confirm count, stung confirm count, revive grace period)
-- **`drones.sleeping_threshold`** -- seconds of idle before a RESTING worker transitions to SLEEPING (reduced poll rate)
+- **`drones.sleeping_threshold`** -- seconds of idle before a RESTING worker is shown as SLEEPING (reduced poll rate). Also governs when INV-2 demotes that worker's ACTIVE task (#1538), so lowering it shortens how long a pause may last before the task returns to ASSIGNED
 - **`drones.stung_reap_timeout`** -- seconds before a STUNG worker is auto-removed
 - **`drones.context_warning_threshold` / `context_critical_threshold`** -- fractions of Claude's context window that trigger warning / critical alerts
 - **`trust_proxy`** -- honor `X-Forwarded-For` when running behind a reverse proxy
@@ -929,7 +929,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 **Worker states:**
 - **BUZZING** -- actively working (Claude is processing)
 - **RESTING** -- idle, waiting for input
-- **SLEEPING** -- idle beyond `drones.sleeping_threshold` (default 15 min; display-only); drones use `sleeping_poll_interval` (default `30s`) for reduced polling frequency. A `Worker` constructed without a config carries a different in-code fallback (`SLEEPING_THRESHOLD = 1200.0`, 20 min) — the configured value is what the daemon uses.
+- **SLEEPING** -- idle beyond `drones.sleeping_threshold` (default 900 s / 15 min); drones use `sleeping_poll_interval` (default `30s`) for reduced polling frequency. A `Worker` built without a config falls back to the in-code `SLEEPING_THRESHOLD = 1200.0` — that fallback only applies to fixtures and tests, since the daemon passes the configured value at construction (#1415). **Not display-only:** since #1538, INV-2 demotes a paused worker's ACTIVE task once it reads SLEEPING, so this threshold also decides how long a pause may last before the task returns to ASSIGNED.
 - **WAITING** -- blocked on a prompt (plan approval, choice menu, user question)
 - **STUNG** -- exited or crashed
 
