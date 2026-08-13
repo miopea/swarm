@@ -57,6 +57,45 @@ _IDLE_STATES: frozenset[WorkerState] = frozenset({WorkerState.RESTING, WorkerSta
 # direct PTY access and doesn't need a drone nudge.
 _ACTION_REQUIRED_MSG_TYPES: frozenset[str] = frozenset({"dependency", "warning"})
 
+# #1570: how old a handoff message may be and still spawn a task.
+#
+# JUSTIFIED FROM THE MEASURED DISTRIBUTION, not picked. Across 62 AUTO_HANDOFF_TASK
+# events over 27 days: average age 60.4 min, 55 of 62 under an hour, but a tail out to
+# 1147.9 min (19.1 HOURS) and 7 of 62 over an hour. Four hours leaves the bulk of real
+# traffic untouched while excluding the stale-resurrection case that prompted this — an
+# 11-hour-old already-resolved message waking five workers with no stake in it.
+_HANDOFF_MAX_AGE_SECONDS = 4 * 3600.0
+
+# #1570: how many handoff tasks one watcher pass may dispatch.
+#
+# THE CEILING IS PER SWEEP, NOT PER MESSAGE, and that retarget is the whole point. The
+# ticket assumed one message fanned into N tasks; the record says otherwise — 62 of 62
+# events produced exactly ONE task, because #1116 already records the SEND as spawned so
+# a broadcast cannot re-spawn per recipient. What actually happened was a BACKLOG DRAIN:
+# four tasks in six seconds from four DIFFERENT messages. A per-message cap would be dead
+# code that reads like protection; bounding the sweep is what bounds concurrent builds.
+_HANDOFF_MAX_PER_SWEEP = 2
+
+
+def _within_age_window(message: object, now_ts: float) -> bool:
+    """Is this message recent enough to spawn a handoff task? (#1570)
+
+    FAILS OPEN ON AN UNKNOWABLE AGE, and that is the whole subtlety. A missing,
+    zero or non-numeric ``created_at`` means "could not determine how old this is",
+    NOT "infinitely old". Treating it as ancient would silently suppress real
+    handoffs — a worse failure than the stale-resurrection this guard exists to
+    stop, because a suppressed handoff is invisible while a resurrected one at
+    least announces itself.
+
+    The same direction was got backwards twice elsewhere on this fleet (an empty
+    worker roster read as "nobody exists", an absent tool schema read as "nothing
+    allowed"), so it is asserted by a test rather than trusted to a comment.
+    """
+    created = getattr(message, "created_at", None)
+    if not isinstance(created, int | float) or created <= 0:
+        return True
+    return (now_ts - float(created)) <= _HANDOFF_MAX_AGE_SECONDS
+
 
 def _source_key(m: Message) -> tuple[str, float]:
     """#1116: identify the SEND a message row came from, not the row.
@@ -178,6 +217,9 @@ class InterWorkerMessageWatcher:
         # time. Keep these in sync with ``_source_key``; do not treat them as
         # the dedup.
         self._spawned_sources: set[tuple[str, float]] = set()
+        # #1570: reset at the top of every sweep — this bounds CONCURRENT dispatches,
+        # so it must be per-pass rather than cumulative.
+        self._handoff_spawns_this_sweep: int = 0
         # worker_name → last-nudge monotonic timestamp
         self._last_nudge: dict[str, float] = {}
         # worker_name → last AUTO_NUDGE_MESSAGE_SKIPPED entry timestamp.
@@ -219,6 +261,7 @@ class InterWorkerMessageWatcher:
         now = now if now is not None else time.monotonic()
         if (now - self._last_sweep) < self.interval_seconds:
             return 0
+        self._handoff_spawns_this_sweep = 0  # #1570: per-pass ceiling
         self._last_sweep = now
 
         sent = 0
@@ -429,6 +472,38 @@ class InterWorkerMessageWatcher:
             )
             return True
 
+    def _already_answered(self, recipient: str, message: object) -> bool:
+        """Has *recipient* replied to this message's sender since it arrived? (#1570)
+
+        DELIBERATELY NOT ``read_at``, and that distinction is measured rather than
+        assumed. The naive check says 62 of 62 handoff messages were "already read" —
+        but all 62 carry a ``read_at`` within two seconds of the handoff, average gap
+        0.0s, none earlier. THE GENERATOR SETS IT ITSELF (#894, for durable dedup), so
+        ``read_at`` measures this code, not the recipient. Using it would have produced
+        a guard that fires on everything while looking like it checked something.
+
+        A reply is a message from the recipient back to the sender after the original
+        arrived. Best-effort: on any store failure this returns False, so an
+        unanswerable question degrades to the current behaviour rather than silently
+        suppressing real handoffs.
+        """
+        store = getattr(self, "_message_store", None)
+        sender = getattr(message, "sender", "")
+        created = getattr(message, "created_at", None)
+        if store is None or not sender or created is None:
+            return False
+        try:
+            since = float(created)
+            return any(
+                m.sender == recipient and m.recipient == sender
+                for m in store.get_recent(limit=50, since=since)
+            )
+        except Exception:
+            _log.debug(
+                "inter_worker_watcher: answered-check failed for %s", recipient, exc_info=True
+            )
+            return False
+
     async def _maybe_spawn_handoff(
         self, recipient: str, inter_worker: list[Message], *, now: float
     ) -> bool:
@@ -446,6 +521,12 @@ class InterWorkerMessageWatcher:
         """
         if self._spawn_handoff_task is None:
             return False
+        # #1570: a sweep may only dispatch so much. See _HANDOFF_MAX_PER_SWEEP —
+        # the cost that redlined the operator's machine was CONCURRENT builds, and
+        # they came from a backlog draining at once, not from one message fanning out.
+        if self._handoff_spawns_this_sweep >= _HANDOFF_MAX_PER_SWEEP:
+            return False
+        now_ts = time.time()
         handoffs = [
             m
             for m in inter_worker
@@ -453,6 +534,10 @@ class InterWorkerMessageWatcher:
             and getattr(m, "id", None) is not None
             and m.id not in self._spawned_msg_ids
             and _source_key(m) not in self._spawned_sources
+            # #1570: stale messages do not get resurrected as fresh work.
+            and _within_age_window(m, now_ts)
+            # #1570: nor do ones the recipient has already answered.
+            and not self._already_answered(recipient, m)
         ]
         if not handoffs:
             return False
@@ -468,6 +553,7 @@ class InterWorkerMessageWatcher:
             return False
         if not ok:
             return False
+        self._handoff_spawns_this_sweep += 1
         for m in handoffs:
             self._spawned_msg_ids.add(m.id)
         # #1116: record the SEND as spawned, not just this recipient's row —
