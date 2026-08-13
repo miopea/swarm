@@ -305,6 +305,7 @@ def _serialize_drones(config: HiveConfig) -> dict[str, Any]:
         "auto_complete_min_idle": d.auto_complete_min_idle,
         "sleeping_poll_interval": d.sleeping_poll_interval,
         "sleeping_threshold": d.sleeping_threshold,
+        "inv2_absent_threshold_seconds": d.inv2_absent_threshold_seconds,
         "stung_reap_timeout": d.stung_reap_timeout,
         "idle_nudge_interval_seconds": d.idle_nudge_interval_seconds,
         "idle_nudge_debounce_seconds": d.idle_nudge_debounce_seconds,

@@ -8,7 +8,20 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Changes
 
+- INV-2's absence threshold is now its own knob, `drones.inv2_absent_threshold_seconds`,
+  defaulting to 3600s instead of inheriting the display-only `drones.sleeping_threshold`
+  (#1571).
+
 ### Fixes
+
+- A worker pausing between turns no longer loses its ACTIVE task. INV-2 inherited the
+  *display* sleep threshold, so any pause long enough to grey out a dashboard tile was read
+  as abandonment — and the resulting ASSIGNED row then satisfied the idle-watcher's nudge
+  trigger, so the worker was prompted about work it was actively holding. Measured across 45
+  RESTING episodes where the worker held an ACTIVE task and then resumed, a 1200s threshold
+  wrongly declared 24.4% of them absent versus 4.4% at 3600s; all 15 real demotions since the
+  previous fix were followed by the same worker returning to the same task. Lowering
+  `sleeping_threshold` for display reasons can no longer re-arm task demotion (#1571).
 
 ## [2026.8.13] - 2026-08-13
 

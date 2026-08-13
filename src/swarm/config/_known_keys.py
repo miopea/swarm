@@ -60,6 +60,7 @@ _KNOWN_DRONE_KEYS = {
     "auto_complete_min_idle",
     "sleeping_poll_interval",
     "sleeping_threshold",
+    "inv2_absent_threshold_seconds",
     "stung_reap_timeout",
     "state_thresholds",
     "approval_rules",

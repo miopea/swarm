@@ -338,6 +338,7 @@ def _parse_config(path: Path) -> HiveConfig:
         auto_complete_min_idle=drones_data.get("auto_complete_min_idle", 45.0),
         sleeping_poll_interval=drones_data.get("sleeping_poll_interval", 30.0),
         sleeping_threshold=drones_data.get("sleeping_threshold", 900.0),
+        inv2_absent_threshold_seconds=drones_data.get("inv2_absent_threshold_seconds", 3600.0),
         stung_reap_timeout=drones_data.get("stung_reap_timeout", 30.0),
         state_thresholds=state_thresholds,
         approval_rules=approval_rules,

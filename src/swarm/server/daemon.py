@@ -478,6 +478,10 @@ class SwarmDaemon(EventEmitter):
             drone_log=self.drone_log,
             blocker_store=self.blocker_store,
             get_workers=lambda: self.workers,
+            # #1571: read live so a config edit hot-applies. NOT
+            # ``drones.sleeping_threshold`` — that one is for display, and while INV-2
+            # inherited it, lowering it silently re-armed task demotion.
+            absent_threshold=lambda: self.config.drones.inv2_absent_threshold_seconds,
         )
         # --- PlaybookOps: recall, synthesis, outcome attribution ---
         from swarm.server.playbook_ops import PlaybookOps

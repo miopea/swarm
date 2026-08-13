@@ -40,6 +40,7 @@ _NON_NEGATIVE_NUMBERS: frozenset[str] = frozenset(
         "idle_assign_threshold",
         "auto_complete_min_idle",
         "sleeping_threshold",
+        "inv2_absent_threshold_seconds",
         "sleeping_poll_interval",
         "stung_reap_timeout",
         "poll_interval_buzzing",

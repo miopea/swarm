@@ -150,6 +150,8 @@ def _validate_drone_ranges(config: HiveConfig) -> list[str]:
         errors.append("drones.sleeping_poll_interval must be > 0")
     if d.sleeping_threshold <= 0:
         errors.append("drones.sleeping_threshold must be > 0")
+    if d.inv2_absent_threshold_seconds <= 0:
+        errors.append("drones.inv2_absent_threshold_seconds must be > 0")
     if d.stung_reap_timeout <= 0:
         errors.append("drones.stung_reap_timeout must be > 0")
     if d.idle_assign_threshold < 1:

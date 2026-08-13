@@ -123,7 +123,14 @@ class DroneConfig:
     idle_assign_threshold: int = 3
     auto_complete_min_idle: float = 45.0  # seconds idle before proposing task completion
     sleeping_poll_interval: float = 30.0  # full poll interval for sleeping workers
-    sleeping_threshold: float = 900.0  # seconds idle before RESTING -> SLEEPING
+    sleeping_threshold: float = 900.0  # seconds idle before RESTING -> SLEEPING (DISPLAY ONLY)
+    # Seconds RESTING before INV-2 treats a worker as ABSENT and demotes its ACTIVE
+    # task. Deliberately NOT ``sleeping_threshold`` (#1571): that knob is labelled for
+    # display, and while INV-2 inherited it, anyone lowering it for a display reason
+    # silently re-armed task demotion. 3600 is measured, not chosen — across 45 RESTING
+    # episodes where the worker held an ACTIVE task and then resumed, a threshold of
+    # 1200s would have wrongly called 24.4% of them absent, 1800s 22.2%, and 3600s 4.4%.
+    inv2_absent_threshold_seconds: float = 3600.0
     stung_reap_timeout: float = 30.0  # seconds before STUNG workers are auto-removed
     state_thresholds: StateThresholds = field(default_factory=StateThresholds)
     approval_rules: list[DroneApprovalRule] = field(default_factory=list)

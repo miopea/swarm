@@ -10,6 +10,7 @@ See ``docs/specs/daemon-god-object-refactor.md`` and
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 from swarm.drones.log import LogCategory, SystemAction
@@ -28,6 +29,19 @@ if TYPE_CHECKING:
 
 
 _log = get_logger("server.invariants")
+
+# Seconds a worker must sit RESTING before INV-2 treats it as ABSENT (#1571).
+#
+# MEASURED, NOT CHOSEN. Across 45 RESTING episodes in which the worker held an ACTIVE
+# task and then resumed (buzz_log STATE_TRANSITION × task_history ACTIVE intervals,
+# 2026-07-14 → 08-13): median 130s, p90 2439s, p95 3394s. Share those episodes a given
+# threshold would have wrongly declared absent — 300s: 37.8%, 900s: 26.7%, 1200s: 24.4%,
+# 1800s: 22.2%, 3600s: 4.4%, 7200s: 2.2%. The knee is at an hour and nothing changes
+# between 1200 and 1800, which is why raising the display threshold could not fix this.
+#
+# Used as the fallback when the configured value is unusable, so that a zero or a missing
+# knob cannot mean "demote instantly" — see :meth:`InvariantReconciler._absent_threshold`.
+INV2_ABSENT_THRESHOLD_DEFAULT = 3600.0
 
 
 class InvariantReconciler:
@@ -58,12 +72,18 @@ class InvariantReconciler:
         drone_log: DroneLog,
         blocker_store: BlockerStore | None,
         get_workers: Callable[[], list[Worker]],
+        absent_threshold: Callable[[], float] | None = None,
     ) -> None:
         self._task_board = task_board
         self._task_history = task_history
         self._drone_log = drone_log
         self._blocker_store = blocker_store
         self._get_workers = get_workers
+        # #1571: seconds RESTING before INV-2 calls a worker absent. A CALLABLE, not a
+        # value, so the operator's config edits hot-apply — ``sleeping_threshold`` was
+        # changed at runtime via PUT /api/config on that very ticket and this knob has to
+        # answer the same way. None (tests, legacy callers) uses the measured default.
+        self._absent_threshold_source = absent_threshold
 
     def working_workers(self) -> set[str]:
         """Workers genuinely engaged on a turn (BUZZING/WAITING).
@@ -78,35 +98,73 @@ class InvariantReconciler:
         workers: list[Worker] = self._get_workers()
         return {w.name for w in workers if w.state in (WorkerState.BUZZING, WorkerState.WAITING)}
 
-    def absent_workers(self) -> set[str]:
-        """Workers that are ABSENT rather than merely paused (#1538).
+    def _absent_threshold(self) -> float:
+        """Seconds RESTING before a worker counts as absent (#1571).
 
-        The distinction INV-2 actually needs is OWNED vs ABANDONED, not BUSY vs
-        IDLE. SLEEPING and STUNG mean absence — the first is RESTING that has
-        outlasted ``sleeping_threshold``, the second is a dead process. RESTING
-        alone is a pause and must not cost a worker its ACTIVE row.
+        FAILS TO THE MEASURED DEFAULT, NEVER TO ZERO. A zero would mean "demote
+        instantly" — every RESTING worker loses its ACTIVE task on the next sweep — so
+        a missing, non-numeric, non-positive or non-finite value resolves to
+        ``INV2_ABSENT_THRESHOLD_DEFAULT`` instead. Infinity is rejected for the mirror
+        reason: it would silently disable #405's repair, and a guard that never fires
+        looks exactly like a guard with nothing to do.
 
-        The grace period is NOT re-invented here: the state machine already
-        promotes RESTING → SLEEPING after ``sleeping_threshold`` (worker.py), so
-        keying off SLEEPING inherits one operator-tunable definition instead of
-        adding a second that would drift from it.
-
-        READS ``display_state``, NOT ``state``, AND THAT IS LOAD-BEARING. SLEEPING
-        is DERIVED — ``Worker.state`` is never set to it; it stays RESTING and
-        ``display_state`` rewrites it once ``state_duration`` passes the threshold
-        (worker.py:333-341). Matching on ``state`` here would silently never see a
-        sleeping worker, so this would only ever fire for STUNG and #405's
-        stale-row repair would quietly stop working — a guard that under-fires and
-        reports nothing looks exactly like a guard with nothing to do.
-
-        Consequence worth knowing: ``display_state`` never returns SLEEPING for the
-        Queen (she is always-on by design), so her ACTIVE rows are only ever
-        demoted when STUNG.
+        A raising callable is caught rather than propagated: a broken config read must
+        not take out invariant repair for the whole board.
         """
-        workers: list[Worker] = self._get_workers()
-        return {
-            w.name for w in workers if w.display_state in (WorkerState.SLEEPING, WorkerState.STUNG)
-        }
+        if self._absent_threshold_source is None:
+            return INV2_ABSENT_THRESHOLD_DEFAULT
+        try:
+            raw = float(self._absent_threshold_source())
+        except Exception:
+            _log.warning("invariants: absent_threshold lookup failed", exc_info=True)
+            return INV2_ABSENT_THRESHOLD_DEFAULT
+        if not math.isfinite(raw) or raw <= 0:
+            return INV2_ABSENT_THRESHOLD_DEFAULT
+        return raw
+
+    def absent_workers(self) -> set[str]:
+        """Workers that are ABSENT rather than merely paused (#1538, #1571).
+
+        The distinction INV-2 actually needs is OWNED vs ABANDONED, not BUSY vs IDLE.
+        RESTING alone is a pause and must not cost a worker its ACTIVE row; absence is
+        a dead process (STUNG) or a silence long enough to mean the work was dropped.
+
+        #1571 SPLIT THIS OFF FROM THE DISPLAY THRESHOLD, and the measurement is why.
+        #1538 keyed absence on SLEEPING to avoid inventing a second definition that
+        could drift — good reasoning, but it assumed the display value was ~20 minutes.
+        Measured against 45 RESTING episodes where the worker held an ACTIVE task and
+        then resumed, 20 minutes is wrong 24.4% of the time; an hour is wrong 4.4%.
+        Confirmed live: all 15 real INV-2 demotions after #1538 shipped were followed by
+        the same worker returning to that same task, none of them absent.
+
+        The two knobs have genuinely different jobs. ``sleeping_threshold`` decides when
+        a tile looks asleep, where 20 minutes is right and an hour would be a bad
+        dashboard. This decides when the daemon overrules a worker about what it is
+        working on, where the cost of being early is a task silently taken away. While
+        they were one knob, lowering the display one silently re-armed task demotion —
+        the trap that survived raising it from 300 to 1200 on #1571.
+
+        DELIBERATELY COMPUTED FROM ``state``, NOT ``display_state``. Two consequences
+        that were previously implicit and are now explicit:
+
+        * STUNG is absence with nothing to wait for, so it does not go through the
+          timer — gating a dead process behind an hour would delay #405's repair for
+          the one case that is certain.
+        * The Queen is exempt from the timer (always-on by design), which used to ride
+          on ``display_state`` never returning SLEEPING for her. Reading ``state``
+          directly would have dropped that silently, so it is spelled out here. She is
+          still demoted when STUNG — the exemption is about idleness, not immortality.
+        """
+        threshold = self._absent_threshold()
+        absent: set[str] = set()
+        for w in self._get_workers():
+            if w.state == WorkerState.STUNG:
+                absent.add(w.name)
+            elif (
+                not w.is_queen and w.state == WorkerState.RESTING and w.state_duration >= threshold
+            ):
+                absent.add(w.name)
+        return absent
 
     def blocked_task_ids(self) -> set[str]:
         """IDs of ACTIVE/ASSIGNED tasks with a live ``swarm_report_blocker``
