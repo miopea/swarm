@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 20
+CURRENT_VERSION = 21
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;

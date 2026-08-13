@@ -201,3 +201,73 @@ def test_the_tool_schema_advertises_the_new_argument(board):
     from swarm.mcp.tools import _ALLOWED_ARGS
 
     assert "corrected_title" in _ALLOWED_ARGS["swarm_annotate_resolution"]
+
+
+# ---------------------------------------------------------------------------
+# The bug this commit shipped, and the guard that would have caught it
+# ---------------------------------------------------------------------------
+
+
+def test_current_version_covers_every_registered_migration():
+    """I ADDED `_migrate_v21_title_original` AND LEFT `CURRENT_VERSION` AT 20.
+
+    `_migrate` only runs when `db_version < CURRENT_VERSION`, so the migration would
+    never have fired on an existing database — the column would be missing in
+    production and present nowhere except fresh installs. The whole suite stayed green
+    because every test DB is created from SCHEMA_V1, which already declares the column.
+    A migration is exactly the thing a fresh-DB test cannot check.
+
+    Generic on purpose: it catches the next migration added without the bump, not just
+    this one.
+    """
+    import re
+
+    from swarm.db.core import SwarmDB
+    from swarm.db.schema import CURRENT_VERSION
+
+    registered = [
+        int(m.group(1))
+        for name in dir(SwarmDB)
+        if (m := re.match(r"_migrate_v(\d+)_", name)) is not None
+    ]
+
+    assert registered, "no migrations found — this guard stopped measuring anything"
+    assert CURRENT_VERSION >= max(registered), (
+        f"CURRENT_VERSION is {CURRENT_VERSION} but a v{max(registered)} migration is "
+        f"registered — it will never run, because _migrate is gated on "
+        f"db_version < CURRENT_VERSION."
+    )
+
+
+def test_the_v21_migration_actually_adds_the_column_to_an_existing_db(tmp_path):
+    """Driven against a REWOUND database, because a fresh one proves nothing here —
+    SCHEMA_V1 already has the column, so the migration could be dead and every other
+    test would still pass. Mirrors #1527's rewind harness.
+    """
+    import sqlite3 as _sqlite3
+    import time as _time
+
+    from swarm.db.core import SwarmDB
+
+    db_path = tmp_path / "legacy.db"
+    SwarmDB(db_path).close()
+
+    conn = _sqlite3.connect(db_path)
+    try:
+        conn.execute("ALTER TABLE tasks DROP COLUMN title_original")
+        conn.execute("DELETE FROM schema_version")
+        conn.execute("INSERT INTO schema_version VALUES (?, ?)", (20, _time.time()))
+        conn.commit()
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
+        assert "title_original" not in cols, "POSITIVE CONTROL: the rewind did nothing"
+    finally:
+        conn.close()
+
+    SwarmDB(db_path).close()  # reopening must migrate
+
+    conn = _sqlite3.connect(db_path)
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
+    finally:
+        conn.close()
+    assert "title_original" in cols, "v21 did not run on an existing database"
