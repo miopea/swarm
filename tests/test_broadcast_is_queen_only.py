@@ -132,3 +132,51 @@ def test_the_tool_no_longer_invites_broadcast():
     examples = tool["inputSchema"].get("examples", [])
     assert all(e.get("to") != "*" for e in examples), "an example still demonstrates broadcast"
     assert "queen-only" in tool["inputSchema"]["properties"]["to"]["description"].lower()
+
+
+def test_an_unknown_recipient_is_not_pointed_at_broadcast():
+    """THE POINTER LEFT BEHIND BY THIS TICKET'S OWN CHANGE.
+
+    Making broadcast Queen-only did not update the unknown-recipient error, which still
+    ended "Use '*' to broadcast to all workers." So the single most likely way a worker
+    reached this message — a typo'd name — answered it by recommending the one call the
+    very next line of code refuses. A tool that suggests its own refusal trains the
+    behaviour it is trying to stop.
+    """
+    d = _daemon()
+    # A REAL roster is required, not the bare fixture: an unknowable roster deliberately
+    # fails OPEN (#1543), so with MagicMock workers the send succeeds and this test would
+    # pass vacuously while asserting nothing about the message.
+    roster = []
+    for name in ("hub", "platform", "swarm"):
+        w = MagicMock()
+        w.name = name
+        roster.append(w)
+    d.config.workers = roster
+
+    out = _text(
+        _handle_send_message(
+            d, "platform", {"to": "no-such-worker", "type": "finding", "content": "x"}
+        )
+    )
+
+    assert "not a registered worker" in out
+    assert "'*'" not in out, "the unknown-name path still advertises broadcast"
+    assert "note_to_queen" in out, "it should name the supported route instead"
+
+
+def test_the_description_carries_the_test_the_queen_actually_applies():
+    """Not decoration — it is the rule that decides the call, so it belongs where the
+    caller reads it rather than in a closed ticket nobody opens at decision time.
+
+    The Queen refused a fleet-wide retraction on 2026-08-13 with it: the claim had
+    misled three parties, all reachable by name, so a broadcast would have woken
+    fourteen uninvolved workers. Importance is not the test, and neither is scope — a
+    finding can be true of the whole fleet and still require nothing of it.
+    """
+    from swarm.mcp.handlers._messages import TOOLS
+
+    desc = next(t for t in TOOLS if t["name"] == "swarm_send_message")["description"].lower()
+
+    assert "no stake" in desc
+    assert "name them" in desc

@@ -49,7 +49,12 @@ TOOLS: list[dict[str, Any]] = [
             "BROADCAST IS QUEEN-ONLY. Sending to '*' is refused for workers. If something "
             "genuinely affects everyone, send it to the Queen with swarm_note_to_queen and "
             "say you think it warrants a broadcast — she has the fan-out authority and the "
-            "context to judge whether it does."
+            "context to judge whether it does.\n"
+            "THE TEST SHE APPLIES, so you can apply it first: WOULD A WORKER WITH NO STAKE "
+            "HAVE TO CHANGE WHAT IT IS DOING? If you can name the workers who must act, name "
+            "them and message those — that is not a broadcast, it is a short list. "
+            "Importance is not the test and neither is scope: a finding can be true of the "
+            "whole fleet and still require nothing of it."
         ),
         "inputSchema": {
             "type": "object",
@@ -199,7 +204,11 @@ def _guard_direct_send(
                     "text": (
                         f"'{recipient}' is not a registered worker — message not sent. "
                         f"Known workers: {', '.join(sorted(known))}. "
-                        "Use '*' to broadcast to all workers."
+                        # NOT "use '*' to broadcast" any more: that was left behind when
+                        # broadcast became Queen-only, so an unknown-name typo answered a
+                        # worker by pointing it at a capability the very next call refuses.
+                        "If it affects several of them, send it to each by name; if it "
+                        "genuinely affects everyone, ask the Queen (swarm_note_to_queen)."
                     ),
                 }
             ]
