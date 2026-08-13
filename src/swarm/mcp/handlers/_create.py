@@ -256,12 +256,83 @@ def _park_for_authority_review(
     ]
 
 
+def _known_worker_names(d: SwarmDaemon) -> set[str]:
+    """Every name a task can legitimately be routed to.
+
+    Unions the LIVE roster with the CONFIGURED one on purpose. A worker that is
+    registered but not currently running is a perfectly valid routing target —
+    the task waits in its queue — so validating against ``d.workers`` alone would
+    refuse legitimate work whenever the target happened to be stopped.
+    """
+    names = {w.name for w in getattr(d, "workers", []) if getattr(w, "name", "")}
+    cfg = getattr(d, "config", None)
+    for w in getattr(cfg, "workers", []) or []:
+        if getattr(w, "name", ""):
+            names.add(w.name)
+    return names
+
+
+def _validate_target_worker(d: SwarmDaemon, args: CreateTaskArgs) -> list[TextContent] | None:
+    """Refuse a task routed to a worker that does not exist (#1543).
+
+    THE DEFECT THIS CLOSES. ``target_worker`` was taken, persisted onto the row,
+    and handed to an async assign that then failed to resolve it — and the tool
+    returned "Task created: #NNNN" regardless. The result was an ownerless task
+    carrying a target nobody would ever read. Measured 2026-08-13 with probe
+    #1567: an invented worker name produced a success return and a row with
+    ``status=unassigned, assigned_worker=NULL, target_worker='<the invented
+    name>'``.
+
+    It cost real time: five tasks in one session landed unassigned, three of them
+    launch-critical, sitting ownerless for about an hour beside the exact workers
+    named in the dropped routing. Nothing nudged them either — IdleWatcher needs
+    an ASSIGNED task, and these had no owner at all, so the one mechanism meant to
+    catch stalled work could not see them.
+
+    REFUSES BEFORE THE TASK IS CREATED, not after. Validating later would leave an
+    orphan row behind every rejection, which trades a silent mis-route for a
+    silent litter. Returns None when there is nothing to check — an absent or
+    empty ``target_worker`` is the ordinary unrouted-task case, not an error.
+
+    Names the roster in the refusal. A caller that cannot see the valid options
+    guesses again, which is the same loop that made the original silence
+    expensive.
+    """
+    target = (args.get("target_worker") or "").strip()
+    if not target:
+        return None
+    known = _known_worker_names(d)
+    # FAILS OPEN ON AN UNKNOWABLE ROSTER, deliberately. An empty set means we could
+    # not determine who exists — not that nobody does. Refusing every route in that
+    # state would be a worse failure than the one this closes: it would block ALL
+    # routing whenever the roster lookup is unavailable, where the original defect
+    # only mis-routed. Same reasoning `_check_file_lock` records for unknown
+    # identity. In production the roster is never legitimately empty; when it is,
+    # there is nobody to route to and the assign is a no-op anyway.
+    if not known or target in known:
+        return None
+    roster = ", ".join(sorted(known))
+    return [
+        {
+            "type": "text",
+            "text": (
+                f"No worker named '{target}' — task NOT created. Nothing was routed "
+                f"and no row was left behind.\n"
+                f"Known workers: {roster}\n"
+                f"If you meant to file this without an owner, omit target_worker."
+            ),
+        }
+    ]
+
+
 def _handle_create_task(
     d: SwarmDaemon, worker_name: str, args: CreateTaskArgs
 ) -> list[TextContent]:
     title = args.get("title", "")
     if not title:
         return [{"type": "text", "text": "Missing 'title'"}]
+    if (routing_error := _validate_target_worker(d, args)) is not None:
+        return routing_error
     attachments, att_error = _resolve_attachments(args)
     if att_error is not None:
         return att_error

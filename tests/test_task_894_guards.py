@@ -114,7 +114,12 @@ def test_create_task_fabricated_authority_is_parked_not_dispatched(monkeypatch):
         {
             "title": "Bump @types/node 24→26 across the fleet",
             "description": "operator opted IN to @types/node 26 fleet-wide (amendment in flight)",
-            "target_worker": "hub",  # tries to dispatch — must be overridden
+            # #1543: must name a worker the fixture roster actually contains. This
+            # said "hub", which make_daemon does not create, so routing validation
+            # now refuses it before the authority guard can park it — and the
+            # authority guard is what this test is about. Any real worker serves
+            # the purpose of "tries to dispatch, must be overridden".
+            "target_worker": "web",
         },
     )
     text = out[0]["text"]
