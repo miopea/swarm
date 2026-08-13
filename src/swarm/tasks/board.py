@@ -1260,7 +1260,9 @@ class TaskBoard(EventEmitter):
     # Annotation kinds for :meth:`annotate_resolution`.
     RESOLUTION_NOTE_KINDS = ("stale", "wrong")
 
-    def annotate_resolution(self, task_id: str, *, kind: str, note: str) -> bool:
+    def annotate_resolution(
+        self, task_id: str, *, kind: str, note: str, corrected_title: str = ""
+    ) -> bool:
         """Mark a CLOSED task's resolution stale or wrong WITHOUT rewriting it (#1274).
 
         Returns False if the task is missing, still open, or ``kind`` is not one of
@@ -1287,6 +1289,24 @@ class TaskBoard(EventEmitter):
         OPEN TASKS ARE REFUSED. A live task's requirements are corrected by editing it
         (``swarm_edit_task``) — annotating a resolution that does not exist yet would
         be a note about nothing, and the refusal names the verb that does apply.
+
+        ``corrected_title`` (#1578) IS ALLOWED TO REWRITE, and the asymmetry with the
+        resolution above is the point. A resolution records what was believed and done;
+        rewriting it destroys the audit trail. A title is a POINTER — no verifier grades
+        it, no worker acts on it — and a permanently wrong pointer on a task that is
+        re-served as a learning sends every future reader to the wrong layer. #1538 named
+        ``queen_prompt_worker`` and the dispatch path when the defect was a reconciler
+        undoing a correct write, and neither edit verb could fix it: both refuse closed
+        work, for everyone, the Queen included.
+
+        The corrected text replaces ``title`` rather than rendering beside it, so all ~34
+        render sites (board, search, learning header, cross-references) pick it up
+        structurally. A parallel ``display_title`` would have needed a 34-site sweep in
+        which a missed site silently shows the stale pointer — the same shape as a guard
+        added to one of several paths. The original is preserved in ``title_original``.
+
+        A SECOND correction does NOT overwrite ``title_original``: the original is the
+        original, not the previous value.
         """
         if kind not in self.RESOLUTION_NOTE_KINDS:
             return False
@@ -1301,6 +1321,16 @@ class TaskBoard(EventEmitter):
             before = task.resolution
             task.resolution_note = note.strip()
             task.resolution_note_kind = kind
+            new_title = (corrected_title or "").strip()
+            if new_title and new_title != task.title:
+                # Only on the FIRST correction — see the docstring. Overwriting this on a
+                # second pass would quietly replace the original with a previous guess.
+                if not task.title_original:
+                    task.title_original = task.title
+                _log.info(
+                    "task %s title corrected: %r -> %r", task_id, task.title[:60], new_title[:60]
+                )
+                task.title = new_title
             task.updated_at = time.time()
             # Belt and braces: the point of the feature is that this cannot change.
             assert task.resolution == before, "annotate_resolution mutated the resolution"

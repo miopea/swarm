@@ -221,6 +221,14 @@ class SwarmTask:
     # until X changed" does not — and the second is what makes the note trustworthy
     # enough to be worth writing.
     resolution_note_kind: str = ""
+    # #1578: the title this task carried before a correction, '' if never corrected.
+    # A title is a POINTER, not a requirement — no verifier grades it and no worker acts
+    # on it — so unlike `resolution` it is correctable on a closed task. The corrected
+    # text goes into `title` itself so all ~34 render sites (board, search, learning
+    # header, cross-references) pick it up structurally; a parallel `display_title` would
+    # have needed a 34-site sweep where a missed site silently shows the stale pointer.
+    # The original is kept HERE rather than discarded, plus a TaskAction.EDITED entry.
+    title_original: str = ""
     # Verifier drone state (item 4 of the 10-repo bundle).
     # ``verification_status`` flips through NOT_RUN → VERIFIED / REOPENED
     # / ESCALATED / SKIPPED as the verifier acts. ``verification_reason``

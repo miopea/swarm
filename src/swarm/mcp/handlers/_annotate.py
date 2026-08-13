@@ -49,7 +49,11 @@ TOOLS: list[dict[str, Any]] = [
             "changed), or ``kind='wrong'`` when it was never true. Any worker may "
             "annotate any closed task — you do not have to own it, because whoever "
             "was just served the bad advice is who discovers it. REFUSES on an open "
-            "task and names the verb that applies there instead."
+            "task and names the verb that applies there instead. Pass ``corrected_title`` "
+            "as well when the TITLE points at the wrong thing — that one DOES replace "
+            "the title (the original is preserved and the change is recorded), because "
+            "a title is a pointer nobody grades, and a permanently wrong pointer sends "
+            "every future reader to the wrong layer."
         ),
         "inputSchema": {
             "type": "object",
@@ -75,6 +79,16 @@ TOOLS: list[dict[str, Any]] = [
                         "2026-07-30' beats 'out of date'."
                     ),
                 },
+                "corrected_title": {
+                    "type": "string",
+                    "description": (
+                        "Optional. Replaces the task's title when the original names "
+                        "the wrong mechanism. The previous title is preserved in the "
+                        "record and the change is written to task history. Requires "
+                        "'note' like any other annotation — a retitle with no stated "
+                        "reason is indistinguishable from vandalism to a later reader."
+                    ),
+                },
             },
             "required": ["number", "kind", "note"],
             "examples": [
@@ -88,6 +102,64 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
 ]
+
+
+def _record_annotation(
+    d: SwarmDaemon,
+    worker_name: str,
+    *,
+    number: int,
+    task_id: str,
+    kind: str,
+    note: str,
+    title_before: str,
+    title_after: str,
+) -> None:
+    """Buzz-log + task-history the annotation. Best effort — a failure here must not
+    undo an annotation that already landed on the board.
+
+    ``title_before``/``title_after`` are empty unless a retitle actually happened, and
+    the caller decides that by reading the board back rather than by trusting its own
+    argument (#1159: a handler claiming a write the caller cannot check).
+    """
+    try:
+        from swarm.drones.log import LogCategory, SystemAction
+        from swarm.tasks.history import TaskAction
+
+        d.drone_log.add(
+            SystemAction.TASK_RESOLUTION_ANNOTATED,
+            worker_name,
+            f"#{number} resolution flagged {kind}: {truncate_for_log(note, 100)}",
+            category=LogCategory.TASK,
+        )
+        if getattr(d, "task_history", None) is None:
+            return
+        d.task_history.append(
+            task_id,
+            TaskAction.EDITED,
+            actor=worker_name,
+            detail=f"resolution annotated {kind}: {note[:200]}",
+        )
+        if title_after:
+            # A SEPARATE entry naming BOTH titles, so the board's new wording can be
+            # traced to what it replaced. Without the old text here the correction is
+            # only visible as an unexplained difference from any message or commit
+            # that quoted the original.
+            d.task_history.append(
+                task_id,
+                TaskAction.EDITED,
+                actor=worker_name,
+                detail=(
+                    f"title corrected: {truncate_for_log(title_before, 120)} "
+                    f"-> {truncate_for_log(title_after, 120)}"
+                ),
+            )
+    except Exception:
+        import logging
+
+        logging.getLogger("swarm.mcp.annotate").warning(
+            "annotated #%s but could not record history", number, exc_info=True
+        )
 
 
 def _handle_annotate_resolution(
@@ -147,7 +219,11 @@ def _handle_annotate_resolution(
         ]
 
     before = task.resolution
-    if not board.annotate_resolution(task.id, kind=kind, note=note):
+    corrected_title = str(args.get("corrected_title") or "").strip()
+    title_before = task.title
+    if not board.annotate_resolution(
+        task.id, kind=kind, note=note, corrected_title=corrected_title
+    ):
         return [{"type": "text", "text": f"Could not annotate #{number} (status changed?)."}]
 
     after = board.get(task.id)
@@ -155,29 +231,29 @@ def _handle_annotate_resolution(
     # truthful now" — a claim the caller cannot check — and stayed convincing for
     # months while a promoter silently undid the write.
     intact = after is not None and after.resolution == before
-    try:
-        from swarm.drones.log import LogCategory, SystemAction
-        from swarm.tasks.history import TaskAction
+    # READ BACK from the board, don't infer from the argument. A caller that passed a
+    # corrected_title identical to the current one changed nothing, and reporting a
+    # retitle that did not happen is the same class of false claim as #1159's park.
+    retitled = after is not None and after.title != title_before
+    _record_annotation(
+        d,
+        worker_name,
+        number=number,
+        task_id=task.id,
+        kind=kind,
+        note=note,
+        title_before=title_before if retitled else "",
+        title_after=after.title if (retitled and after is not None) else "",
+    )
 
-        d.drone_log.add(
-            SystemAction.TASK_RESOLUTION_ANNOTATED,
-            worker_name,
-            f"#{number} resolution flagged {kind}: {truncate_for_log(note, 100)}",
-            category=LogCategory.TASK,
+    title_line = ""
+    if retitled:
+        title_line = (
+            f" Title corrected — the board, search and learning headers now read "
+            f"{after.title[:80]!r}; the original is preserved in the record."
         )
-        if getattr(d, "task_history", None) is not None:
-            d.task_history.append(
-                task.id,
-                TaskAction.EDITED,
-                actor=worker_name,
-                detail=f"resolution annotated {kind}: {note[:200]}",
-            )
-    except Exception:
-        import logging
-
-        logging.getLogger("swarm.mcp.annotate").warning(
-            "annotated #%s but could not record history", number, exc_info=True
-        )
+    elif corrected_title:
+        title_line = " Title unchanged (the correction matched the existing title)."
 
     return [
         {
@@ -186,6 +262,7 @@ def _handle_annotate_resolution(
                 f"#{number} resolution flagged as {kind}. Original text "
                 f"{'intact' if intact else '*** CHANGED — report this'}. Future "
                 f"workers served this as a learning will now see the caveat inline."
+                f"{title_line}"
             ),
         }
     ]

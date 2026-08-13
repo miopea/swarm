@@ -121,6 +121,7 @@ class SwarmDB:
             (18, self._migrate_v18_archived_at),
             (19, self._migrate_v19_jira_exported_status),
             (20, self._migrate_v20_dispatch_requested_at),
+            (21, self._migrate_v21_title_original),
         ]
         for version, migrate in migrations:
             if from_version < version:
@@ -494,6 +495,31 @@ class SwarmDB:
             _log.info("v20: added tasks.dispatch_requested_at")
         except sqlite3.OperationalError:
             _log.debug("v20 migration: dispatch_requested_at column likely already exists")
+
+    def _migrate_v21_title_original(self) -> None:
+        """v21 (#1578): add ``tasks.title_original`` — the title a task carried before a
+        correction, '' when never corrected.
+
+        WHY A TITLE IS CORRECTABLE WHEN A RESOLUTION IS NOT (see v17 above, which refuses
+        the same thing for the opposite reason): a resolution is the record of what was
+        believed and done, and rewriting it destroys an audit trail. A title is a POINTER
+        — no verifier grades it, no worker acts on it — and a permanently wrong pointer on
+        a task that is re-served as a learning sends every future reader to the wrong
+        layer. #1538 named the dispatch path when the defect was in reconciliation.
+
+        The corrected text replaces ``title`` so that every render site picks it up with
+        no changes; the original is preserved here and in a TaskAction.EDITED entry.
+        Legacy rows default to '' and are indistinguishable from never-corrected, which is
+        correct. ALTER wrapped in try/except — fresh DBs already have it via SCHEMA_V1.
+        """
+        assert self._conn is not None
+        try:
+            self._conn.execute(
+                "ALTER TABLE tasks ADD COLUMN title_original TEXT NOT NULL DEFAULT ''"
+            )
+            _log.info("v21: added tasks.title_original")
+        except sqlite3.OperationalError:
+            _log.debug("v21 migration: title_original column likely already exists")
 
     def _migrate_v14_started_at(self) -> None:
         """v14 (#611 P2): add ``tasks.started_at`` (when the task last went

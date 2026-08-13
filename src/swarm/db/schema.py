@@ -123,6 +123,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   -- of what was believed at the time. kind is '' | 'stale' | 'wrong'.
   resolution_note            TEXT    NOT NULL DEFAULT '',
   resolution_note_kind       TEXT    NOT NULL DEFAULT '',
+  -- #1578: the title before a correction, '' if never corrected. A title is a
+  -- pointer rather than a requirement, so it IS correctable on a closed task —
+  -- the corrected text replaces `title` (so every render site picks it up) and
+  -- the original is preserved here plus in task_history.
+  title_original             TEXT    NOT NULL DEFAULT '',
   -- #1298: soft delete. NULL = live; a timestamp = archived and hidden from the
   -- board. A HARD delete would cascade this task's task_history rows away
   -- (task_history.task_id REFERENCES tasks(id) ON DELETE CASCADE), silently
