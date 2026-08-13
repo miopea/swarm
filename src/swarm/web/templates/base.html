@@ -1307,6 +1307,10 @@
         [data-theme="light"] .worker-item[data-state="RESTING"] { --worker-state-color: var(--info); --worker-state-tint: rgba(31, 101, 145, 0.07); }
         [data-theme="light"] .worker-item[data-state="SLEEPING"] { --worker-state-color: var(--text-secondary); --worker-state-tint: transparent; }
         [data-theme="light"] .worker-item[data-state="STUNG"] { --worker-state-color: var(--danger); --worker-state-tint: rgba(180, 35, 24, 0.07); }
+        /* #1357: nothing has measured this worker yet. Muted with NO tint, so an
+           unclassified tile is visibly quieter than every real state rather than
+           falling off the end of this list and losing its accent bar entirely. */
+        [data-theme="light"] .worker-item[data-state="UNCLASSIFIED"] { --worker-state-color: var(--text-secondary); --worker-state-tint: transparent; }
         [data-theme="light"] .worker-item:not(.selected) { background: var(--worker-state-tint); }
         [data-theme="light"] .worker-item .worker-name { color: var(--worker-state-color); }
         [data-theme="light"] .worker-item .worker-meta > span:first-child {

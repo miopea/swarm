@@ -8,6 +8,34 @@ Swarm uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.toml` for t
 
 ### Changes
 
+### Fixes
+
+## [2026.8.13] - 2026-08-13
+
+### Features
+
+### Changes
+
+- The dashboard no longer claims a state it has not measured. `Worker.state` defaults
+  to `BUZZING` — the MOST ACTIVE state — so a freshly started daemon published a
+  fully-busy swarm for the 4-6s before the pilot's first poll. The report's screenshot
+  showed all 16 workers reading `BUZZING — 4m`: one identical stale figure across every
+  tile, which is the tell that nothing had measured any of them. Workers now publish
+  `UNCLASSIFIED` (and no duration — the identical `4m` implied four minutes of observed
+  work, so it was as much of the lie as the state) until something actually measures
+  them: the pilot classifying PTY output, a remembered state restored from a previous
+  run, or a deliberate set such as the operator's put-to-sleep.
+
+  DISPLAY-ONLY. `state` and `display_state` keep their values and types, so INV-2, the
+  reconcilers, the idle watcher and every `== RESTING` / `== BUZZING` comparison are
+  untouched — which is why this is a bool rather than a `WorkerState.UNKNOWN` member
+  that would have put an unhandled case into all of them. The popped-out selector
+  inherits it for free, rendering from the same partial.
+
+  Half of the original report was already fixed: `db/worker_state_store.py` has
+  persisted and restored worker state since 2026-08-09, so what remained was only the
+  fallback for a worker with no usable remembered state (#1357).
+
 - **Broadcast is Queen-only.** A worker sending `swarm_send_message` to `*` is now
   refused before anything is written; only the Queen can fan out. Operator ruling
   2026-08-12: "this is a constant pain point".

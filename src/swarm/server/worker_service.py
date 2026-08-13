@@ -65,6 +65,11 @@ def _restore_state(worker: Worker, remembered: dict[str, Any]) -> None:
         return
     try:
         worker.state = WorkerState(saved)
+        # #1357: a remembered state IS a measurement, just an older one. Leaving
+        # the worker UNCLASSIFIED here would make the persistence this function
+        # exists for invisible on the dashboard — the exact half of the report
+        # ("state is not remembered between reloads") that this already fixed.
+        worker.state_known = True
         # SLEEPING is derived from how long the worker has been RESTING, and the
         # operator's "put to sleep" works by backdating this very field. Restoring the
         # state without it silently downgrades every slept worker to plain RESTING —
@@ -613,6 +618,7 @@ class WorkerService:
             await self.escape_worker(name)
         # Force to RESTING so display_state can become SLEEPING
         worker.state = WorkerState.RESTING
+        worker.state_known = True  # #1357: a deliberate set IS a measurement
         # Backdate state_since so display_state returns SLEEPING
         worker.state_since = time.time() - worker.sleeping_threshold - 1
         worker._api_dict_cache = None
@@ -736,6 +742,7 @@ class WorkerService:
         async with self._worker_lock:
             await _kill_worker(worker, pool)
             worker.state = WorkerState.STUNG
+            worker.state_known = True  # #1357: a deliberate set IS a measurement
         self._task_board.unassign_worker(worker.name)
         self._drone_log.add(DroneAction.OPERATOR, name, "killed", category=LogCategory.OPERATOR)
         self._broadcast_ws(
@@ -759,6 +766,7 @@ class WorkerService:
         if not worker.process or not worker.process.is_alive:
             raise SwarmOperationError(f"Failed to revive worker '{name}'")
         worker.state = WorkerState.BUZZING
+        worker.state_known = True  # #1357: a deliberate set IS a measurement
         worker.record_revive()
         self._drone_log.add(
             DroneAction.OPERATOR, name, "revived (manual)", category=LogCategory.OPERATOR

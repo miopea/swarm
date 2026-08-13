@@ -11,7 +11,12 @@
     {{ worker_bee(w.state) }}
     <div>
         <div class="worker-name {{ state_color(w.state) }}" title="{{ w.name }}">{{ w.name }}{% if w.revive_count > 0 %}<span class="revive-badge">x{{ w.revive_count }}</span>{% endif %} <span class="worker-provider-tag">({{ w.provider }})</span>{% if w.worktree_branch %}<span class="branch-badge" title="Branch: {{ w.worktree_branch }}">{{ w.worktree_branch }}</span>{% endif %}</div>
-        <div class="worker-meta"><span class="{{ state_color(w.state) }}">{{ w.state }}</span> &mdash; {{ w.state_duration }}</div>
+        {# #1357: an unclassified worker asserts neither a state nor a duration. The
+           operator's screenshot was 16 tiles reading "BUZZING — 4m" — the identical
+           duration was as much of the lie as the state, since it implied 4 minutes of
+           observed work. Shows "unclassified" with an em dash until the pilot's first
+           poll, then renders exactly as before. #}
+        <div class="worker-meta"><span class="{{ state_color(w.state) }}">{{ 'unclassified' if w.state == 'UNCLASSIFIED' else w.state }}</span> &mdash; {{ '&mdash;'|safe if w.state == 'UNCLASSIFIED' else w.state_duration }}</div>
         {% if w.needs_operator_input %}
         <div class="needs-input-pill" title="This worker is waiting on a prompt — your input is needed">
             <span class="needs-input-dot"></span>Awaiting your input

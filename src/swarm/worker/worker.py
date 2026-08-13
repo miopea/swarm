@@ -163,6 +163,12 @@ class TokenUsage:
 WORKER_KIND_WORKER = "worker"
 WORKER_KIND_QUEEN = "queen"
 
+# #1357: what the dashboard publishes for a worker nothing has measured yet.
+# Deliberately NOT a WorkerState member — see Worker.published_state for why an
+# enum variant would have leaked an unhandled case into INV-2 and every other
+# state comparison. Presentation only.
+UNCLASSIFIED_STATE = "UNCLASSIFIED"
+
 # The Queen is a singleton per-swarm; her PTY process always uses
 # this literal name so both the discover path and the MCP server's
 # worker_name gate can recognize her without a config lookup.
@@ -188,6 +194,21 @@ class Worker:
     kind: str = WORKER_KIND_WORKER
     process: WorkerProcess | None = field(default=None, repr=False)
     state: WorkerState = WorkerState.BUZZING
+    # #1357: has anything actually MEASURED this worker yet?
+    #
+    # ``state`` above defaults to BUZZING — the most active state — so a freshly
+    # started daemon asserted a fully-busy swarm for the 4-6s before the pilot's
+    # first poll. The operator's screenshot showed all 16 workers reading
+    # "BUZZING — 4m": one identical stale figure, which is the tell that nothing
+    # measured any of them. "Everything is working" is the single most misleading
+    # thing to assert while you do not know.
+    #
+    # DISPLAY-ONLY BY DESIGN. This gates what ``to_api_dict`` publishes; it never
+    # changes ``state`` or ``display_state``, so INV-2, the reconcilers, the idle
+    # watcher and every ``== RESTING`` / ``== BUZZING`` comparison are untouched.
+    # That is why this is a bool rather than a WorkerState.UNKNOWN member — the
+    # enum variant would put an unhandled case into every one of those comparisons.
+    state_known: bool = False
     state_since: float = field(default_factory=time.time)
     revive_count: int = field(default=0, repr=False)
     usage: TokenUsage = field(default_factory=TokenUsage, repr=False)
@@ -236,6 +257,11 @@ class Worker:
         if new_state == WorkerState.BUZZING and self.state != WorkerState.BUZZING:
             self.revive_count = 0
         self.state = new_state
+        # #1357: the single chokepoint where a CONFIRMED classification lands, so
+        # it is the one place that can honestly say the worker has been measured.
+        # Both callers (debounced update_state and immediate force_state) route
+        # through here, which is why the flag does not need setting at either.
+        self.state_known = True
         self.state_since = time.time()
         self._resting_confirmations = 0
         self._api_dict_cache = None
@@ -330,6 +356,23 @@ class Worker:
         return self.kind == WORKER_KIND_QUEEN
 
     @property
+    def published_state(self) -> str:
+        """What the DASHBOARD is allowed to claim about this worker (#1357).
+
+        ``UNCLASSIFIED`` until something has actually measured the worker — either
+        the pilot classifying its PTY output, or a remembered state restored from a
+        previous run (an older measurement is still a measurement, and suppressing
+        it would make the persistence in ``db/worker_state_store.py`` pointless).
+
+        Deliberately a STRING, not a ``WorkerState``. Every consumer that makes a
+        DECISION reads ``state`` / ``display_state`` and keeps seeing a real enum
+        member; only the presentation layer sees this. Adding an enum variant
+        instead would have put an unhandled case into INV-2's demotion and every
+        other state comparison in the codebase.
+        """
+        return self.display_state.value if self.state_known else UNCLASSIFIED_STATE
+
+    @property
     def display_state(self) -> WorkerState:
         """State for display purposes: RESTING becomes SLEEPING after threshold.
 
@@ -395,7 +438,7 @@ class Worker:
             provider=self.provider_name,
             worker_id=self.name,
             kind=self.kind,
-            state=self.display_state.value,
+            state=self.published_state,
             state_duration=round(self.state_duration, 1),
             revive_count=self.revive_count,
             usage=self.usage.to_dict(),

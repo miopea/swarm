@@ -67,7 +67,11 @@ async def handle_partial_status(request: web.Request) -> web.Response:
 
     from collections import Counter
 
-    counts = Counter(w.display_state.value for w in workers)
+    # #1357: count what we may CLAIM, not what the default says. These chips read
+    # from the Worker objects rather than the serialized dicts, so without this they
+    # would still report every unmeasured worker as BUZZING while the tiles below
+    # showed UNCLASSIFIED — the summary contradicting the thing it summarises.
+    counts = Counter(w.published_state for w in workers)
     full_parts = []
     compact_parts = []
     for state in WorkerState:

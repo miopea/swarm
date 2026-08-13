@@ -84,6 +84,10 @@ def phone_page(monkeypatch):
             path="/tmp",
             provider_name="claude",
             state=_STATES[i % len(_STATES)],
+            # #1357: these represent workers whose state has been OBSERVED — the
+            # fixture is asserting how each real state paints. Without this they
+            # all publish UNCLASSIFIED and four distinct rows collapse into one.
+            state_known=True,
         )
         for i, name in enumerate(_NAMES)
     ]

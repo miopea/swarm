@@ -2322,6 +2322,7 @@ class SwarmDaemon(EventEmitter):
         worker = self.get_worker(name)
         if worker is not None:
             worker.state = WorkerState.RESTING
+            worker.state_known = True  # #1357: a deliberate set IS a measurement
             worker.state_since = time.time()
 
     async def arrow_up_worker(self, name: str) -> None:
