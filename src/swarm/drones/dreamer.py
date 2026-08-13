@@ -46,7 +46,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from swarm.drones.log import LogCategory, SystemAction
+from swarm.drones.log import LogCategory, SystemAction, truncate_for_log
 from swarm.logging import get_logger
 
 if TYPE_CHECKING:
@@ -272,7 +272,7 @@ class Dreamer:
                 SystemAction.PATTERN_DISCOVERED,
                 "swarm",
                 f"{bucket.action} ×{bucket.count} across "
-                f"{len(bucket.workers)} workers — {bucket.sample_detail[:120]}",
+                f"{len(bucket.workers)} workers — {truncate_for_log(bucket.sample_detail, 120)}",
                 category=LogCategory.DRONE,
             )
             written += 1

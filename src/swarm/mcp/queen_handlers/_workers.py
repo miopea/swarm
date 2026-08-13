@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from swarm.drones.log import truncate_for_log
 from swarm.mcp._arg_types import QueenInterruptWorkerArgs, QueenPromptWorkerArgs
 from swarm.mcp.queen_handlers._common import _assert_queen
 from swarm.mcp.queen_handlers._tasks import _fire_async
@@ -138,7 +139,7 @@ def _handle_interrupt_worker(
     d.drone_log.add(
         SystemAction.OPERATOR,
         target,
-        f"queen interrupted (Ctrl-C): {reason[:120]}",
+        f"queen interrupted (Ctrl-C): {truncate_for_log(reason, 120)}",
         category=LogCategory.OPERATOR,
     )
     worker_svc = getattr(d, "worker_svc", None)
@@ -213,11 +214,12 @@ def _handle_prompt_worker(
     will_queue = worker.state == WorkerState.BUZZING
     queue_tag = " [queued, worker BUZZING]" if will_queue else ""
     ack_tag = " [ack-engaged]" if ack else (" [COLLISION]" if collided else "")
+    why = truncate_for_log(reason, 80)
+    what = truncate_for_log(prompt, 100)
     d.drone_log.add(
         SystemAction.OPERATOR,
         target,
-        f"queen prompt{queue_tag}{ack_tag} ({reason[:80]}): {prompt[:100]} "
-        f"|| engagement: {engagement_str}",
+        f"queen prompt{queue_tag}{ack_tag} ({why}): {what} || engagement: {engagement_str}",
         category=LogCategory.OPERATOR,
     )
     worker_svc = getattr(d, "worker_svc", None)

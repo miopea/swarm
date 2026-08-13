@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from swarm.drones.log import truncate_for_log
 from swarm.mcp._arg_types import DraftEmailArgs
 from swarm.mcp.types import TextContent
 
@@ -186,7 +187,7 @@ def _handle_draft_email(
             return
         audit_detail = f"draft email to {to_list[0]}: {subject[:80]}"
         if reason:
-            audit_detail = f"{audit_detail} — {reason[:120]}"
+            audit_detail = f"{audit_detail} — {truncate_for_log(reason, 120)}"
         web_link = result.get("web_link", "")
         if web_link:
             audit_detail = f"{audit_detail} [outlook: {web_link[:80]}]"

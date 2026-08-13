@@ -19,6 +19,7 @@ import time
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Any
 
+from swarm.drones.log import truncate_for_log
 from swarm.logging import get_logger
 from swarm.mcp._arg_types import QueenForceCompleteTaskArgs, QueenReassignTaskArgs
 from swarm.mcp.queen_handlers._common import _assert_queen
@@ -315,7 +316,7 @@ def _log_async_failure(
         daemon.drone_log.add(
             SystemAction.TASK_DISPATCH_FAILED,
             getattr(task, "assigned_worker", None) or "unknown",
-            detail[:300],
+            truncate_for_log(detail, 300),
             category=LogCategory.TASK,
             metadata={"task_number": getattr(task, "number", None)},
         )
@@ -531,7 +532,7 @@ def _handle_reassign_task(
     d.drone_log.add(
         SystemAction.OPERATOR,
         to_worker,
-        f"queen reassigned #{task.number} from {prev}: {reason[:120]}",
+        f"queen reassigned #{task.number} from {prev}: {truncate_for_log(reason, 120)}",
         category=LogCategory.OPERATOR,
     )
     if start:
@@ -596,7 +597,7 @@ def _handle_force_complete_task(
     d.drone_log.add(
         SystemAction.OPERATOR,
         prev_worker,
-        f"queen force-completed #{task.number}: {reason[:120]}",
+        f"queen force-completed #{task.number}: {truncate_for_log(reason, 120)}",
         category=LogCategory.OPERATOR,
     )
     return [

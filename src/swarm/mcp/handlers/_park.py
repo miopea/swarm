@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from swarm.drones.log import truncate_for_log
 from swarm.mcp._arg_types import ParkTaskArgs
 from swarm.mcp.types import TextContent
 
@@ -166,7 +167,7 @@ def _handle_park_task(d: SwarmDaemon, worker_name: str, args: ParkTaskArgs) -> l
     from swarm.drones.log import LogCategory, SystemAction
     from swarm.tasks.history import TaskAction
 
-    detail = f"#{task.number} parked: {reason[:120]}"
+    detail = f"#{task.number} parked: {truncate_for_log(reason, 120)}"
     try:
         d.drone_log.add(SystemAction.TASK_PARKED, worker_name, detail, category=LogCategory.TASK)
         if getattr(d, "task_history", None) is not None:

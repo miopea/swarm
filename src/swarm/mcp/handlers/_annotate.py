@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from swarm.drones.log import truncate_for_log
 from swarm.mcp.types import TextContent
 from swarm.tasks.task import TaskStatus
 
@@ -161,7 +162,7 @@ def _handle_annotate_resolution(
         d.drone_log.add(
             SystemAction.TASK_RESOLUTION_ANNOTATED,
             worker_name,
-            f"#{number} resolution flagged {kind}: {note[:100]}",
+            f"#{number} resolution flagged {kind}: {truncate_for_log(note, 100)}",
             category=LogCategory.TASK,
         )
         if getattr(d, "task_history", None) is not None:

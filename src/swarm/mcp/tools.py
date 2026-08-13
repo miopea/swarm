@@ -19,6 +19,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
+from swarm.drones.log import truncate_for_log
 from swarm.mcp.handlers._annotate import HANDLERS as _ANNOTATE_H
 from swarm.mcp.handlers._annotate import TOOLS as _ANNOTATE_T
 from swarm.mcp.handlers._archive import HANDLERS as _ARCHIVE_H
@@ -243,7 +244,7 @@ def handle_tool_call(
     else:
         content = result
     short_name = tool_name.removeprefix("swarm_")
-    detail = content[0].get("text", "")[:120] if content else ""
+    detail = truncate_for_log(content[0].get("text", ""), 120) if content else ""
     daemon.drone_log.add(
         SystemAction.OPERATOR,
         worker_name,

@@ -11,7 +11,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from swarm.drones.log import LogCategory, SystemAction
+from swarm.drones.log import LogCategory, SystemAction, truncate_for_log
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -53,7 +53,7 @@ class RateLimitDetector:
         line_end = content.find("\n", m.end())
         if line_end == -1:
             line_end = len(content)
-        msg = content[line_start:line_end].strip()[:120]
+        msg = truncate_for_log(content[line_start:line_end].strip(), 120)
         self._log.add(
             SystemAction.QUEEN_BLOCKED,
             worker.name,

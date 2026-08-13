@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from swarm.drones.log import truncate_for_log
 from swarm.mcp._arg_types import BlockExternalArgs
 from swarm.mcp.types import TextContent
 
@@ -230,7 +231,9 @@ def _handle_block_on_external(
     from swarm.drones.log import LogCategory, SystemAction
     from swarm.tasks.history import TaskAction
 
-    detail = f"#{task.number} blocked-on-external [{watch_ref[:60]}]: {reason[:80]}"
+    ref = truncate_for_log(watch_ref, 60)
+    why = truncate_for_log(reason, 80)
+    detail = f"#{task.number} blocked-on-external [{ref}]: {why}"
     try:
         d.drone_log.add(SystemAction.TASK_PARKED, worker_name, detail, category=LogCategory.TASK)
         if getattr(d, "task_history", None) is not None:
@@ -288,7 +291,7 @@ def _handle_block_on_operator(
     if not board.block_on_external(task.id, worker_name, AWAITING_OPERATOR_REF, reason):
         return [{"type": "text", "text": f"Could not block #{task.number} (state changed?)."}]
 
-    detail = f"#{task.number} awaiting operator: {reason[:100]}"
+    detail = f"#{task.number} awaiting operator: {truncate_for_log(reason, 100)}"
     try:
         d.drone_log.add(
             SystemAction.TASK_PARKED,

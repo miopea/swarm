@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from swarm.drones.log import truncate_for_log
 from swarm.mcp._arg_types import UnblockTaskArgs
 from swarm.mcp.types import TextContent
 from swarm.tasks.task import TaskStatus
@@ -124,7 +125,7 @@ def record_unblock(d: SwarmDaemon, task: Any, actor: str, reason: str) -> int:
         d.drone_log.add(
             SystemAction.TASK_UNBLOCKED,
             actor,
-            f"#{task.number} unblocked: {reason[:120]}",
+            f"#{task.number} unblocked: {truncate_for_log(reason, 120)}",
             category=LogCategory.TASK,
         )
         if getattr(d, "task_history", None) is not None:

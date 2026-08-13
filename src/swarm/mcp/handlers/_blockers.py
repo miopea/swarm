@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from swarm.drones.log import truncate_for_log
 from swarm.mcp._arg_types import ReportBlockerArgs
 from swarm.mcp.types import TextContent
 
@@ -164,7 +165,7 @@ def _handle_report_blocker(
 
     detail = f"#{task_number} blocked by #{blocked_by}"
     if reason:
-        detail = f"{detail} — {reason[:120]}"
+        detail = f"{detail} — {truncate_for_log(reason, 120)}"
     d.drone_log.add(
         SystemAction.OPERATOR,
         worker_name,
