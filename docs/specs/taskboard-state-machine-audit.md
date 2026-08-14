@@ -54,7 +54,7 @@ verbs wrap them.
 
 | status | entered by | left by (board) | honest exit? | reachable? |
 | --- | --- | --- | --- | --- |
-| BACKLOG | `reopen`, task creation | `approve_task`→UNASSIGNED, `reject_task`→FAILED, `assign`→ASSIGNED | yes | yes |
+| BACKLOG | `reopen`, task creation, **`assign` (owner set, status kept)** | `approve_task`→UNASSIGNED, `reject_task`→FAILED, `activate`→ACTIVE *(worker, `unpark=true`, #1636)* | yes | yes |
 | UNASSIGNED | `unassign`, `approve`, `release`, `unassign_worker`, INV reconcilers | `assign`→ASSIGNED, `release` | yes | yes |
 | ASSIGNED | `assign`, `unblock`, `park`, `reopen_for_verifier`, `activate` demote, `_recon_inv1/2` | `activate`→ACTIVE, `complete`→DONE, `unassign`→UNASSIGNED, `block_on_external`→BLOCKED | yes | yes |
 | ACTIVE | `activate` (2 callers) | `complete`, `park`, `unassign`, `block_on_external`, `block_for_operator` | yes | yes |
@@ -126,6 +126,39 @@ sit longest — both edits needed on 2026-08-05 existed *because* a HOLD had gon
 stale, and #1128 had to be closed outright once its architecture no longer
 existed. The Queen surface is reachable (`queen_edit_task` applied both); the
 worker surface is not.
+
+### (g) second instance — the ASSIGNED-and-BACKLOG class (#1636, fixed 2026-08-14)
+
+The same shape as the HOLD gap above, found nine days later, and it is the reason
+this section says *class* rather than *status*. A task can be BACKLOG **and** owned:
+since 2026-08-07 `assign` sets the owner and deliberately KEEPS backlog status
+("Backlog means parked, not for now; promoting it would un-park it"). Its safety
+argument — no dispatch path accepts BACKLOG, so an owned backlog task is inert — is
+sound for *starting*, and says nothing about *finishing*.
+
+So a worker who completed the work met two refusals that were each individually
+correct and jointly a dead end: `swarm_complete_task` requires in-progress,
+`swarm_start_task` requires not-backlog, and nothing moved it between them. Neither
+of `swarm_complete_task`'s documented hatches applied — the task was too assigned for
+the unassigned-self-close hatch and not blocked enough for the blocked one. Hit on
+sculpt-studio #1304; the operator force-completed it, and `queen_edit_task` takes no
+status argument, so the manual Queen route did not exist either.
+
+**Measured when filed: 4 of 4 BACKLOG rows carried an owner** (1589 tasks total). The
+dead-end state was not an edge case; it was the only form BACKLOG took.
+
+Fixed by making `activate` reachable for BACKLOG from the worker surface, gated on
+explicit `unpark=true` — the consent word that already exists for the HOLD park.
+BACKLOG stays out of `_startable`, so the bare call and the ambiguity list still
+cannot reach one and nothing auto-starts it; the 2026-08-07 decision is preserved
+rather than reverted.
+
+**The audit itself was wrong here and the tests could not tell.** The BACKLOG row
+listed `assign`→ASSIGNED as one of three exits. That stopped being true on
+2026-08-07 and the table was never updated — property (a) only asks that the exit
+set be non-empty, and the two remaining exits satisfied it. An enumeration can rot
+into describing a transition that no longer exists while every property still
+passes. Both the row and `_BOARD_EXITS` in the test now say `activate`.
 
 ### AC-6: `block_for_operator` is CORRECT as ACTIVE-only
 

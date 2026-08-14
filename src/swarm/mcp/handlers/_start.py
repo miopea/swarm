@@ -66,11 +66,14 @@ TOOLS: list[dict[str, Any]] = [
                 "unpark": {
                     "type": "boolean",
                     "description": (
-                        "Set true to start a PARKED (HOLD) task, clearing the "
-                        "hold as you take it. Parked means nobody should start "
-                        "it by accident, so it must be said explicitly — "
-                        "required only for parked tasks, and refused-with-"
-                        "instructions otherwise."
+                        "Set true to start a task that is parked on purpose — "
+                        "a HOLD task, or one sitting in BACKLOG that is "
+                        "assigned to you (#1636). Clears the hold as you take "
+                        "it. Parked means nobody should start it by accident, "
+                        "so it must be said explicitly — required only for "
+                        "parked tasks, and refused-with-instructions "
+                        "otherwise. This is also how you close finished work "
+                        "that is still in backlog: start it, then complete it."
                     ),
                 },
             },
@@ -87,6 +90,13 @@ def _startable(board: Any, worker_name: str) -> list[Any]:
     ASSIGNED only. A task already ACTIVE needs no assertion, and one that is
     BLOCKED or closed is refused with a reason rather than silently filtered, so
     the caller learns why instead of seeing an empty list.
+
+    #1636 deliberately did NOT add BACKLOG here. An owned backlog task IS
+    startable now, but only via an explicit ``task_number`` plus ``unpark=true``.
+    Admitting it to this list would let the no-argument call start it, which is
+    un-parking by accident — the one thing the 2026-08-07 "assign keeps backlog"
+    decision exists to prevent. It would also pad the ambiguity list, so a single
+    parked task would block the bare call on an ordinary one.
     """
     return [
         t
@@ -136,6 +146,31 @@ def _resolve_explicit(
             f"start it by accident, so say so explicitly: re-call with "
             f"unpark=true. That clears the hold and starts it."
         )
+    if target.status == TaskStatus.BACKLOG:
+        # #1636: BACKLOG-and-assigned was a DEAD END — start refused because it is not
+        # ASSIGNED, complete refused because it is not in progress, and no worker-side
+        # verb moved it between them. A worker who finished the work could only escalate
+        # to a human for a state transition on work they had already done.
+        #
+        # The state is not corruption. ``SwarmTask.assign`` KEEPS backlog by the
+        # 2026-08-07 operator decision ("Backlog means parked, not for now"), whose
+        # safety argument is that no dispatch path accepts BACKLOG so an owned backlog
+        # task is inert. That decision is preserved here: BACKLOG is deliberately NOT in
+        # ``_startable``, so the bare call and the ambiguity list still cannot reach one
+        # and nothing auto-starts it. What the decision never covered is finished work —
+        # inertness was meant to stop accidental starts, not to strand a completed task.
+        #
+        # So consent is per-task and explicit, exactly as for a HOLD park. Reusing
+        # ``unpark`` rather than adding a second consent word is deliberate: both are the
+        # same sentence — "this one is parked on purpose; say you mean it."
+        if not unpark:
+            return None, (
+                f"#{want} is in BACKLOG (parked, not for now) though it is assigned to "
+                f"you. Nothing changed. If you are working it — or have finished it and "
+                f"need to close it — say so explicitly: re-call with unpark=true. That "
+                f"promotes it straight to in-progress, and you can then complete it."
+            )
+        return target, None
     if target.status != TaskStatus.ASSIGNED:
         hint = {
             TaskStatus.ACTIVE: "it is already in progress",

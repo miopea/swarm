@@ -38,10 +38,20 @@ _TERMINAL = {TaskStatus.DONE, TaskStatus.FAILED}
 
 # Board-level exits per status: (board verb, resulting status, falsifies?)
 _BOARD_EXITS: dict[TaskStatus, list[tuple[str, str, bool]]] = {
+    # #1636: ``assign`` was listed here as BACKLOG→ASSIGNED and has not been an exit
+    # since 2026-08-07, when assign() started KEEPING backlog status deliberately
+    # ("Backlog means parked, not for now"). Nothing caught the drift: property (a)
+    # only asks that the exit set be non-empty, and the two survivors satisfied it.
+    # The audit was measuring an exit that no longer existed.
+    #
+    # It is replaced by ``activate``, which IS a real exit — reachable from the worker
+    # surface via swarm_start_task(unpark=true) on a task the caller owns. Before #1636
+    # BACKLOG's only exits were Queen-side, which is why an owned backlog task could be
+    # neither started nor completed and had to be force-completed by the operator.
     TaskStatus.BACKLOG: [
         ("approve_task", "unassigned", False),
         ("reject_task", "failed", False),
-        ("assign", "assigned", False),
+        ("activate", "active", False),
     ],
     TaskStatus.UNASSIGNED: [
         ("assign", "assigned", False),

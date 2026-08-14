@@ -241,6 +241,40 @@ def _self_close_unassigned(
     return [{"type": "text", "text": f"Task #{task.number} self-assigned + completed."}]
 
 
+def _refuse_not_in_progress(match: Any, target_num: int) -> list[TextContent]:
+    """Refuse closure of a task that is not in progress, naming a way forward.
+
+    #1636: for BACKLOG this refusal named nothing, and nothing existed to name —
+    ``swarm_start_task`` refused an owned backlog task too ("a backlog task cannot
+    be started"), so the two verbs formed a dead end reachable by ordinary use and
+    closure had to route through the Queen's force-complete. The route now exists;
+    naming it is the other half of the fix, because a correct refusal that
+    withholds the resolving fact is #1057 all over again.
+    """
+    if match.status == TaskStatus.BACKLOG:
+        return [
+            {
+                "type": "text",
+                "text": (
+                    f"Task #{target_num} is in BACKLOG (parked), so there is nothing in "
+                    f"progress to complete — but it is yours and you can close it "
+                    f"yourself, no Queen needed. Take it first: "
+                    f"swarm_start_task(task_number={target_num}, unpark=true), then "
+                    f"re-call swarm_complete_task. Nothing changed."
+                ),
+            }
+        ]
+    return [
+        {
+            "type": "text",
+            "text": (
+                f"Task #{target_num} is not in progress "
+                f"(status={match.status.value}) — nothing to complete."
+            ),
+        }
+    ]
+
+
 def _handle_complete_task(
     d: SwarmDaemon, worker_name: str, args: CompleteTaskArgs
 ) -> list[TextContent]:
@@ -330,15 +364,7 @@ def _handle_complete_task(
                 }
             ]
         if match.status.value not in _ACTIVE_STATUSES:
-            return [
-                {
-                    "type": "text",
-                    "text": (
-                        f"Task #{target_num} is not in progress "
-                        f"(status={match.status.value}) — nothing to complete."
-                    ),
-                }
-            ]
+            return _refuse_not_in_progress(match, target_num)
         d.complete_task(match.id, actor=worker_name, resolution=resolution)
         return [{"type": "text", "text": f"Task #{target_num} completed."}]
 
