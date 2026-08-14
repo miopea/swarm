@@ -184,3 +184,67 @@ async def test_send_to_worker_propagates_the_held_flag():
     assert delivered is False
     logged = [c.args[2] for c in svc._drone_log.add.call_args_list if len(c.args) >= 3]
     assert any("HELD" in str(m) for m in logged), f"the hold was not logged: {logged}"
+
+
+# ---------------------------------------------------------------------------
+# The fingerprint must be REACHABLE, or the answer tool cannot be called
+# ---------------------------------------------------------------------------
+
+
+def test_the_view_surfaces_a_fingerprint_the_answer_tool_can_use():
+    """WITHOUT THIS THE FEATURE IS UNUSABLE. `queen_answer_prompt` requires a
+    fingerprint and nothing else produces one — the Queen would have to hash normalised
+    option labels by hand. A tool that ships, passes its tests and cannot be called is
+    the exact shape #1608 exists to fix, so this closes the loop rather than leaving it
+    as a note in a resolution."""
+    from swarm.mcp.queen_handlers._views import _open_prompt_payload
+    from swarm.pty.prompt_options import parse_open_prompt
+
+    payload = _open_prompt_payload(REAL_PLAN_PICKER)
+
+    assert payload is not None
+    assert payload["fingerprint"] == parse_open_prompt(REAL_PLAN_PICKER).fingerprint
+    assert [o["number"] for o in payload["options"]] == [1, 2, 3]
+    assert payload["options"][0]["cursored"] is True
+
+
+def test_the_view_returns_no_prompt_block_for_an_ordinary_worker():
+    """POSITIVE CONTROL. A payload that always appeared would have the Queen answering
+    prompts that are not there."""
+    from swarm.mcp.queen_handlers._views import _open_prompt_payload
+
+    assert _open_prompt_payload("just working\nno menu here\n") is None
+
+
+def test_a_parse_failure_degrades_to_no_prompt_rather_than_raising():
+    """This enriches a tool the Queen uses for everything else; a parse bug must not
+    take out her view of the fleet."""
+    from swarm.mcp.queen_handlers._views import _open_prompt_payload
+
+    assert _open_prompt_payload("") is None
+
+
+def test_the_round_trip_holds_view_fingerprint_answers_the_prompt():
+    """END TO END ACROSS THE TWO TOOLS, which is the property that matters: the
+    fingerprint the VIEW reports must be the one the ANSWER path accepts. Pinned
+    because they are separate modules and could drift into disagreeing — at which
+    point every answer would be refused and the refusal would look correct."""
+    from unittest.mock import MagicMock
+
+    from swarm.mcp.queen_handlers._views import _open_prompt_payload
+    from swarm.server.worker_service import WorkerService
+
+    fingerprint = _open_prompt_payload(REAL_PLAN_PICKER)["fingerprint"]
+
+    svc = WorkerService.__new__(WorkerService)
+    worker = MagicMock()
+    worker.name = "platform-api"
+    worker.process.get_content.return_value = REAL_PLAN_PICKER
+    svc._get_workers = lambda: [worker]  # type: ignore[method-assign]
+    svc._drone_log = MagicMock()
+    svc._get_pilot = lambda: None  # type: ignore[method-assign]
+
+    ok, message = svc.check_prompt_answer("platform-api", 1, fingerprint)
+
+    assert ok is True
+    assert "Yes, and use auto mode" in message

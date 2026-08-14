@@ -92,6 +92,32 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 
+def _open_prompt_payload(pty_tail: str) -> dict[str, Any] | None:
+    """Parse an open selection prompt out of the PTY tail, or None (#1608).
+
+    Returns the fingerprint `queen_answer_prompt` requires. Nothing else in the stack
+    produces one, so without this the answer tool cannot be called at all — a mechanism
+    that ships, passes its tests, and is unusable in practice.
+
+    Best-effort: a parse failure yields None rather than raising, because this is a
+    read-only enrichment on a tool the Queen uses for everything else.
+    """
+    try:
+        from swarm.pty.prompt_options import parse_open_prompt
+
+        prompt = parse_open_prompt(pty_tail)
+    except Exception:
+        return None
+    if prompt is None:
+        return None
+    return {
+        "fingerprint": prompt.fingerprint,
+        "options": [
+            {"number": o.number, "label": o.label, "cursored": o.cursored} for o in prompt.options
+        ],
+    }
+
+
 def _handle_view_worker_state(
     d: SwarmDaemon, worker_name: str, args: QueenViewWorkerStateArgs
 ) -> HandlerResult:
@@ -203,18 +229,40 @@ def _handle_view_worker_state(
     task = active[0] if active else None
     task_line = f"#{task.number} [{task.status.value}] {task.title}" if task else "no active task"
     usage = worker.usage.to_dict()
+    # #1608: surface the OPEN PROMPT, if any. queen_answer_prompt requires a fingerprint,
+    # and nothing else produces one — without this the Queen would have to hash normalised
+    # option labels by hand, which makes a shipped tool unusable. That is the same
+    # "looks operational, is inert" shape this ticket exists to fix, so it is not optional.
+    prompt_block = _open_prompt_payload(pty_tail)
+    prompt_line = ""
+    if prompt_block:
+        opts = "\n".join(
+            f"    {'>' if o['cursored'] else ' '} {o['number']}. {o['label']}"
+            for o in prompt_block["options"]
+        )
+        prompt_line = (
+            f"\n--- OPEN SELECTION PROMPT (fingerprint {prompt_block['fingerprint']}) ---\n"
+            f"{opts}\n"
+            f"    answer:  queen_answer_prompt(worker='{worker.name}', option=N, "
+            f"fingerprint='{prompt_block['fingerprint']}')\n"
+            f"    dismiss: queen_dismiss_prompt(worker='{worker.name}', reason=...)\n"
+            f"    NOTE queen_prompt_worker will be REFUSED while this is open, and "
+            f"queen_interrupt_worker does not close a picker.\n"
+        )
     body = (
         f"worker: {worker.name} (kind={worker.kind})\n"
         f"state:  {worker.display_state.value} (for {int(worker.state_duration)}s)\n"
         f"task:   {task_line}\n"
         f"usage:  in={usage['input_tokens']} out={usage['output_tokens']} "
         f"ctx={int(worker.context_pct * 100)}% cost=${worker.usage.cost_usd:.4f}\n"
+        f"{prompt_line}"
         f"--- pty tail ({lines} lines) ---\n{pty_tail}"
     )
     return {
         "content": [{"type": "text", "text": body}],
         "structuredContent": {
             "mode": "single",
+            "prompt": prompt_block,
             "worker": {
                 "name": worker.name,
                 "kind": worker.kind,
