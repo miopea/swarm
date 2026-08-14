@@ -12,6 +12,9 @@ The rendered heights were ~18 and ~12 lines, both inside the default 50-line
 
 from __future__ import annotations
 
+import pytest
+
+from swarm.pty.process import WorkerProcess
 from swarm.pty.prompt_guard import has_open_selection_prompt
 from swarm.pty.prompt_options import parse_open_prompt
 
@@ -161,3 +164,76 @@ def test_a_stale_menu_higher_in_the_scrollback_does_not_win():
     p = parse_open_prompt(content)
 
     assert [o.label for o in p.options] == ["New A", "New B"]
+
+
+# ---------------------------------------------------------------------------
+# AC4 (second half) — #1451's hold still fires, against the REAL prompts
+# ---------------------------------------------------------------------------
+#
+# `test_prompt_injection_guard.py` already covers the hold, and covers it well —
+# but its fixture is GENERATED (`cursor = "❯ " if (q, o) == (0, 0) else "  "`).
+# These two prompts are the ones that actually cost 14.8 worker-hours, so the
+# guard is now exercised against the text a real picker renders rather than the
+# text a test author imagined. That distinction is the whole reason this ticket
+# refuses a synthetic end-to-end proof.
+
+
+class _CapturingProc(WorkerProcess):
+    """WorkerProcess with the socket write captured instead of performed."""
+
+    def __init__(self) -> None:
+        super().__init__(name="t", cwd="/tmp")
+        self.writes: list[bytes] = []
+
+    async def _write(self, data: bytes) -> None:  # type: ignore[override]
+        self.writes.append(data)
+
+
+@pytest.mark.parametrize(
+    ("label", "screen"),
+    [("nexus permission", NEXUS_PERMISSION), ("platform-api plan", PLATFORM_API_PLAN)],
+)
+@pytest.mark.asyncio
+async def test_an_automated_write_is_still_held_by_these_real_prompts(label: str, screen: str):
+    """The guard must not be weakened by anything #1608 adds. If an ordinary dispatch,
+    nudge or broadcast reached the PTY here, the swarm would answer — under the
+    operator's name — the question the operator was asked."""
+    proc = _CapturingProc()
+    proc.buffer.write(screen.encode())
+
+    await proc.send_keys("routine dispatch body", automated=True)
+
+    assert proc.writes == [], f"an automated write reached the PTY during the {label} prompt"
+
+
+@pytest.mark.asyncio
+async def test_the_held_write_is_delayed_not_dropped():
+    """Held, not dropped — the property that makes the stall silent rather than loud,
+    and the reason nexus's 8.16h looked like nothing was happening."""
+    proc = _CapturingProc()
+    proc.buffer.write(NEXUS_PERMISSION.encode())
+    await proc.send_keys("first", automated=True)
+    assert proc.writes == []
+
+    from swarm.pty.buffer import RingBuffer
+
+    proc.buffer = RingBuffer()
+    proc.buffer.write(b"the prompt was answered\nwork continues\n")
+    await proc.send_keys("second", automated=True)
+
+    sent = b"".join(proc.writes)
+    assert b"first" in sent, "the held write was dropped rather than deferred"
+    assert sent.index(b"first") < sent.index(b"second"), "ordering was not preserved"
+
+
+@pytest.mark.asyncio
+async def test_an_operator_write_is_never_held_by_a_real_prompt():
+    """POSITIVE CONTROL. The operator is exactly the human the prompt waits for; a guard
+    that blocked them would make an open question unanswerable — and would look identical
+    to the guard working."""
+    proc = _CapturingProc()
+    proc.buffer.write(PLATFORM_API_PLAN.encode())
+
+    await proc.send_keys("1", automated=False)
+
+    assert proc.writes, "the operator's own answer was held — the prompt is unanswerable"
