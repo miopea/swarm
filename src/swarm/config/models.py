@@ -202,6 +202,28 @@ class DroneConfig:
     # evaluator. ``native_goal_max_turns`` is the runaway bound baked
     # into the condition string ("...or stop after N turns...").
     native_goal_enabled: bool = True
+    # #1509: TUNING THIS IS BLIND, AND WILL STAY BLIND UNTIL CLAUDE CODE EXPOSES A
+    # GOAL-EXIT AFFORDANCE. Swarm can observe a goal being ARMED (GOAL_SET) and being
+    # CLEARED by swarm itself (GOAL_CLEARED). It cannot observe the loop ENDING, so
+    # there is no way to know whether a session hit this cap, met its criteria, or
+    # declared a blocker — nor how many turns it used.
+    #
+    # MEASURED against the shipped binary 2.1.231, not inferred:
+    #   · 23 declared hookEventName values (PreToolUse, Stop, SubagentStop, SessionEnd,
+    #     PreCompact, PermissionRequest, FileChanged, …) and NONE is a goal event.
+    #   · Goal outcomes exist internally ONLY as analytics — `tengu_goal_achieved`,
+    #     `tengu_goal_failed`, `goal_met` — which are not a hook surface.
+    #   · `activeGoal` exists internally (17 occurrences) but never reaches a hook
+    #     payload: `goalStatus`, `goalId`, `currentGoal` are 0 occurrences, and the only
+    #     Stop-hook input field is `stop_hook_active`, which is loop-recursion control
+    #     rather than goal state. (`stop_hook_active` = 5 was the positive control, so
+    #     those zeros are measurements and not a broken query.)
+    #
+    # So DO NOT raise or lower this on a hunch, and do not add a GOAL_EXITED event
+    # inferred from worker text or from counting state transitions. An exit_reason that
+    # is right most of the time is worse than none, because it gets trusted. Raising the
+    # cap risks nothing visible; LOWERING it truncates legitimate long work with no
+    # signal that it happened.
     native_goal_max_turns: int = 25
     # Native /loop coexistence (task #761): when True, a worker parked
     # between native ``/loop`` fires (it self-scheduled a ScheduleWakeup
