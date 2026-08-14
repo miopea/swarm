@@ -430,31 +430,39 @@ class IdleWatcher:
                 _log.debug(
                     "idle_watcher: worker_busy_check raised for %s", worker.name, exc_info=True
                 )
-        # #1610: RECENT ACTIVITY. Every other guard here asks about something OTHER
-        # than progress — was a human typing, is the PTY mid-turn, is a loop armed —
-        # so a worker resting between turns and a worker that dropped its task produce
-        # the identical signal. Measured 2026-08-14: swarm took 4 nudges in 41 minutes
-        # while pushing commits between them; the gaps to its last activity were 0s,
-        # 134s, 2s and 30s.
+        # #1615 REPLACED #1610's SIGNAL, AND THE MEASUREMENT IS WHY.
         #
-        # A STALLED WORKER IS UNAFFECTED BY CONSTRUCTION, which is what makes this safe:
-        # a worker that dropped its task makes no calls at all, so its gap is unbounded
-        # and it is still nudged. #225 exists for that case and is not weakened.
+        # #1610 keyed this on `mcp_activity_lookup` — the worker's last MCP dispatch.
+        # Correct code, wrong signal: it never sees Bash, Edit, Read or Write, so a
+        # worker running a four-minute test suite and writing a commit makes ZERO MCP
+        # calls while being unambiguously busy. Measured over two hours: 27 MCP-ish
+        # events against 91 worker-attributed ones — under a third of the activity.
+        # Replayed against 8 real nudges it would have suppressed 2; the signal below
+        # suppresses 7.
+        #
+        # `state_duration` IS ALREADY HERE — no lookup, no durable store, and none of
+        # #1610's reload-reset gap, because it is derived from the state machine rather
+        # than an in-memory map that empties on restart.
+        #
+        # WHAT IT MEANS: a short RESTING duration means the worker just FINISHED A TURN
+        # and is at its prompt between pieces of work. A long one means it stopped and
+        # did not come back — which is the worker #225 exists to catch. SLEEPING is
+        # RESTING past `sleeping_threshold` (1200s), so a slept worker always exceeds
+        # this window and is never suppressed.
+        #
+        # AC5's WORRY DOES NOT APPLY HERE, and it is worth saying rather than assuming:
+        # a worker looping on a failing check stays BUZZING, and `_should_nudge` only
+        # admits RESTING/SLEEPING — so it is never nudged by this watcher in the first
+        # place, and this cannot suppress it.
         window = float(getattr(self._config, "idle_nudge_activity_window_seconds", 0.0) or 0.0)
-        if window > 0 and self._mcp_activity_lookup is not None:
-            try:
-                last = self._mcp_activity_lookup(worker.name)
-            except Exception:
-                _log.debug(
-                    "idle_watcher: mcp_activity_lookup raised for %s", worker.name, exc_info=True
-                )
-                last = None
-            # None means "no record", NOT "idle forever" — but here the two agree: a
-            # worker with no MCP activity at all is exactly who should be nudged.
-            if last is not None:
-                idle_for = time.time() - float(last)
-                if idle_for < window:
-                    return f"active {idle_for:.0f}s ago (within {window:.0f}s window)"
+        resting_for = getattr(worker, "state_duration", None)
+        # isinstance, NOT float(): `float(MagicMock())` returns 1.0, so a coercing check
+        # silently suppressed every mock-backed worker — 29 existing tests turned red and
+        # showed it. A value that is not genuinely numeric is not evidence the worker just
+        # finished a turn, so it falls through to NUDGING, which is the safe direction.
+        numeric = isinstance(resting_for, int | float) and not isinstance(resting_for, bool)
+        if window > 0 and numeric and resting_for < window:
+            return f"finished a turn {resting_for:.0f}s ago (within {window:.0f}s window)"
 
         # Native /loop coexistence (task #761): a worker that self-scheduled
         # its next loop tick is parked, not free — leave it until it re-wakes.
