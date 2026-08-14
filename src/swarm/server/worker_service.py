@@ -38,6 +38,12 @@ _KILL_SHELL_EXIT_DELAY = 0.5  # after `exit`, before signalling the process
 # Prompt HEIGHT is what defeated the earlier detectors, so this is generous on purpose.
 _PROMPT_ANSWER_SCAN_LINES = 120
 
+# How long to wait before checking whether the answer actually took. Short enough that
+# the Queen is not blocked, long enough for a TUI to repaint. If the prompt is still
+# there after this, we report UNCONFIRMED rather than claiming success — a slow path may
+# still deliver, and "not yet confirmed" is the honest description of that state.
+_ANSWER_SETTLE_SECONDS = 2.0
+
 
 def _remembered_states(loader: Callable[[], dict[str, Any]] | None) -> dict[str, Any]:
     """Last-known worker states, or {} when unavailable.
@@ -413,13 +419,29 @@ class WorkerService:
         # to a NAMED prompt, not an automated write, and the fingerprint check is what
         # earns the distinction.
         await worker.process.send_keys(str(option), enter=True, automated=False)
+
+        # READ BACK. #1608 was filed because `queen_prompt_worker` reported "sent" for a
+        # message the guard was holding, and the caller could not tell. Reporting success
+        # here on the strength of having WRITTEN to the PTY would be the same defect in
+        # the tool built to fix it — which is exactly what the first live use hit.
+        await asyncio.sleep(_ANSWER_SETTLE_SECONDS)
+        still_open = self.check_prompt_answer(name, option, fingerprint)[0]
+        verdict = "answered" if not still_open else "SENT BUT NOT CONFIRMED"
         self._drone_log.add(
             DroneAction.OPERATOR,
             name,
-            f"answered prompt {fingerprint}: {message}",
+            f"{verdict} prompt {fingerprint}: {message}",
             category=LogCategory.OPERATOR,
         )
-        return f"answered {message}"
+        if still_open:
+            return (
+                f"SENT BUT NOT CONFIRMED — wrote {message}, and "
+                f"{_ANSWER_SETTLE_SECONDS:.0f}s later the prompt {fingerprint} is STILL "
+                f"OPEN. The keystroke may not have been accepted. Re-read with "
+                f"queen_view_worker_state before assuming it took; if the fingerprint is "
+                f"unchanged, try queen_dismiss_prompt or ask the operator."
+            )
+        return f"answered {message} — confirmed, the prompt is gone"
 
     async def arrow_up_worker(self, name: str) -> None:
         """Send Up Arrow to a worker's process."""

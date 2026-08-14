@@ -248,3 +248,87 @@ def test_the_round_trip_holds_view_fingerprint_answers_the_prompt():
 
     assert ok is True
     assert "Yes, and use auto mode" in message
+
+
+# ---------------------------------------------------------------------------
+# The answer path must READ BACK, not report success from having written
+# ---------------------------------------------------------------------------
+#
+# FIRST LIVE USE, 2026-08-14: queen_answer_prompt returned "answering option 1
+# (Yes, and use auto mode)" and 16 seconds later the picker was IDENTICAL — same
+# fingerprint, same cursor, worker still SLEEPING. The tool reported success on the
+# strength of having written to the PTY. That is precisely the defect #1608 was filed
+# about — queen_prompt_worker saying "sent" for a held message — reproduced inside the
+# fix for it.
+
+
+@pytest.mark.asyncio
+async def test_the_answer_reports_UNCONFIRMED_when_the_prompt_survives():
+    """The reported case. A caller cannot distinguish "wrote the key" from "the prompt
+    is gone", so the tool must not conflate them."""
+    from swarm.server.worker_service import WorkerService
+
+    svc = WorkerService.__new__(WorkerService)
+    worker = MagicMock()
+    worker.name = "platform-api"
+    worker.process.get_content.return_value = REAL_PLAN_PICKER  # never clears
+    worker.process.send_keys = AsyncMock(return_value=True)
+    svc._get_workers = lambda: [worker]  # type: ignore[method-assign]
+    svc._get_pilot = lambda: None  # type: ignore[method-assign]
+    svc._drone_log = MagicMock()
+
+    from swarm.mcp.queen_handlers._views import _open_prompt_payload
+    from swarm.server import worker_service as ws
+
+    ws._ANSWER_SETTLE_SECONDS = 0.0  # do not make the suite wait
+    fp = _open_prompt_payload(REAL_PLAN_PICKER)["fingerprint"]
+
+    outcome = await svc.answer_open_prompt("platform-api", 1, fp)
+
+    assert "NOT CONFIRMED" in outcome
+    assert worker.process.send_keys.await_count == 1, "it must still have tried"
+    logged = [c.args[2] for c in svc._drone_log.add.call_args_list if len(c.args) >= 3]
+    assert any("SENT BUT NOT CONFIRMED" in str(m) for m in logged)
+
+
+@pytest.mark.asyncio
+async def test_the_answer_reports_CONFIRMED_when_the_prompt_clears():
+    """POSITIVE CONTROL, and it is what stops the fix from being 'always say unconfirmed'
+    — which would pass the test above while making the tool useless."""
+    from swarm.server import worker_service as ws
+    from swarm.server.worker_service import WorkerService
+
+    ws._ANSWER_SETTLE_SECONDS = 0.0
+    from swarm.mcp.queen_handlers._views import _open_prompt_payload
+
+    fp = _open_prompt_payload(REAL_PLAN_PICKER)["fingerprint"]
+
+    svc = WorkerService.__new__(WorkerService)
+    worker = MagicMock()
+    worker.name = "platform-api"
+    # Picker on the first read (validation), gone on the read-back.
+    # re-validate reads the picker; the read-back reads a cleared screen.
+    worker.process.get_content.side_effect = [REAL_PLAN_PICKER, "done\n"]
+    worker.process.send_keys = AsyncMock(return_value=True)
+    svc._get_workers = lambda: [worker]  # type: ignore[method-assign]
+    svc._get_pilot = lambda: None  # type: ignore[method-assign]
+    svc._drone_log = MagicMock()
+
+    outcome = await svc.answer_open_prompt("platform-api", 1, fp)
+
+    assert "confirmed" in outcome
+    assert "NOT CONFIRMED" not in outcome
+
+
+def test_the_handler_never_claims_the_prompt_was_answered():
+    """`_fire_async` returns before the keystroke is written, so the handler cannot know.
+    Pinned as a WORDING contract because the wording is the defect: 'answering' read as
+    success to the caller who then reported it publicly."""
+    import inspect
+
+    from swarm.mcp.queen_handlers import _workers
+
+    src = inspect.getsource(_workers._handle_answer_prompt)
+
+    assert "NOT YET CONFIRMED" in src
+    assert "SENT option" in src

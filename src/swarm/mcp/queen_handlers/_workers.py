@@ -234,7 +234,25 @@ def _handle_answer_prompt(
         label=f"answer_prompt({target})",
         daemon=d,
     )
-    return [{"type": "text", "text": f"{target}: answering {message}"}]
+    # DO NOT SAY "answered". `_fire_async` returns before the keystroke is written, so
+    # this handler cannot know the outcome — and the first live use of this tool reported
+    # success while the picker stayed open for 16 seconds. That is the same defect #1608
+    # was filed about, reproduced inside the fix for it. The service layer reads back
+    # after the write and records the verified verdict; this says only what it knows.
+    return [
+        {
+            "type": "text",
+            "text": (
+                f"{target}: SENT option {option} ({message}) — NOT YET CONFIRMED.\n"
+                f"The keystroke is written asynchronously and the effect is not visible "
+                f"from here. Re-read with queen_view_worker_state(worker='{target}'): if "
+                f"the `prompt` block is gone, it took; if fingerprint {fingerprint} is "
+                f"still there, it did not, and queen_dismiss_prompt or the operator is "
+                f"the next step. The verified outcome is also written to the buzz log as "
+                f"'answered' or 'SENT BUT NOT CONFIRMED'."
+            ),
+        }
+    ]
 
 
 def _handle_dismiss_prompt(
