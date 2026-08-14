@@ -273,6 +273,9 @@ async def test_the_answer_reports_UNCONFIRMED_when_the_prompt_survives():
     worker.name = "platform-api"
     worker.process.get_content.return_value = REAL_PLAN_PICKER  # never clears
     worker.process.send_keys = AsyncMock(return_value=True)
+    worker.process.send_enter = AsyncMock()
+    worker.process.send_arrow_down = AsyncMock()
+    worker.process.send_arrow_up = AsyncMock()
     svc._get_workers = lambda: [worker]  # type: ignore[method-assign]
     svc._get_pilot = lambda: None  # type: ignore[method-assign]
     svc._drone_log = MagicMock()
@@ -286,7 +289,12 @@ async def test_the_answer_reports_UNCONFIRMED_when_the_prompt_survives():
     outcome = await svc.answer_open_prompt("platform-api", 1, fp)
 
     assert "NOT CONFIRMED" in outcome
-    assert worker.process.send_keys.await_count == 1, "it must still have tried"
+    assert worker.process.send_enter.await_count == 1, "it must still have tried"
+    # THE KEY ASSERTION. Cursor is already on option 1, so no arrows and — crucially —
+    # NO DIGIT. Typing "1" into a picker that does not consume number keys makes it FREE
+    # TEXT, which is the exact harm #1451 exists to prevent.
+    worker.process.send_keys.assert_not_awaited()
+    assert worker.process.send_arrow_down.await_count == 0
     logged = [c.args[2] for c in svc._drone_log.add.call_args_list if len(c.args) >= 3]
     assert any("SENT BUT NOT CONFIRMED" in str(m) for m in logged)
 
@@ -307,9 +315,12 @@ async def test_the_answer_reports_CONFIRMED_when_the_prompt_clears():
     worker = MagicMock()
     worker.name = "platform-api"
     # Picker on the first read (validation), gone on the read-back.
-    # re-validate reads the picker; the read-back reads a cleared screen.
-    worker.process.get_content.side_effect = [REAL_PLAN_PICKER, "done\n"]
+    # re-validate, then the cursor read, then the read-back on a cleared screen.
+    worker.process.get_content.side_effect = [REAL_PLAN_PICKER, REAL_PLAN_PICKER, "done\n"]
     worker.process.send_keys = AsyncMock(return_value=True)
+    worker.process.send_enter = AsyncMock()
+    worker.process.send_arrow_down = AsyncMock()
+    worker.process.send_arrow_up = AsyncMock()
     svc._get_workers = lambda: [worker]  # type: ignore[method-assign]
     svc._get_pilot = lambda: None  # type: ignore[method-assign]
     svc._drone_log = MagicMock()
@@ -332,3 +343,38 @@ def test_the_handler_never_claims_the_prompt_was_answered():
 
     assert "NOT YET CONFIRMED" in src
     assert "SENT option" in src
+
+
+@pytest.mark.asyncio
+async def test_answering_a_non_cursored_option_moves_with_arrows():
+    """Cursor on 1, target 3 → two Down presses, then Enter, and STILL no digit.
+
+    This is how a human answers the prompt, and it is the only mechanism whose worst
+    case is a moved cursor rather than a stray character submitted as a message.
+    """
+    from swarm.mcp.queen_handlers._views import _open_prompt_payload
+    from swarm.server import worker_service as ws
+    from swarm.server.worker_service import WorkerService
+
+    ws._ANSWER_SETTLE_SECONDS = 0.0
+    ws._ARROW_STEP_SECONDS = 0.0
+    fp = _open_prompt_payload(REAL_PLAN_PICKER)["fingerprint"]
+
+    svc = WorkerService.__new__(WorkerService)
+    worker = MagicMock()
+    worker.name = "platform-api"
+    worker.process.get_content.return_value = REAL_PLAN_PICKER
+    worker.process.send_keys = AsyncMock(return_value=True)
+    worker.process.send_enter = AsyncMock()
+    worker.process.send_arrow_down = AsyncMock()
+    worker.process.send_arrow_up = AsyncMock()
+    svc._get_workers = lambda: [worker]
+    svc._get_pilot = lambda: None
+    svc._drone_log = MagicMock()
+
+    await svc.answer_open_prompt("platform-api", 3, fp)
+
+    assert worker.process.send_arrow_down.await_count == 2
+    assert worker.process.send_arrow_up.await_count == 0
+    assert worker.process.send_enter.await_count == 1
+    worker.process.send_keys.assert_not_awaited()

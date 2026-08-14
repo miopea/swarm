@@ -44,6 +44,10 @@ _PROMPT_ANSWER_SCAN_LINES = 120
 # still deliver, and "not yet confirmed" is the honest description of that state.
 _ANSWER_SETTLE_SECONDS = 2.0
 
+# Pause between arrow keys so a TUI repaints between them. Without it a burst of escape
+# sequences can be coalesced and the cursor lands short of the target.
+_ARROW_STEP_SECONDS = 0.12
+
 
 def _remembered_states(loader: Callable[[], dict[str, Any]] | None) -> dict[str, Any]:
     """Last-known worker states, or {} when unavailable.
@@ -418,7 +422,34 @@ class WorkerService:
         # automated=False deliberately — see the docstring. This is a deliberate answer
         # to a NAMED prompt, not an automated write, and the fingerprint check is what
         # earns the distinction.
-        await worker.process.send_keys(str(option), enter=True, automated=False)
+        # MOVE THE CURSOR, THEN ENTER — never type the digit.
+        #
+        # The first version sent `send_keys("1", enter=True)`, and the first live use
+        # reported success while the picker stayed open. Typing a digit is the wrong
+        # instrument twice over: a picker that does not consume number keys receives it
+        # as FREE TEXT and the trailing Enter submits it — which is precisely the harm
+        # #1451's guard exists to prevent, done deliberately by the tool meant to fix it.
+        #
+        # Arrows and Enter write no printable character, so the worst case is a cursor
+        # that moved. This is also how a human answers the prompt, which is the standard
+        # the rest of this path is held to.
+        from swarm.pty.prompt_options import parse_open_prompt
+
+        prompt = parse_open_prompt(worker.process.get_content(_PROMPT_ANSWER_SCAN_LINES))
+        cursor_at = prompt.cursored.number if (prompt and prompt.cursored) else None
+        if cursor_at is None:
+            return (
+                f"cannot answer {fingerprint}: no option is highlighted, so there is "
+                f"nothing to move from. Read the prompt again or use queen_dismiss_prompt."
+            )
+        steps = option - cursor_at
+        for _ in range(abs(steps)):
+            if steps > 0:
+                await worker.process.send_arrow_down()
+            else:
+                await worker.process.send_arrow_up()
+            await asyncio.sleep(_ARROW_STEP_SECONDS)
+        await worker.process.send_enter()
 
         # READ BACK. #1608 was filed because `queen_prompt_worker` reported "sent" for a
         # message the guard was holding, and the caller could not tell. Reporting success
