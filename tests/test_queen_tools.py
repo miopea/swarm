@@ -351,7 +351,9 @@ class TestInterruptWorker:
             QUEEN_WORKER_NAME,
             {"worker": "alice", "reason": "drift"},
         )
-        assert "Interrupt sent to alice" in _text(result)
+        # #1608: reports the dispatch and states what it cannot know.
+        assert "SIGINT dispatched to alice" in _text(result)
+        assert "NOT CONFIRMED" in _text(result)
         daemon.drone_log.add.assert_called()
 
 

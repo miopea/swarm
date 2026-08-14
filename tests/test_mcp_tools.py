@@ -1882,7 +1882,10 @@ class TestQueenInterruptWorker:
             "queen_interrupt_worker",
             {"worker": "hub", "reason": "stuck for 20m"},
         )
-        assert "Interrupt sent to hub" in result[0]["text"]
+        # #1608: the response now describes a DISPATCH, not an outcome — "Interrupt sent"
+        # was read as "the interrupt worked" and cost the fleet hours.
+        assert "SIGINT dispatched to hub" in result[0]["text"]
+        assert "NOT CONFIRMED" in result[0]["text"]
         d.worker_svc.interrupt_worker.assert_called_once_with("hub")
 
     def test_refuses_to_interrupt_queen(self, queen_action_daemon):
