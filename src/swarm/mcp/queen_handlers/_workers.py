@@ -294,6 +294,55 @@ def _handle_interrupt_worker(
     return [{"type": "text", "text": f"Interrupt sent to {target}."}]
 
 
+# How much screen to read when checking for the hold. Matches
+# ``pty.process._PROMPT_SCAN_LINES`` — this must see exactly what the guard sees, or the
+# handler could promise delivery for a message the guard is about to defer.
+_PROMPT_HOLD_SCAN_LINES = 120
+
+
+def _refuse_if_prompt_would_hold(worker: Any, target: str) -> list[TextContent] | None:
+    """Refuse a prompt that the #1451 guard would silently hold (#1608).
+
+    MEASURED 2026-08-14: `queen_prompt_worker` reported "Prompt sent" for a message that
+    `send_keys` immediately deferred, because `_fire_async` returns before the guard runs.
+    From the Queen's side a HELD message and a DELIVERED one were IDENTICAL — which is
+    why she spent a night believing she had no way to act on a stalled worker, while the
+    one tool that could reach it kept telling her it had.
+
+    Refusing beats queueing: a message delivered whenever the prompt happens to close is
+    a message arriving with no relation to why it was sent.
+    """
+    proc = getattr(worker, "process", None)
+    if proc is None:
+        return None
+    try:
+        from swarm.pty.prompt_guard import has_open_selection_prompt
+
+        if not has_open_selection_prompt(proc.get_content(_PROMPT_HOLD_SCAN_LINES)):
+            return None
+    except Exception:
+        # Unknowable → report the send. Inventing a hold would block the Queen's only
+        # channel on a read failure, which is the worse direction.
+        return None
+    return [
+        {
+            "type": "text",
+            "text": (
+                f"NOT SENT — {target} has an open selection prompt, so this message would "
+                f"be HELD by the #1451 guard and delivered only once the prompt closes. "
+                f"Nothing was queued.\n"
+                f"To act on the prompt itself: queen_view_worker_state(worker='{target}', "
+                f"lines=200) to read the options, then queen_answer_prompt to select one, "
+                f"or queen_dismiss_prompt to send Escape.\n"
+                f"queen_interrupt_worker does NOT close a picker: it sends SIGINT to the "
+                f"process group, and a picker is an input WAIT rather than a running turn, "
+                f"so the signal has nothing to cancel. Measured on a real prompt "
+                f"2026-08-14 — the picker survived the interrupt."
+            ),
+        }
+    ]
+
+
 def _handle_prompt_worker(
     d: SwarmDaemon, worker_name: str, args: QueenPromptWorkerArgs
 ) -> list[TextContent]:
@@ -370,6 +419,16 @@ def _handle_prompt_worker(
     worker_svc = getattr(d, "worker_svc", None)
     if worker_svc is None:
         return [{"type": "text", "text": "Worker service unavailable."}]
+    # #1608: CHECK FOR THE HOLD BEFORE CLAIMING DELIVERY. `_fire_async` returns
+    # immediately, so this handler reported "Prompt sent" for a message that
+    # `send_keys` was about to defer — and a HELD message and a DELIVERED one were
+    # indistinguishable from the Queen's side. She spent a night believing she had no
+    # way to act on a stalled worker, because the only tool that could reach it kept
+    # telling her it had.
+    refusal = _refuse_if_prompt_would_hold(worker, target)
+    if refusal:
+        return refusal
+
     _fire_async(worker_svc.send_to_worker(target, prompt, automated=True, _log_operator=False))
     suffix = " — queued for next turn" if will_queue else ""
     lines = [f"Prompt sent to {target}{suffix}.", f"Target engagement: {engagement_str}."]

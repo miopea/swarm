@@ -2285,15 +2285,17 @@ class SwarmDaemon(EventEmitter):
         enter: bool = True,
         automated: bool = False,
         _log_operator: bool = True,
-    ) -> None:
-        """Send text to a worker's process. Pass ``enter=False`` to type
+    ) -> bool:
+        """Send text to a worker's process. True if DELIVERED, False if HELD (#1608).
+
+        Pass ``enter=False`` to type
         the message into the input buffer without submitting (used by
         the Web Share Target flow).
 
         ``automated=True`` (#1451) marks a message no human chose to send now,
         so it is held back rather than typed into an open question. Default
         stays False: this method is also the operator's dashboard send."""
-        await self.worker_svc.send_to_worker(
+        return await self.worker_svc.send_to_worker(
             name, message, enter=enter, automated=automated, _log_operator=_log_operator
         )
 

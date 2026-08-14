@@ -442,7 +442,7 @@ class WorkerProcess:
         # Fallback to own command
         return self.get_foreground_command()
 
-    async def send_keys(self, text: str, enter: bool = True, *, automated: bool = False) -> None:
+    async def send_keys(self, text: str, enter: bool = True, *, automated: bool = False) -> bool:
         """Send text to the worker's PTY.
 
         Text and Enter are sent as separate writes so that interactive
@@ -463,12 +463,17 @@ class WorkerProcess:
         for — a guard that blocked them would make an open question unanswerable.
         """
         if automated and self._defer_if_prompt_open(text, enter):
-            return
+            # #1608: report the hold. Returning None made a HELD message and a
+            # DELIVERED one indistinguishable to every caller, so the Queen was told
+            # "Prompt sent" for a message sitting in _deferred_keys — and spent a night
+            # believing she had no way to act. A send that cannot be delivered must say so.
+            return False
         await self._flush_deferred_keys()
         await self._write(text.encode("utf-8"))
         if enter:
             await asyncio.sleep(_INPUT_DRAIN_DELAY)
             await self._write(b"\r")
+        return True
 
     def _defer_if_prompt_open(self, text: str, enter: bool) -> bool:
         """Queue an automated write if a selection prompt is open. True if held.

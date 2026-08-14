@@ -253,8 +253,14 @@ class WorkerService:
         enter: bool = True,
         automated: bool = False,
         _log_operator: bool = True,
-    ) -> None:
-        """Send text to a worker's process (serialized per-worker).
+    ) -> bool:
+        """Send text to a worker's process (serialized per-worker). True if DELIVERED.
+
+        #1608: returns False when the write was HELD by the open-prompt guard. It used
+        to return None either way, so a held message and a delivered one were
+        indistinguishable to every caller — the Queen was told "Prompt sent" for a
+        message sitting in ``_deferred_keys``, and spent a night believing she had no
+        way to act on a stalled worker.
 
         ``enter=False`` types the message into the PTY input buffer
         without submitting — used by the Web Share Target flow so the
@@ -285,12 +291,20 @@ class WorkerService:
             # The hold-and-flush itself lives in WorkerProcess.send_keys, which is
             # the ONE choke point every write passes through — including the ~13
             # sites that hold a PtyProcess and never reach this method.
-            await worker.process.send_keys(message, enter=enter, automated=automated)
+            delivered = await worker.process.send_keys(message, enter=enter, automated=automated)
+        # `is not False` so a provider whose send_keys still returns None is read as
+        # delivered rather than silently reported as held — the safe direction while
+        # the return value propagates through the tree.
+        delivered = delivered is not False
         if _log_operator:
             self._drone_log.add(
-                DroneAction.OPERATOR, name, "sent message", category=LogCategory.OPERATOR
+                DroneAction.OPERATOR,
+                name,
+                "sent message" if delivered else "message HELD — selection prompt open",
+                category=LogCategory.OPERATOR,
             )
             self._record_override(name, "redirected_worker", "sent message")
+        return delivered
 
     async def continue_worker(self, name: str) -> None:
         """Send Enter to a worker's process (serialized per-worker)."""
