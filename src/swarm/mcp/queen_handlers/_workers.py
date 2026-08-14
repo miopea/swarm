@@ -308,8 +308,36 @@ def _handle_interrupt_worker(
     worker_svc = getattr(d, "worker_svc", None)
     if worker_svc is None:
         return [{"type": "text", "text": "Worker service unavailable."}]
-    _fire_async(worker_svc.interrupt_worker(target))
-    return [{"type": "text", "text": f"Interrupt sent to {target}."}]
+    # #1608: "Interrupt sent" was TRUE AND USELESS. The signal is dispatched; whether it
+    # cancelled anything is a different fact, and the Queen believed the first for the
+    # second — reporting to the operator that an interrupt had worked while the picker it
+    # was aimed at stayed open. Say what is known and what is not.
+    target_worker = next((w for w in d.workers if w.name == target), None)
+    on_picker = (
+        target_worker is not None
+        and _refuse_if_prompt_would_hold(target_worker, target) is not None
+    )
+    picker_note = (
+        "\nTHIS WORKER IS ON A SELECTION PROMPT AND SIGINT WILL NOT CLOSE IT. A picker is "
+        "an input WAIT, not a running turn, so the signal has nothing to cancel — measured "
+        "on a real prompt 2026-08-14. Use queen_dismiss_prompt (Escape) to decline it, or "
+        "queen_answer_prompt to choose an option."
+        if on_picker
+        else ""
+    )
+    _fire_async(worker_svc.interrupt_worker(target), label=f"interrupt({target})", daemon=d)
+    return [
+        {
+            "type": "text",
+            "text": (
+                f"SIGINT dispatched to {target} — NOT CONFIRMED as having cancelled "
+                f"anything. This sends an OS signal to the process group; whether the "
+                f"worker's current activity stops is a separate fact this tool cannot "
+                f"see. Re-read with queen_view_worker_state before concluding it "
+                f"worked.{picker_note}"
+            ),
+        }
+    ]
 
 
 # How much screen to read when checking for the hold. Matches

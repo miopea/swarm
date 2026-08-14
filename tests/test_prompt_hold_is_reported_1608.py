@@ -378,3 +378,48 @@ async def test_answering_a_non_cursored_option_moves_with_arrows():
     assert worker.process.send_arrow_up.await_count == 0
     assert worker.process.send_enter.await_count == 1
     worker.process.send_keys.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# queen_interrupt_worker: say what is known, not what was dispatched
+# ---------------------------------------------------------------------------
+#
+# "Interrupt sent to platform-api" was TRUE AND USELESS. The Queen read it as
+# "the interrupt worked", reported that to the operator, and the picker it was aimed at
+# stayed open for ten more minutes. Together with queen_prompt_worker's "Prompt sent"
+# for a held message, those two responses cost the fleet ~15 worker-hours — not because
+# they lied, but because they described a DISPATCH and were read as an OUTCOME.
+
+
+def _interrupt(screen: str) -> str:
+    from swarm.mcp.queen_handlers._workers import _handle_interrupt_worker
+
+    d = _daemon_with(screen)
+    d.worker_svc.interrupt_worker = MagicMock()
+    result = _handle_interrupt_worker(d, "queen", {"worker": "platform-api", "reason": "probe"})
+    return result[0]["text"]
+
+
+def test_interrupt_does_not_claim_it_cancelled_anything():
+    """It dispatches an OS signal; whether anything stopped is a different fact."""
+    text = _interrupt("just working\n")
+
+    assert "NOT CONFIRMED" in text
+    assert "queen_view_worker_state" in text, "it must name how to check"
+
+
+def test_interrupt_warns_when_the_target_is_on_a_picker():
+    """THE CASE THAT COST THE HOURS. SIGINT cannot close a picker — it is an input WAIT,
+    not a running turn, so there is nothing to cancel. Saying so at the moment of the
+    call beats leaving the finding in a resolution nobody opens then."""
+    text = _interrupt(REAL_PLAN_PICKER)
+
+    assert "WILL NOT CLOSE IT" in text
+    assert "queen_dismiss_prompt" in text
+    assert "queen_answer_prompt" in text
+
+
+def test_the_picker_warning_is_absent_for_an_ordinary_worker():
+    """POSITIVE CONTROL. A warning printed unconditionally is noise, and noise is how a
+    real warning stops being read."""
+    assert "WILL NOT CLOSE IT" not in _interrupt("ordinary output\n")
