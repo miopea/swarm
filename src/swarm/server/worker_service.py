@@ -357,6 +357,52 @@ class WorkerService:
             DroneAction.OPERATOR, name, "sent Escape", category=LogCategory.OPERATOR
         )
 
+    async def dismiss_open_prompt(self, name: str) -> str:
+        """Send Escape to close a selection prompt, then READ BACK (#1623).
+
+        The last of the four verbs to get this treatment. `escape_worker` reported
+        "Escape sent" — a DISPATCH described as an OUTCOME, which is the wording that
+        cost the fleet roughly fifteen worker-hours through `queen_prompt_worker`'s
+        "Prompt sent" and `queen_interrupt_worker`'s "Interrupt sent".
+
+        NOTHING HERE ASSUMES ESCAPE WORKS. The prompt footer on a real captured picker
+        reads "Esc to cancel", and `send_escape` writes 0x1b via `_write` so the #1451
+        hold does not apply — but neither of those has been observed to CLOSE a picker,
+        and the interrupt lesson is that a plausible code reading is not a measurement.
+        This reports what it sees rather than what the code suggests.
+        """
+        from swarm.pty.prompt_options import parse_open_prompt
+
+        worker = self.require_worker(name)
+        self._require_process(worker)
+        before = parse_open_prompt(worker.process.get_content(_PROMPT_ANSWER_SCAN_LINES))
+        if before is None:
+            return "no selection prompt is open — nothing was sent"
+
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.wake_worker(name)
+        await worker.process.send_escape()
+        await asyncio.sleep(_ANSWER_SETTLE_SECONDS)
+
+        after = parse_open_prompt(worker.process.get_content(_PROMPT_ANSWER_SCAN_LINES))
+        gone = after is None or after.fingerprint != before.fingerprint
+        verdict = "dismissed" if gone else "SENT BUT NOT CONFIRMED"
+        self._drone_log.add(
+            DroneAction.OPERATOR,
+            name,
+            f"{verdict} prompt {before.fingerprint} (Escape)",
+            category=LogCategory.OPERATOR,
+        )
+        if gone:
+            return f"dismissed prompt {before.fingerprint} — confirmed, it is gone"
+        return (
+            f"SENT BUT NOT CONFIRMED — wrote Escape, and {_ANSWER_SETTLE_SECONDS:.0f}s "
+            f"later prompt {before.fingerprint} is STILL OPEN. Escape may not close this "
+            f"picker. Re-read with queen_view_worker_state; if it is unchanged, "
+            f"queen_answer_prompt selecting the deny option is the proven route."
+        )
+
     def check_prompt_answer(self, name: str, option: int, fingerprint: str) -> tuple[bool, str]:
         """Validate an answer WITHOUT sending it. Returns ``(ok, message)``.
 

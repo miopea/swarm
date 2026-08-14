@@ -423,3 +423,86 @@ def test_the_picker_warning_is_absent_for_an_ordinary_worker():
     """POSITIVE CONTROL. A warning printed unconditionally is noise, and noise is how a
     real warning stops being read."""
     assert "WILL NOT CLOSE IT" not in _interrupt("ordinary output\n")
+
+
+# ---------------------------------------------------------------------------
+# #1623 — dismiss was the last verb reporting a dispatch as an outcome
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_dismiss_reports_CONFIRMED_when_the_picker_closes():
+    from swarm.server import worker_service as ws
+    from swarm.server.worker_service import WorkerService
+
+    ws._ANSWER_SETTLE_SECONDS = 0.0
+    svc = WorkerService.__new__(WorkerService)
+    worker = MagicMock()
+    worker.name = "nexus"
+    worker.process.get_content.side_effect = [REAL_PLAN_PICKER, "the prompt closed\n"]
+    worker.process.send_escape = AsyncMock()
+    svc._get_workers = lambda: [worker]
+    svc._get_pilot = lambda: None
+    svc._drone_log = MagicMock()
+
+    outcome = await svc.dismiss_open_prompt("nexus")
+
+    assert "confirmed" in outcome
+    worker.process.send_escape.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dismiss_reports_UNCONFIRMED_when_the_picker_survives():
+    """THE OUTCOME THIS TICKET EXPECTS TO BE POSSIBLE. `queen_interrupt_worker` looked
+    equally sound on the same style of reasoning and does not close a picker at all, so
+    Escape must be able to report failure rather than assume success."""
+    from swarm.server import worker_service as ws
+    from swarm.server.worker_service import WorkerService
+
+    ws._ANSWER_SETTLE_SECONDS = 0.0
+    svc = WorkerService.__new__(WorkerService)
+    worker = MagicMock()
+    worker.name = "nexus"
+    worker.process.get_content.return_value = REAL_PLAN_PICKER  # never closes
+    worker.process.send_escape = AsyncMock()
+    svc._get_workers = lambda: [worker]
+    svc._get_pilot = lambda: None
+    svc._drone_log = MagicMock()
+
+    outcome = await svc.dismiss_open_prompt("nexus")
+
+    assert "NOT CONFIRMED" in outcome
+    assert "queen_answer_prompt" in outcome, "it must name the proven route"
+
+
+@pytest.mark.asyncio
+async def test_dismiss_refuses_when_no_prompt_is_open():
+    """Escape into an ordinary session cancels whatever the worker was typing. Sending
+    it blindly would make a no-op call destructive."""
+    from swarm.server.worker_service import WorkerService
+
+    svc = WorkerService.__new__(WorkerService)
+    worker = MagicMock()
+    worker.name = "nexus"
+    worker.process.get_content.return_value = "just working\n"
+    worker.process.send_escape = AsyncMock()
+    svc._get_workers = lambda: [worker]
+    svc._get_pilot = lambda: None
+    svc._drone_log = MagicMock()
+
+    outcome = await svc.dismiss_open_prompt("nexus")
+
+    assert "no selection prompt is open" in outcome
+    worker.process.send_escape.assert_not_awaited()
+
+
+def test_the_dismiss_description_does_not_claim_escape_works():
+    """#1623's whole point. The description used to assert 'Escape only closes the
+    prompt' as fact — the same confident code reading that made the interrupt failure
+    surprising. It now says the behaviour is unobserved and names the proven route."""
+    from swarm.mcp.queen_handlers._workers import TOOLS
+
+    desc = next(t for t in TOOLS if t["name"] == "queen_dismiss_prompt")["description"]
+
+    assert "NOT YET OBSERVED" in desc
+    assert "queen_answer_prompt" in desc

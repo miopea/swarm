@@ -60,11 +60,17 @@ TOOLS: list[dict[str, Any]] = [
             "Send Escape to a worker showing a selection prompt — the CLI's own documented "
             "dismissal ('Esc to cancel' appears in the prompt footer). "
             "CALL THIS WHEN a worker is stalled on a picker whose answer should be NO, or "
-            "when you want the prompt gone without deciding it. Prefer it over "
-            "queen_interrupt_worker for declining a picker: Ctrl-C cancels the entire turn "
-            "and loses in-flight work, while Escape only closes the prompt. When you want "
-            "to ACCEPT an option instead, use queen_answer_prompt. Always give a reason; it "
-            "lands in the buzz log."
+            "when you want the prompt gone without deciding it. "
+            "NOT YET OBSERVED TO WORK (#1623): the footer says 'Esc to cancel' and the "
+            "keystroke reaches the PTY, but nobody has watched Escape actually close a "
+            "picker, and whether it DENIES the prompt or merely dismisses it without "
+            "recording a choice is unknown. queen_interrupt_worker looked equally sound "
+            "on the same kind of reasoning and does not work at all. The tool reads back "
+            "and will tell you which happened — report it. "
+            "The PROVEN route for declining is queen_answer_prompt selecting the deny "
+            "option. Prefer this over queen_interrupt_worker regardless: Ctrl-C cancels "
+            "the whole turn and loses in-flight work. Always give a reason; it lands in "
+            "the buzz log."
         ),
         "inputSchema": {
             "type": "object",
@@ -277,8 +283,38 @@ def _handle_dismiss_prompt(
         f"queen dismissed prompt (Esc): {truncate_for_log(reason, 120)}",
         category=LogCategory.OPERATOR,
     )
-    _fire_async(worker_svc.escape_worker(target))
-    return [{"type": "text", "text": f"Escape sent to {target}."}]
+    # #1623: the last verb still reporting a DISPATCH as an OUTCOME. Validate
+    # synchronously so the "no prompt open" case is truthful, then let the service read
+    # back and record the verified verdict.
+    worker = next((w for w in d.workers if w.name == target), None)
+    if worker is not None and _refuse_if_prompt_would_hold(worker, target) is None:
+        return [
+            {
+                "type": "text",
+                "text": (
+                    f"{target}: no selection prompt is open — nothing was sent. Escape "
+                    f"into an ordinary session would cancel whatever the worker was "
+                    f"typing, so it is refused rather than sent blindly."
+                ),
+            }
+        ]
+    _fire_async(worker_svc.dismiss_open_prompt(target), label=f"dismiss_prompt({target})", daemon=d)
+    return [
+        {
+            "type": "text",
+            "text": (
+                f"{target}: SENT Escape — NOT YET CONFIRMED.\n"
+                f"Escape is written asynchronously and the effect is not visible from "
+                f"here. Re-read with queen_view_worker_state(worker='{target}'): if the "
+                f"`prompt` block is gone it took; if it is unchanged, Escape does not "
+                f"close this picker and queen_answer_prompt selecting the deny option is "
+                f"the proven route. The verified outcome is written to the buzz log as "
+                f"'dismissed' or 'SENT BUT NOT CONFIRMED'.\n"
+                f"NOTE: whether Escape DENIES the prompt or merely dismisses it without "
+                f"recording a choice has never been observed. Report what you see."
+            ),
+        }
+    ]
 
 
 def _handle_interrupt_worker(
