@@ -50,6 +50,7 @@ _NON_NEGATIVE_NUMBERS: frozenset[str] = frozenset(
         "context_critical_threshold",
         "idle_nudge_interval_seconds",
         "idle_nudge_debounce_seconds",
+        "idle_nudge_activity_window_seconds",
         "assign_affinity_floor",
         "assign_operator_engagement_minutes",
     }

@@ -76,6 +76,7 @@ _KNOWN_DRONE_KEYS = {
     "speculation_enabled",
     "idle_nudge_interval_seconds",
     "idle_nudge_debounce_seconds",
+    "idle_nudge_activity_window_seconds",
     "reconcile_interval_seconds",
     "assign_affinity_floor",
     "assign_operator_engagement_minutes",

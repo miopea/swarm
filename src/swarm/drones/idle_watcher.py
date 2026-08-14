@@ -430,6 +430,32 @@ class IdleWatcher:
                 _log.debug(
                     "idle_watcher: worker_busy_check raised for %s", worker.name, exc_info=True
                 )
+        # #1610: RECENT ACTIVITY. Every other guard here asks about something OTHER
+        # than progress — was a human typing, is the PTY mid-turn, is a loop armed —
+        # so a worker resting between turns and a worker that dropped its task produce
+        # the identical signal. Measured 2026-08-14: swarm took 4 nudges in 41 minutes
+        # while pushing commits between them; the gaps to its last activity were 0s,
+        # 134s, 2s and 30s.
+        #
+        # A STALLED WORKER IS UNAFFECTED BY CONSTRUCTION, which is what makes this safe:
+        # a worker that dropped its task makes no calls at all, so its gap is unbounded
+        # and it is still nudged. #225 exists for that case and is not weakened.
+        window = float(getattr(self._config, "idle_nudge_activity_window_seconds", 0.0) or 0.0)
+        if window > 0 and self._mcp_activity_lookup is not None:
+            try:
+                last = self._mcp_activity_lookup(worker.name)
+            except Exception:
+                _log.debug(
+                    "idle_watcher: mcp_activity_lookup raised for %s", worker.name, exc_info=True
+                )
+                last = None
+            # None means "no record", NOT "idle forever" — but here the two agree: a
+            # worker with no MCP activity at all is exactly who should be nudged.
+            if last is not None:
+                idle_for = time.time() - float(last)
+                if idle_for < window:
+                    return f"active {idle_for:.0f}s ago (within {window:.0f}s window)"
+
         # Native /loop coexistence (task #761): a worker that self-scheduled
         # its next loop tick is parked, not free — leave it until it re-wakes.
         if self._loop_armed_check is not None:

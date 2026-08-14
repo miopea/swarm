@@ -354,6 +354,9 @@ def _parse_config(path: Path) -> HiveConfig:
             "assign_operator_engagement_minutes", 10.0
         ),
         idle_nudge_max_repeats=drones_data.get("idle_nudge_max_repeats", 3),
+        idle_nudge_activity_window_seconds=drones_data.get(
+            "idle_nudge_activity_window_seconds", 600.0
+        ),
         nudge_idle_for_informational=bool(drones_data.get("nudge_idle_for_informational", False)),
         message_fanout_max_recipients=int(drones_data.get("message_fanout_max_recipients", 5)),
         message_fanout_window_seconds=float(drones_data.get("message_fanout_window_seconds", 60.0)),

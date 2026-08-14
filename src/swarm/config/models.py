@@ -195,6 +195,18 @@ class DroneConfig:
     # Applies to both the idle-watcher and the inter-worker watcher.
     # 0 disables the cap → pre-#546 unbounded re-nudging.
     idle_nudge_max_repeats: int = 3
+    # #1610: seconds of recent MCP activity that SUPPRESS an idle nudge. The watcher
+    # fires on display-state idleness, which cannot distinguish a worker resting between
+    # turns from one that dropped its task — measured on 2026-08-14, swarm took 4 nudges
+    # in 41 minutes while pushing commits between them.
+    #
+    # 600 IS MEASURED, AND THE CEILING IS THE REAL CONSTRAINT: it must stay BELOW
+    # `idle_nudge_debounce_seconds` (900). At or above the debounce, any worker that acts
+    # once per debounce window is never nudged, and the suppression becomes
+    # indistinguishable from switching the watcher off. Time-weighted across four workers
+    # over 12h, 600s leaves 12-44% of an active worker's elapsed time still nudge-eligible
+    # — real suppression, not a blanket. Replayed against the 4 real nudges: 4/4 suppressed.
+    idle_nudge_activity_window_seconds: float = 600.0
     # Native /goal seeding: at task dispatch, translate the task's
     # acceptance_criteria into a native ``/goal`` condition on providers
     # whose CLI supports it (Claude Code, Codex). The provider's own
