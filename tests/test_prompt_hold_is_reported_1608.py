@@ -408,21 +408,26 @@ def test_interrupt_does_not_claim_it_cancelled_anything():
     assert "queen_view_worker_state" in text, "it must name how to check"
 
 
-def test_interrupt_warns_when_the_target_is_on_a_picker():
+def test_interrupt_refuses_when_the_target_is_on_a_picker():
     """THE CASE THAT COST THE HOURS. SIGINT cannot close a picker — it is an input WAIT,
-    not a running turn, so there is nothing to cancel. Saying so at the moment of the
-    call beats leaving the finding in a resolution nobody opens then."""
+    not a running turn, so there is nothing to cancel.
+
+    #1608 shipped a WARNING here. #1633 upgraded it to a REFUSAL: a note appended to a
+    completed send reads as advisory, and dispatching a signal already measured to do
+    nothing is not made honest by describing it afterwards. Full coverage of the refusal,
+    including that it writes no buzz-log entry, is in test_verb_honesty_1633.py.
+    """
     text = _interrupt(REAL_PLAN_PICKER)
 
-    assert "WILL NOT CLOSE IT" in text
+    assert "NOT SENT" in text
     assert "queen_dismiss_prompt" in text
     assert "queen_answer_prompt" in text
 
 
-def test_the_picker_warning_is_absent_for_an_ordinary_worker():
-    """POSITIVE CONTROL. A warning printed unconditionally is noise, and noise is how a
-    real warning stops being read."""
-    assert "WILL NOT CLOSE IT" not in _interrupt("ordinary output\n")
+def test_the_picker_refusal_is_absent_for_an_ordinary_worker():
+    """POSITIVE CONTROL. A refusal that fired on every target would remove the only way
+    to rescue a genuinely stuck BUZZING worker."""
+    assert "NOT SENT" not in _interrupt("ordinary output\n")
 
 
 # ---------------------------------------------------------------------------

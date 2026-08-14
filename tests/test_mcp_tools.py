@@ -1989,7 +1989,8 @@ class TestQueenPromptWorker:
             "queen_prompt_worker",
             {"worker": "platform", "prompt": "run /check", "reason": "pre-commit"},
         )
-        assert "Prompt sent to platform" in result[0]["text"]
+        # #1633: a dispatch, not an arrival — the send is fired async.
+        assert "DISPATCHED to platform" in result[0]["text"]
         d.worker_svc.send_to_worker.assert_called_once()
         args, kwargs = d.worker_svc.send_to_worker.call_args
         assert args[0] == "platform"
@@ -2005,7 +2006,7 @@ class TestQueenPromptWorker:
             {"worker": "hub", "prompt": "stop", "reason": "rate limit"},
         )
         text = result[0]["text"]
-        assert "Prompt sent to hub" in text
+        assert "DISPATCHED to hub" in text  # #1633
         assert "queued for next turn" in text
         d.worker_svc.send_to_worker.assert_called_once()
 

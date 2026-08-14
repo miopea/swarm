@@ -90,7 +90,14 @@ TOOLS: list[dict[str, Any]] = [
             "work.  Use only when the worker is genuinely stuck (queen_view_worker_state "
             "shows long BUZZING with flat token growth) or going the wrong direction "
             "and you've confirmed via the buzz log.  Always provide a reason — it "
-            "lands in the buzz log as an OPERATOR entry."
+            "lands in the buzz log as an OPERATOR entry. "
+            "REFUSES when the target is on a selection prompt (#1633), and sends nothing: "
+            "SIGINT does not close a picker. Measured on a real prompt 2026-08-14 — the "
+            "picker survived it, because a picker is an input WAIT rather than a running "
+            "turn and the signal has nothing to cancel. The refusal names "
+            "queen_dismiss_prompt and queen_answer_prompt, which do work. "
+            "On a worker with no prompt open this reports a DISPATCH, not an outcome; "
+            "re-read with queen_view_worker_state before concluding the turn stopped."
         ),
         "inputSchema": {
             "type": "object",
@@ -333,6 +340,29 @@ def _handle_interrupt_worker(
         return [{"type": "text", "text": "Refusing to interrupt the Queen herself."}]
     if not any(w.name == target for w in d.workers):
         return [{"type": "text", "text": f"Worker '{target}' not found."}]
+    # #1633: REFUSE on a picker rather than warning, and refuse BEFORE the buzz-log entry
+    # so the log does not record an interrupt that never happened. The #1608 version
+    # dispatched SIGINT and appended a note saying it would not work — better than
+    # silence, still wrong: it performs an action MEASURED to be useless, and a warning
+    # attached to a completed send reads as advisory. A picker is an input WAIT rather
+    # than a running turn, so the signal has nothing to cancel; the picker survived it on
+    # a real prompt 2026-08-14.
+    target_worker = next((w for w in d.workers if w.name == target), None)
+    if target_worker is not None and _refuse_if_prompt_would_hold(target_worker, target):
+        return [
+            {
+                "type": "text",
+                "text": (
+                    f"NOT SENT — {target} is on a selection prompt, and SIGINT does not "
+                    f"close one. A picker is an input WAIT rather than a running turn, "
+                    f"so the signal has nothing to cancel; measured on a real prompt "
+                    f"2026-08-14, the picker survived.\n"
+                    f"To decline it: queen_dismiss_prompt(worker='{target}', reason=…). "
+                    f"To choose an option: queen_view_worker_state(worker='{target}') "
+                    f"for the options and fingerprint, then queen_answer_prompt."
+                ),
+            }
+        ]
     from swarm.drones.log import LogCategory, SystemAction
 
     d.drone_log.add(
@@ -348,19 +378,6 @@ def _handle_interrupt_worker(
     # cancelled anything is a different fact, and the Queen believed the first for the
     # second — reporting to the operator that an interrupt had worked while the picker it
     # was aimed at stayed open. Say what is known and what is not.
-    target_worker = next((w for w in d.workers if w.name == target), None)
-    on_picker = (
-        target_worker is not None
-        and _refuse_if_prompt_would_hold(target_worker, target) is not None
-    )
-    picker_note = (
-        "\nTHIS WORKER IS ON A SELECTION PROMPT AND SIGINT WILL NOT CLOSE IT. A picker is "
-        "an input WAIT, not a running turn, so the signal has nothing to cancel — measured "
-        "on a real prompt 2026-08-14. Use queen_dismiss_prompt (Escape) to decline it, or "
-        "queen_answer_prompt to choose an option."
-        if on_picker
-        else ""
-    )
     _fire_async(worker_svc.interrupt_worker(target), label=f"interrupt({target})", daemon=d)
     return [
         {
@@ -370,7 +387,7 @@ def _handle_interrupt_worker(
                 f"anything. This sends an OS signal to the process group; whether the "
                 f"worker's current activity stops is a separate fact this tool cannot "
                 f"see. Re-read with queen_view_worker_state before concluding it "
-                f"worked.{picker_note}"
+                f"worked."
             ),
         }
     ]
@@ -512,8 +529,21 @@ def _handle_prompt_worker(
         return refusal
 
     _fire_async(worker_svc.send_to_worker(target, prompt, automated=True, _log_operator=False))
+    # #1633: NOT "Prompt sent". The open-prompt check above is synchronous, but the send
+    # is fired async — a prompt opening in that gap means the message is HELD while the
+    # caller has already been told it arrived. That is the exact failure this handler's
+    # refusal path was built to stop, surviving in the narrow window the refusal cannot
+    # cover. `send_to_worker` returns delivered:bool (#1608) and `_fire_async` discards
+    # it, so the honest report is what this handler can actually see: a dispatch.
     suffix = " — queued for next turn" if will_queue else ""
-    lines = [f"Prompt sent to {target}{suffix}.", f"Target engagement: {engagement_str}."]
+    lines = [
+        f"DISPATCHED to {target}{suffix} — delivery not confirmed from here.",
+        f"If {target} opens a selection prompt before this lands, the #1451 guard HOLDS "
+        f"it and the buzz log records 'message HELD'. Confirm with "
+        f"queen_view_worker_state; a held message needs queen_dismiss_prompt or "
+        f"queen_answer_prompt to clear the picker before it can arrive.",
+        f"Target engagement: {engagement_str}.",
+    ]
     if collided and not ack:
         lines.append(
             "NOTE: target appears freshly engaged; if this prompt is about the same work it "
