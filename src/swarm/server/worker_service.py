@@ -31,6 +31,13 @@ _KILL_QUIT_TIMEOUT = 2.0  # wait for the agent to exit after its quit command
 _KILL_POLL_INTERVAL = 0.1  # how often to check whether it has gone
 _KILL_SHELL_EXIT_DELAY = 0.5  # after `exit`, before signalling the process
 
+# #1608: how much screen to read when answering a prompt. Matches
+# ``pty.process._PROMPT_SCAN_LINES`` deliberately — the answer path must see exactly what
+# the #1451 guard sees, or the two could disagree about whether a prompt is open and an
+# answer could be refused for a prompt that is holding writes (or worse, the reverse).
+# Prompt HEIGHT is what defeated the earlier detectors, so this is generous on purpose.
+_PROMPT_ANSWER_SCAN_LINES = 120
+
 
 def _remembered_states(loader: Callable[[], dict[str, Any]] | None) -> dict[str, Any]:
     """Last-known worker states, or {} when unavailable.
@@ -325,6 +332,80 @@ class WorkerService:
         self._drone_log.add(
             DroneAction.OPERATOR, name, "sent Escape", category=LogCategory.OPERATOR
         )
+
+    def check_prompt_answer(self, name: str, option: int, fingerprint: str) -> tuple[bool, str]:
+        """Validate an answer WITHOUT sending it. Returns ``(ok, message)``.
+
+        SYNCHRONOUS so the MCP handler can report the refusal truthfully. Firing this
+        async and returning "sent" would tell the Queen her answer landed while a stale
+        fingerprint was being rejected out of band — which is #1527's defect exactly: an
+        unawaited call whose outcome nobody sees. The refusal IS the feature here, so it
+        must be the thing that comes back.
+        """
+        from swarm.pty.prompt_options import parse_open_prompt
+
+        worker = self.require_worker(name)
+        self._require_process(worker)
+        prompt = parse_open_prompt(worker.process.get_content(_PROMPT_ANSWER_SCAN_LINES))
+        if prompt is None:
+            return False, "no selection prompt is open — nothing was sent"
+        if prompt.fingerprint != fingerprint:
+            return False, (
+                f"prompt changed since you read it (now {prompt.fingerprint}, "
+                f"you sent {fingerprint}) — nothing was sent. Re-read and retry."
+            )
+        chosen = prompt.option(option)
+        if chosen is None:
+            available = ", ".join(str(o.number) for o in prompt.options)
+            return False, (
+                f"option {option} is not on this prompt (available: {available}) — nothing sent"
+            )
+        return True, f"option {option} ({chosen.label})"
+
+    async def answer_open_prompt(self, name: str, option: int, fingerprint: str) -> str:
+        """Answer a worker's open selection prompt by option number (#1608).
+
+        Returns a human-readable outcome. RAISES nothing for the refusal cases — the
+        caller needs to report which refusal happened, and an exception type per case
+        would be a worse API for a tool whose whole job is to explain itself.
+
+        WHY THIS IS NOT A HOLE IN #1451's GUARD, which is the question to ask of it.
+        That guard holds writes NO HUMAN CHOSE TO MAKE RIGHT NOW — a dispatch, a nudge,
+        a broadcast — because Enter is the default and such a write either commits the
+        highlighted option or types its body in as free text. This call is the opposite:
+        it names ONE option, on ONE prompt identified by fingerprint, and refuses if that
+        prompt is no longer the one on screen. **The fingerprint is the authorisation.**
+        A caller who cannot produce the current one cannot answer, so the failure mode
+        the guard exists to prevent — answering a question you did not read — is
+        structurally unavailable rather than merely discouraged.
+
+        THE COST OF GETTING THIS WRONG IS WHY IT REFUSES RATHER THAN GUESSES: nexus sat
+        8.16h and platform-api 6.64h on prompts one keystroke would have cleared, so the
+        pressure to "just send 1" is real. Sending 1 into a prompt that changed is how a
+        4-hour stall becomes an unintended approval.
+        """
+        # RE-VALIDATED here, not just in the sync check above. The gap between the
+        # handler's check and this send is microseconds rather than the minutes the
+        # fingerprint really guards, but a guard that is cheap to apply twice should be.
+        ok, message = self.check_prompt_answer(name, option, fingerprint)
+        if not ok:
+            return message
+
+        worker = self.require_worker(name)
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.wake_worker(name)
+        # automated=False deliberately — see the docstring. This is a deliberate answer
+        # to a NAMED prompt, not an automated write, and the fingerprint check is what
+        # earns the distinction.
+        await worker.process.send_keys(str(option), enter=True, automated=False)
+        self._drone_log.add(
+            DroneAction.OPERATOR,
+            name,
+            f"answered prompt {fingerprint}: {message}",
+            category=LogCategory.OPERATOR,
+        )
+        return f"answered {message}"
 
     async def arrow_up_worker(self, name: str) -> None:
         """Send Up Arrow to a worker's process."""

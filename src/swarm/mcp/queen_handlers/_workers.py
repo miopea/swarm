@@ -21,6 +21,62 @@ if TYPE_CHECKING:
 
 TOOLS: list[dict[str, Any]] = [
     {
+        "name": "queen_answer_prompt",
+        "description": (
+            "Answer a worker's OPEN selection prompt by option number. Use this when "
+            "queen_view_worker_state shows a picker — a permission confirmation, a plan "
+            "approval — and you have the authority to decide it. "
+            "READ THE PROMPT FIRST: call queen_view_worker_state and pass the "
+            "'fingerprint' it reports back here. That is not ceremony — it is what stops "
+            "you answering a question that changed between reading and replying, and a "
+            "mismatch REFUSES rather than selecting whatever is highlighted now. "
+            "For a prompt you want to DENY or dismiss, queen_dismiss_prompt (Escape) is "
+            "gentler than queen_interrupt_worker, which cancels the whole turn."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "worker": {"type": "string", "description": "Worker showing the prompt."},
+                "option": {
+                    "type": "integer",
+                    "description": "The option NUMBER to select, as rendered (1, 2, 3...).",
+                },
+                "fingerprint": {
+                    "type": "string",
+                    "description": (
+                        "The prompt fingerprint from queen_view_worker_state. Identifies "
+                        "the QUESTION, not the cursor — moving the highlight does not "
+                        "change it, but a changed option list does."
+                    ),
+                },
+            },
+            "required": ["worker", "option", "fingerprint"],
+            "examples": [{"worker": "platform-api", "option": 1, "fingerprint": "a1b2c3d4e5f6"}],
+        },
+    },
+    {
+        "name": "queen_dismiss_prompt",
+        "description": (
+            "Send Escape to a worker showing a selection prompt — the CLI's own documented "
+            "dismissal ('Esc to cancel' appears in the prompt footer). "
+            "CALL THIS WHEN a worker is stalled on a picker whose answer should be NO, or "
+            "when you want the prompt gone without deciding it. Prefer it over "
+            "queen_interrupt_worker for declining a picker: Ctrl-C cancels the entire turn "
+            "and loses in-flight work, while Escape only closes the prompt. When you want "
+            "to ACCEPT an option instead, use queen_answer_prompt. Always give a reason; it "
+            "lands in the buzz log."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "worker": {"type": "string", "description": "Worker to send Escape to."},
+                "reason": {"type": "string", "description": "Why — audited in the buzz log."},
+            },
+            "required": ["worker", "reason"],
+            "examples": [{"worker": "nexus", "reason": "least-privilege probe SHOULD be denied"}],
+        },
+    },
+    {
         "name": "queen_interrupt_worker",
         "description": (
             "Send Ctrl-C to a worker's PTY to interrupt its current turn. "
@@ -116,6 +172,95 @@ TOOLS: list[dict[str, Any]] = [
         },
     },
 ]
+
+
+def _prepare_target(d: SwarmDaemon, worker_name: str, target: str) -> list[TextContent] | None:
+    """Shared refusals for the prompt tools: identity, self-target, existence."""
+    err = _assert_queen(worker_name)
+    if err:
+        return err
+    if not target:
+        return [{"type": "text", "text": "Missing 'worker'."}]
+    if target == QUEEN_WORKER_NAME:
+        return [{"type": "text", "text": "Refusing to answer the Queen's own prompt."}]
+    if not any(w.name == target for w in d.workers):
+        return [{"type": "text", "text": f"Worker '{target}' not found."}]
+    return None
+
+
+def _handle_answer_prompt(
+    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+) -> list[TextContent]:
+    """Answer an open selection prompt by option number (#1608).
+
+    SYNCHRONOUS on purpose, unlike its neighbours. `_fire_async` would return "sent"
+    before the service had decided anything, so a stale fingerprint would be reported to
+    the Queen as success and the refusal — the entire point of the fingerprint — would be
+    invisible. #1527 is the standing example of an unawaited call swallowing its outcome.
+    """
+    target = (args.get("worker") or "").strip()
+    refusal = _prepare_target(d, worker_name, target)
+    if refusal:
+        return refusal
+    fingerprint = (args.get("fingerprint") or "").strip()
+    if not fingerprint:
+        return [
+            {
+                "type": "text",
+                "text": (
+                    "Missing 'fingerprint' — read the prompt with queen_view_worker_state "
+                    "first. Answering without reading is the failure this guard exists for."
+                ),
+            }
+        ]
+    try:
+        option = int(args.get("option"))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return [{"type": "text", "text": f"'option' must be a number, got {args.get('option')!r}."}]
+
+    worker_svc = getattr(d, "worker_svc", None)
+    if worker_svc is None:
+        return [{"type": "text", "text": "Worker service unavailable."}]
+
+    # Validate SYNCHRONOUSLY and report that; fire only the keystroke async. This
+    # handler runs inside the event loop, so it cannot await — and `_fire_async` would
+    # return "sent" before anything was decided, telling the Queen her answer landed
+    # while a stale fingerprint was rejected out of band. The refusal IS the feature.
+    ok, message = worker_svc.check_prompt_answer(target, option, fingerprint)
+    if not ok:
+        return [{"type": "text", "text": f"{target}: REFUSED — {message}"}]
+    _fire_async(
+        worker_svc.answer_open_prompt(target, option, fingerprint),
+        label=f"answer_prompt({target})",
+        daemon=d,
+    )
+    return [{"type": "text", "text": f"{target}: answering {message}"}]
+
+
+def _handle_dismiss_prompt(
+    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+) -> list[TextContent]:
+    """Send Escape — the CLI's own documented dismissal for a picker (#1608)."""
+    target = (args.get("worker") or "").strip()
+    refusal = _prepare_target(d, worker_name, target)
+    if refusal:
+        return refusal
+    reason = (args.get("reason") or "").strip()
+    if not reason:
+        return [{"type": "text", "text": "Missing 'reason' — dismissals are audited."}]
+    worker_svc = getattr(d, "worker_svc", None)
+    if worker_svc is None:
+        return [{"type": "text", "text": "Worker service unavailable."}]
+    from swarm.drones.log import LogCategory, SystemAction
+
+    d.drone_log.add(
+        SystemAction.OPERATOR,
+        target,
+        f"queen dismissed prompt (Esc): {truncate_for_log(reason, 120)}",
+        category=LogCategory.OPERATOR,
+    )
+    _fire_async(worker_svc.escape_worker(target))
+    return [{"type": "text", "text": f"Escape sent to {target}."}]
 
 
 def _handle_interrupt_worker(
@@ -237,6 +382,8 @@ def _handle_prompt_worker(
 
 
 HANDLERS = {
+    "queen_answer_prompt": _handle_answer_prompt,
+    "queen_dismiss_prompt": _handle_dismiss_prompt,
     "queen_interrupt_worker": _handle_interrupt_worker,
     "queen_prompt_worker": _handle_prompt_worker,
 }

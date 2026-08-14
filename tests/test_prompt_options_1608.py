@@ -237,3 +237,91 @@ async def test_an_operator_write_is_never_held_by_a_real_prompt():
     await proc.send_keys("1", automated=False)
 
     assert proc.writes, "the operator's own answer was held — the prompt is unanswerable"
+
+
+# ---------------------------------------------------------------------------
+# AC2 — the stale-prompt REFUSAL, which is the whole point of the fingerprint
+# ---------------------------------------------------------------------------
+
+
+def _svc_with_screen(screen: str, name: str = "platform-api"):
+    """A WorkerService whose single worker's PTY shows `screen`."""
+    from unittest.mock import MagicMock
+
+    from swarm.server.worker_service import WorkerService
+
+    svc = WorkerService.__new__(WorkerService)
+    worker = MagicMock()
+    worker.name = name
+    worker.process.get_content.return_value = screen
+    svc._get_workers = lambda: [worker]  # type: ignore[method-assign]
+    svc._drone_log = MagicMock()
+    svc._get_pilot = lambda: None  # type: ignore[method-assign]
+    return svc, worker
+
+
+def _fingerprint_of(screen: str) -> str:
+    p = parse_open_prompt(screen)
+    assert p is not None
+    return p.fingerprint
+
+
+def test_a_matching_fingerprint_is_accepted():
+    """POSITIVE CONTROL FIRST. Without it, a check that refused everything would pass
+    every refusal test below while making the feature useless — and would look
+    identical to a working guard."""
+    svc, _ = _svc_with_screen(PLATFORM_API_PLAN)
+
+    ok, message = svc.check_prompt_answer("platform-api", 1, _fingerprint_of(PLATFORM_API_PLAN))
+
+    assert ok is True
+    assert "Yes, and use auto mode" in message
+
+
+def test_a_prompt_that_changed_in_between_is_REFUSED():
+    """AC2. The Queen reads platform-api's plan prompt, and by the time she answers the
+    worker is showing nexus's permission prompt instead. Answering '1' there would grant
+    a permission she never read — which is the failure #1451's guard exists to prevent
+    and which this path must not reintroduce."""
+    stale = _fingerprint_of(PLATFORM_API_PLAN)
+    svc, _ = _svc_with_screen(NEXUS_PERMISSION)  # the screen moved on
+
+    ok, message = svc.check_prompt_answer("platform-api", 1, stale)
+
+    assert ok is False
+    assert "changed since you read it" in message
+    assert stale in message, "the refusal must name the fingerprint that was sent"
+
+
+def test_answering_when_no_prompt_is_open_is_REFUSED():
+    """Someone else already answered it. Sending '1' into a live session types a stray
+    character into whatever is on screen now."""
+    svc, _ = _svc_with_screen("the prompt was answered\nwork continues\n")
+
+    ok, message = svc.check_prompt_answer("platform-api", 1, "abc123abc123")
+
+    assert ok is False
+    assert "no selection prompt is open" in message
+
+
+def test_an_option_number_not_on_the_prompt_is_REFUSED_and_lists_the_real_ones():
+    """nexus's prompt has two options. Answering '3' must not silently do nothing, and
+    the refusal has to say what WAS available or the caller just guesses again."""
+    svc, _ = _svc_with_screen(NEXUS_PERMISSION, name="nexus")
+
+    ok, message = svc.check_prompt_answer("nexus", 3, _fingerprint_of(NEXUS_PERMISSION))
+
+    assert ok is False
+    assert "not on this prompt" in message
+    assert "1, 2" in message
+
+
+def test_the_check_never_sends_anything():
+    """It is a CHECK. If it wrote to the PTY, a refusal would still have answered the
+    prompt — the exact bug it exists to prevent, hidden inside the guard."""
+    svc, worker = _svc_with_screen(PLATFORM_API_PLAN)
+
+    svc.check_prompt_answer("platform-api", 1, _fingerprint_of(PLATFORM_API_PLAN))
+    svc.check_prompt_answer("platform-api", 1, "wrongfingerprint")
+
+    worker.process.send_keys.assert_not_called()
