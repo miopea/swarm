@@ -570,12 +570,29 @@ def _identify_worker(d: SwarmDaemon, body: dict[str, Any]) -> Worker | None:
         cwd = body.get("worker_cwd", "")
 
     if cwd:
-        cwd_resolved = os.path.realpath(cwd)
+        cwd_resolved = os.path.realpath(os.path.expanduser(cwd))
+        # LONGEST MATCH WINS, NOT FIRST (#1646). The old scan returned the first worker
+        # whose path was a prefix, in board order — and `project-root` is configured as
+        # `~/projects`, an ancestor of every worker in the fleet, sitting at index 0. So
+        # EVERY worker identified as project-root: 191 hook entries in 30 minutes with
+        # none naming the worker that made them, and `_check_file_lock` comparing one
+        # name against itself, unable to detect any collision at all.
+        #
+        # `expanduser` is not incidental. Eight workers are configured with `~/...`
+        # paths, and `realpath("~/projects/x")` does not expand `~` — they could never
+        # have matched even once the ordering was fixed, so a longest-match fix alone
+        # would have looked complete while a third of the fleet still misidentified.
+        best: Worker | None = None
+        best_len = -1
         for w in d.workers:
-            if hasattr(w, "path") and w.path:
-                worker_path = os.path.realpath(str(w.path))
-                if cwd_resolved == worker_path or cwd_resolved.startswith(worker_path + "/"):
-                    return w
+            if not (hasattr(w, "path") and w.path):
+                continue
+            worker_path = os.path.realpath(os.path.expanduser(str(w.path)))
+            if cwd_resolved == worker_path or cwd_resolved.startswith(worker_path + "/"):
+                if len(worker_path) > best_len:
+                    best, best_len = w, len(worker_path)
+        if best is not None:
+            return best
 
     # Fallback: if only one worker exists, it's probably that one
     if len(d.workers) == 1:
