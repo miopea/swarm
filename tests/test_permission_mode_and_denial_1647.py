@@ -73,6 +73,35 @@ def test_the_effect_based_guards_now_deny_rather_than_abstain(command: str):
     assert "reason" in verdict
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cd /home/user/repo && pytest -q",
+        "uv run ruff format src/ && uv run pytest",
+        "git status && some-unapproved-tool",
+        "echo $(date) hello",
+    ],
+)
+def test_compound_and_substitution_refusals_still_only_abstain(command: str):
+    """THE SECOND REGRESSION, and the larger of the two. The ruling covered the three
+    EFFECT-based guards. `unsafe_command_verdict` also refuses for an unapproved segment
+    in a compound command and for command substitution — neither was in the ruling.
+
+    Blocking on the coarse `unsafe_command` source denied `cd /repo && pytest` fleet-wide
+    within a minute of the daemon restart; it blocked this very test run twice while it
+    was being written. These must reach the real gate, not a hard deny."""
+    verdict = _decide(f"Bash command\n{command}")
+
+    # Asserted as "not a hard deny" rather than "exactly passthrough": a chain whose every
+    # segment is independently safe is legitimately APPROVED (`uv run ruff format && uv run
+    # pytest` is that case), and pinning passthrough would forbid the drone from doing its
+    # job. The property under test is that none of these can be REFUSED outright.
+    assert verdict["decision"] != "block", (
+        f"{command!r} was blocked — ordinary chained work must reach the real gate, not "
+        f"be denied outright"
+    )
+
+
 def test_an_ordinary_escalation_still_passes_through():
     """POSITIVE CONTROL, and the operator's decision made concrete. A change that blocked
     every escalation would pass the test above while removing the operator's ability to
@@ -114,6 +143,55 @@ def test_a_relative_redirect_is_still_fine():
 def test_a_chain_mixing_scratchpad_and_a_real_target_is_refused():
     """The exemption is per-target. One sanctioned write must not vouch for another."""
     cmd = f"echo a > {SCRATCH}/ok.txt && echo b > /etc/cron.d/backdoor"
+
+    assert writes_outside_worktree(cmd) is True
+
+
+# ---------------------------------------------------------------------------
+# Discard sinks — the regression this guard shipped with
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls -la 2>/dev/null",
+        "grep -r foo . 2>/dev/null | head",
+        "ss -ltnp 2>/dev/null | grep 9090",
+        "echo hi > /dev/null",
+        "noisy-thing >/dev/null 2>&1",
+    ],
+)
+def test_discard_sinks_are_not_treated_as_out_of_tree_writes(command: str):
+    """THE REGRESSION, MEASURED LIVE. `2>/dev/null` is an absolute redirect, so this guard
+    refused it — and once refusing meant BLOCKING (#1647), every command carrying that
+    idiom was denied fleet-wide the moment the daemon restarted. The third case here is
+    verbatim the first verification command run after that restart; it was blocked.
+
+    Nothing persists and nothing leaves the machine, so a discard sink is not the kind of
+    write this guard exists to catch."""
+    assert writes_outside_worktree(command) is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo x > /dev/shm/payload",
+        "echo x > /dev/../etc/passwd",
+        "echo x > /dev/nullify",
+    ],
+)
+def test_only_the_exact_sinks_are_exempt_not_the_dev_prefix(command: str):
+    """POSITIVE CONTROL for the exemption. Matching on a `/dev/` prefix would have opened
+    a hole wider than the bug: `/dev/shm` is real shared memory, and `/dev/../etc/passwd`
+    normalises straight out of the directory."""
+    assert writes_outside_worktree(command) is True
+
+
+def test_a_chain_mixing_dev_null_and_a_real_target_is_still_refused():
+    """Per-target, same as the scratchpad case: a harmless sink must not vouch for the
+    write next to it."""
+    cmd = "curl -s https://x 2>/dev/null && echo x > /etc/cron.d/backdoor"
 
     assert writes_outside_worktree(cmd) is True
 

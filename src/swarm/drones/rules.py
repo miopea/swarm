@@ -191,10 +191,33 @@ _RE_REDIRECT_TARGET = re.compile(r">>?\s*([~/][^\s;|&)<>]*)")
 _SANCTIONED_SCRATCH_PREFIX = "/tmp/claude-"
 _SANCTIONED_SCRATCH_SEGMENT = "/scratchpad/"
 
+# DISCARD SINKS — the regression this guard shipped with, caught 60 seconds after the
+# daemon restart that first made it DENY rather than abstain (#1647 follow-up).
+#
+# `2>/dev/null` is an absolute redirect, so the guard refused it — and once refusing meant
+# BLOCKING, every command carrying that idiom was denied fleet-wide. The first verification
+# command run after the restart, `ss -ltnp 2>/dev/null | grep 9090`, was itself blocked.
+#
+# Writing to a discard sink is not an out-of-tree WRITE in any sense the guard cares about:
+# nothing persists, nothing leaves the machine, there is no file afterwards. The guard
+# exists to catch persistence and exfiltration, and these targets can do neither.
+#
+# EXACT MATCH ONLY, never a prefix — `/dev/null` is exempt, `/dev/../etc/passwd` is not,
+# and `/dev/shm/payload` is not. This file's own standard is that a guard which fires on
+# ordinary work gets switched off and then protects nothing; `2>/dev/null` is as ordinary
+# as shell work gets.
+_DISCARD_SINKS = frozenset({"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty", "/dev/zero"})
+
 
 def _is_sanctioned_scratch_path(target: str) -> bool:
-    """True for a session-scratchpad destination the harness sanctions (#1647)."""
+    """True for a destination the guard deliberately allows (#1647).
+
+    Two kinds: the session scratchpad the harness directs agents to use, and the discard
+    sinks. Neither leaves a file outside the worktree.
+    """
     path = os.path.normpath(os.path.expanduser(target))
+    if path in _DISCARD_SINKS:
+        return True
     return path.startswith(_SANCTIONED_SCRATCH_PREFIX) and _SANCTIONED_SCRATCH_SEGMENT in path
 
 
@@ -929,13 +952,29 @@ def dry_run_rules(
     # could be vouched for by one safe-looking part of a chain.
     refuse, reason = unsafe_command_verdict(content, _segment_approver(safe, cfg))
     if refuse:
+        # #1647 FOLLOW-UP — WHY THIS VERDICT IS SPLIT IN TWO.
+        #
+        # `unsafe_command_verdict` refuses for FOUR reasons, and the operator's ruling
+        # covered only three of them: the EFFECT-based guards (writes outside the worktree,
+        # reads a credential path, sends data outbound) deny outright. The other two —
+        # an unapproved segment in a compound command, and command substitution — were
+        # never in that ruling and must keep abstaining.
+        #
+        # Shipped as one `source="unsafe_command"` first, which made `cd /repo && pytest`
+        # a hard DENY the moment the daemon restarted. Ordinary chained work, refused
+        # fleet-wide. The coarse signal was the whole bug: one source string for four
+        # rules meant the hook could not honour a ruling that applied to three of them.
+        cmd = extract_bash_command(content) or ""
+        effect_based = (
+            writes_outside_worktree(cmd) or reads_sensitive_path(cmd) or sends_data_outbound(cmd)
+        )
         return [
             DryRunResult(
                 matched=True,
                 decision="escalate",
                 rule_index=-1,
                 rule_pattern=reason,
-                source="unsafe_command",
+                source="unsafe_effect" if effect_based else "unsafe_command",
             )
         ]
 

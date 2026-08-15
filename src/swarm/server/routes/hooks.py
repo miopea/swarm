@@ -400,7 +400,11 @@ def _evaluate_rules(
     # Mode is NOT consulted here on purpose: it is display-derived and was measured going
     # stale inside 90 seconds, and a security decision must not depend on an observation
     # that transient.
-    if result.source == "unsafe_command":
+    # `unsafe_effect`, NOT `unsafe_command` — see dry_run_rules. The latter also covers
+    # compound-segment and command-substitution refusals, which the ruling did not cover
+    # and which must keep abstaining. Blocking on the coarse source denied `cd /repo &&
+    # pytest` fleet-wide within a minute of the daemon restart.
+    if result.source == "unsafe_effect":
         _log_hook_decision(d, tool_name, "block", f"denied: {result.rule_pattern}", worker_name)
         return web.json_response(
             {
