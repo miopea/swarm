@@ -325,7 +325,7 @@ class WorkerService:
             pilot.wake_worker(name)
             pilot.mark_operator_continue(name)
         async with self._pty_lock(name):
-            await worker.process.send_enter()
+            await worker.process.send_enter(actor="operator-continue")
         self._drone_log.add(
             DroneAction.OPERATOR, name, "continued (manual)", category=LogCategory.OPERATOR
         )
@@ -352,7 +352,7 @@ class WorkerService:
         pilot = self._get_pilot()
         if pilot:
             pilot.wake_worker(name)
-        await worker.process.send_escape()
+        await worker.process.send_escape(actor="operator-escape")
         self._drone_log.add(
             DroneAction.OPERATOR, name, "sent Escape", category=LogCategory.OPERATOR
         )
@@ -382,7 +382,7 @@ class WorkerService:
         pilot = self._get_pilot()
         if pilot:
             pilot.wake_worker(name)
-        await worker.process.send_escape()
+        await worker.process.send_escape(actor="queen-dismiss")
         await asyncio.sleep(_ANSWER_SETTLE_SECONDS)
 
         after = parse_open_prompt(worker.process.get_content(_PROMPT_ANSWER_SCAN_LINES))
@@ -491,11 +491,11 @@ class WorkerService:
         steps = option - cursor_at
         for _ in range(abs(steps)):
             if steps > 0:
-                await worker.process.send_arrow_down()
+                await worker.process.send_arrow_down(actor="queen-answer")
             else:
-                await worker.process.send_arrow_up()
+                await worker.process.send_arrow_up(actor="queen-answer")
             await asyncio.sleep(_ARROW_STEP_SECONDS)
-        await worker.process.send_enter()
+        await worker.process.send_enter(actor="queen-answer")
 
         # READ BACK. #1608 was filed because `queen_prompt_worker` reported "sent" for a
         # message the guard was holding, and the caller could not tell. Reporting success
@@ -527,7 +527,7 @@ class WorkerService:
         pilot = self._get_pilot()
         if pilot:
             pilot.wake_worker(name)
-        await worker.process.send_arrow_up()
+        await worker.process.send_arrow_up(actor="operator-arrow")
 
     async def arrow_down_worker(self, name: str) -> None:
         """Send Down Arrow to a worker's process."""
@@ -536,7 +536,7 @@ class WorkerService:
         pilot = self._get_pilot()
         if pilot:
             pilot.wake_worker(name)
-        await worker.process.send_arrow_down()
+        await worker.process.send_arrow_down(actor="operator-arrow")
 
     async def arrow_right_worker(self, name: str) -> None:
         """Send Right Arrow to a worker's process."""
@@ -878,7 +878,7 @@ class WorkerService:
         provider = get_provider(worker.provider_name)
         try:
             # Esc first: a quit command typed into a busy prompt is just text.
-            await proc.send_escape()
+            await proc.send_escape(actor="worker-service")
             await asyncio.sleep(_KILL_INTERRUPT_DELAY)
 
             quit_cmd = provider.quit_command()

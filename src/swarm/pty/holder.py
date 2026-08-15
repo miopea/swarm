@@ -42,6 +42,11 @@ _log = get_logger("pty.holder")
 _SWARM_DIR = Path.home() / ".swarm"
 DEFAULT_SOCKET_PATH = _SWARM_DIR / "holder.sock"
 DEFAULT_PID_PATH = _SWARM_DIR / "holder.pid"
+# #1658: one attributable row per PTY write. A dedicated file rather than the logger,
+# because the daemon runs at log_level=WARNING and an INFO line would have been emitted
+# nowhere — which is exactly how the earlier "held automated write" instrumentation turned
+# out to be a dead instrument when it was needed.
+_WRITE_AUDIT_PATH = _SWARM_DIR / "pty-writes.jsonl"
 
 
 # Source hash of holder.py captured at module import time. The holder is a
@@ -514,16 +519,62 @@ class PtyHolder:
         self._cleanup_worker(name)
         return True
 
-    def write_to_worker(self, name: str, data: bytes) -> bool:
+    def _audit_write(self, name: str, actor: str, data: bytes) -> None:
+        """Append one attributable row per PTY write (#1658).
+
+        WHY THIS EXISTS. A selection prompt on worker `swarm` was answered six times with
+        no record of who did it, while an identical picker on sculpt-studio produced an
+        `OPERATOR — terminal approval` row in the same minute. The audit path existed and
+        did not cover whichever path answered. Seven investigation attempts could not
+        close it, because nothing recorded the actor at all. This makes that category of
+        question a log lookup instead.
+
+        RECORDS SHAPE, NEVER CONTENT. Writes carry whatever a human or a worker types,
+        which can include a credential — so this stores the byte COUNT and a coarse KIND
+        (enter / escape / arrow / interrupt / text) and never the bytes themselves. The
+        question "who answered the picker, and was it a bare Enter" is answerable from
+        that; "what did they type" deliberately is not.
+
+        Best-effort and never raises: this is telemetry hanging off the write path, and an
+        audit failure must not stop a worker receiving input.
+        """
+        try:
+            kind = "text"
+            if data == b"\r" or data == b"\n":
+                kind = "enter"
+            elif data == b"\x1b":
+                kind = "escape"
+            elif data.startswith(b"\x1b["):
+                kind = "arrow-or-ansi"
+            elif data == b"\x03":
+                kind = "interrupt"
+            row = {
+                "ts": time.time(),
+                "worker": name,
+                "actor": actor or "unknown",
+                "bytes": len(data),
+                "kind": kind,
+            }
+            with _WRITE_AUDIT_PATH.open("a") as fh:
+                fh.write(json.dumps(row) + "\n")
+        except Exception:
+            _log.debug("write audit failed for %s", name, exc_info=True)
+
+    def write_to_worker(self, name: str, data: bytes, actor: str = "unknown") -> bool:
         """Write data to a worker's PTY master, handling short writes.
 
         Sets the FD non-blocking to avoid stalling the event loop when the
         PTY buffer is full (e.g. during large pastes).  If the PTY cannot
         accept data immediately, returns False instead of blocking.
+
+        ``actor`` names WHO is writing (#1658). This is the single choke point for every
+        byte that reaches any worker's PTY master, so recording it here — rather than at
+        the many call sites upstream — is what makes the record complete by construction.
         """
         worker = self.workers.get(name)
         if not worker or not worker.alive:
             return False
+        self._audit_write(name, actor, data)
         try:
             fd = worker.master_fd
             flags = fcntl.fcntl(fd, fcntl.F_GETFL)

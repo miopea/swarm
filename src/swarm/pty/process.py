@@ -469,10 +469,11 @@ class WorkerProcess:
             # believing she had no way to act. A send that cannot be delivered must say so.
             return False
         await self._flush_deferred_keys()
-        await self._write(text.encode("utf-8"))
+        who = "automated" if automated else "operator"
+        await self._write(text.encode("utf-8"), actor=who)
         if enter:
             await asyncio.sleep(_INPUT_DRAIN_DELAY)
-            await self._write(b"\r")
+            await self._write(b"\r", actor=who)
         return True
 
     def _defer_if_prompt_open(self, text: str, enter: bool) -> bool:
@@ -522,38 +523,38 @@ class WorkerProcess:
         queued, self._deferred_keys = self._deferred_keys, []
         _log.info("flushing %d deferred write(s) to %s", len(queued), self.name)
         for qtext, qenter in queued:
-            await self._write(qtext.encode("utf-8"))
+            await self._write(qtext.encode("utf-8"), actor="deferred-flush")
             if qenter:
                 await asyncio.sleep(_INPUT_DRAIN_DELAY)
-                await self._write(b"\r")
+                await self._write(b"\r", actor="deferred-flush")
 
-    async def send_enter(self) -> None:
+    async def send_enter(self, *, actor: str = "unknown") -> None:
         """Send Enter (carriage return) to the worker."""
-        await self._write(b"\r")
+        await self._write(b"\r", actor=actor)
 
     async def send_interrupt(self) -> None:
         """Send SIGINT to the worker's process group."""
         await self._signal(signal.SIGINT)
 
-    async def send_escape(self) -> None:
+    async def send_escape(self, *, actor: str = "unknown") -> None:
         """Send ESC byte to the worker's PTY."""
-        await self._write(b"\x1b")
+        await self._write(b"\x1b", actor=actor)
 
-    async def send_arrow_up(self) -> None:
+    async def send_arrow_up(self, *, actor: str = "unknown") -> None:
         """Send Up Arrow (ANSI escape) to the worker's PTY."""
-        await self._write(b"\x1b[A")
+        await self._write(b"\x1b[A", actor=actor)
 
-    async def send_arrow_down(self) -> None:
+    async def send_arrow_down(self, *, actor: str = "unknown") -> None:
         """Send Down Arrow (ANSI escape) to the worker's PTY."""
-        await self._write(b"\x1b[B")
+        await self._write(b"\x1b[B", actor=actor)
 
-    async def send_arrow_right(self) -> None:
+    async def send_arrow_right(self, *, actor: str = "unknown") -> None:
         """Send Right Arrow (ANSI escape) to the worker's PTY."""
-        await self._write(b"\x1b[C")
+        await self._write(b"\x1b[C", actor=actor)
 
-    async def send_arrow_left(self) -> None:
+    async def send_arrow_left(self, *, actor: str = "unknown") -> None:
         """Send Left Arrow (ANSI escape) to the worker's PTY."""
-        await self._write(b"\x1b[D")
+        await self._write(b"\x1b[D", actor=actor)
 
     async def send_sigwinch(self) -> None:
         """Send SIGWINCH to force TUI redraw."""
@@ -663,8 +664,14 @@ class WorkerProcess:
     def exit_code(self, value: int | None) -> None:
         self._exit_code = value
 
-    async def _write(self, data: bytes) -> None:
-        """Write raw bytes to the worker's PTY via the holder."""
+    async def _write(self, data: bytes, *, actor: str = "unknown") -> None:
+        """Write raw bytes to the worker's PTY via the holder.
+
+        ``actor`` names who is writing (#1658) and is recorded by the holder, which is the
+        single choke point every byte passes through. Defaults to "unknown" so a caller
+        that forgets shows up AS unknown in the audit rather than being attributed to
+        someone else — an unlabelled write is a finding, not a blank.
+        """
         if not self._send_cmd:
             raise ProcessError(
                 f"Worker '{self.name}' not connected to holder",
@@ -675,6 +682,7 @@ class WorkerProcess:
                 "cmd": "write",
                 "name": self.name,
                 "data": base64.b64encode(data).decode(),
+                "actor": actor,
             }
         )
         if not resp.get("ok"):

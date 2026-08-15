@@ -189,7 +189,7 @@ class OversightHandler:
             if not worker.process.is_user_active and result.message:
                 # Use Escape (not SIGINT) to interrupt Claude safely.
                 # SIGINT kills the entire process group and can crash Claude.
-                await worker.process.send_escape()
+                await worker.process.send_escape(actor="oversight")
                 # Wait for Claude to process the escape and return to a prompt.
                 # send_escape is async-safe but Claude needs time to stop its
                 # current operation before it can accept new input.

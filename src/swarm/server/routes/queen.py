@@ -372,7 +372,7 @@ async def _forward_to_queen(daemon: object, thread_id: str, body: str) -> bool:
             await worker_svc.send_to_worker(queen.name, text, automated=True, _log_operator=False)
         else:
             await queen.process.send_keys(text, automated=True)
-            await queen.process.send_enter()
+            await queen.process.send_enter(actor="queen-route")
         return True
     except Exception:
         _log.warning("queen PTY forward failed", exc_info=True)

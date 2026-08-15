@@ -87,7 +87,12 @@ class _Proc(WorkerProcess):
         super().__init__(name="t", cwd="/tmp")
         self.writes: list[bytes] = []
 
-    async def _write(self, data: bytes) -> None:  # type: ignore[override]
+    async def _write(  # type: ignore[override]
+        self, data: bytes, *, actor: str = "unknown"
+    ) -> None:
+        # #1658 added `actor` at the choke point; doubles must accept it or every
+        # write path through them raises TypeError instead of exercising the guard.
+        _ = actor
         self.writes.append(data)
 
 

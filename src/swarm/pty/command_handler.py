@@ -114,7 +114,11 @@ class PtyCommandHandler:
             data = base64.b64decode(msg.get("data", ""))
         except Exception:
             return {"ok": False, "error": "invalid base64"}
-        ok = self.holder.write_to_worker(name, data)
+        # #1658: carry the caller's identity through to the audit row. Defaults to
+        # "unknown" rather than guessing, so an unlabelled write is visibly unlabelled
+        # instead of silently attributed to whoever happens to be nearby.
+        actor = str(msg.get("actor") or "unknown")
+        ok = self.holder.write_to_worker(name, data, actor)
         return {"ok": ok}
 
     def _cmd_signal(self, msg: dict[str, Any]) -> dict[str, Any]:

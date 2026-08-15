@@ -87,13 +87,14 @@ class FakeWorkerProcess:
         full = text + ("\n" if enter else "")
         self.keys_sent.append(full)
 
-    async def send_enter(self) -> None:
+    async def send_enter(self, *, actor: str = "unknown") -> None:
+        # #1658: the real helper records who wrote; the fake accepts and ignores it.
         self.keys_sent.append("\n")
 
     async def send_interrupt(self) -> None:
         self.keys_sent.append("<C-c>")
 
-    async def send_escape(self) -> None:
+    async def send_escape(self, *, actor: str = "unknown") -> None:
         self.keys_sent.append("<Esc>")
 
     async def resize(self, cols: int, rows: int) -> None:

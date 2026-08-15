@@ -105,7 +105,8 @@ class TestWrite:
         payload = base64.b64encode(b"echo hi\n").decode()
         resp = handler.dispatch({"cmd": "write", "name": "api", "data": payload})
         assert resp == {"ok": True}
-        holder.write_to_worker.assert_called_once_with("api", b"echo hi\n")
+        # #1658: the actor rides along to the audit choke point; unlabelled reads as "unknown".
+        holder.write_to_worker.assert_called_once_with("api", b"echo hi\n", "unknown")
 
 
 class TestSignal:
