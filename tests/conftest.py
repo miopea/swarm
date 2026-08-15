@@ -236,6 +236,24 @@ def make_daemon(
     d.pilot = MagicMock(spec=DronePilot)
     d.pilot.enabled = True
     d.pilot.toggle = MagicMock(return_value=False)
+    # #1649: `/health` embeds `pilot.get_diagnostics()` verbatim, so a bare MagicMock made
+    # the endpoint raise `Object of type MagicMock is not JSON serializable` and return
+    # 500. That traceback then surfaced in the captured log of whatever browser test
+    # happened to be running when a health request landed — which is exactly how the
+    # coalescing flake got misread as a mock artefact for a week. Real shape, real types,
+    # matching DronePilot.get_diagnostics; a broken /health must look broken, and nothing
+    # else should look broken because of this.
+    d.pilot.get_diagnostics = MagicMock(
+        return_value={
+            "running": True,
+            "enabled": True,
+            "task_alive": True,
+            "tick": 0,
+            "idle_streak": 0,
+            "suspended_count": 0,
+            "suspended_workers": [],
+        }
+    )
     d._bg_tasks: set[asyncio.Task[object]] = set()
     d.hub = BroadcastHub(track_task=lambda t: d._bg_tasks.add(t))
     d.hub.ws_clients = set()

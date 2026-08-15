@@ -365,6 +365,18 @@ def test_a_burst_of_events_coalesces_into_one_refresh(phone_page):
     Driven by calling the refresher directly rather than by faking sixteen socket
     messages — the debounce is the unit under test, and routing through the socket would
     make this a test of the daemon's broadcast timing instead.
+
+    #1649 — THE COUNT MUST START FROM A QUIET PAGE, and this is the whole reason the test
+    was flaky. It used to record every `/partials/workers` request for 800ms and attribute
+    all of them to the burst. But the page fires its own `refreshWorkers()` when the
+    WebSocket connects (dashboard.js, the reconnect re-sync). Under load that handshake
+    lands later — inside the measurement window — and the test counted a request the burst
+    did not cause. Measured: exactly 2, never 3, which is the signature of one
+    socket-connect refresh plus one correctly-coalesced burst.
+
+    So settle to quiescence first, THEN start counting. The window is not widened and
+    nothing is retried; the starting point is moved to a known-quiet state so what is
+    counted is what the burst caused.
     """
     page, _daemon, base = phone_page
     page.goto(f"{base}/", wait_until="domcontentloaded")
@@ -376,11 +388,32 @@ def test_a_burst_of_events_coalesces_into_one_refresh(phone_page):
         "refreshWorkers is not reachable, so the loop below would do nothing and this "
         "test would pass without measuring anything"
     )
+
+    # Wait for the page to stop fetching the partial on its own: two consecutive quiet
+    # samples means the socket-connect refresh has already been and gone.
+    quiet = 0
+    for _ in range(40):
+        before = len([u for u in seen if "/partials/workers" in u])
+        page.wait_for_timeout(200)
+        if len([u for u in seen if "/partials/workers" in u]) == before:
+            quiet += 1
+            if quiet >= 2:
+                break
+        else:
+            quiet = 0
+    else:
+        pytest.fail("the page never stopped fetching /partials/workers on its own")
+
+    seen.clear()
     page.evaluate("() => { for (let i = 0; i < 20; i++) window.refreshWorkers(); }")
     page.wait_for_timeout(800)
 
     calls = [u for u in seen if "/partials/workers" in u]
-    assert len(calls) <= 1, f"20 rapid events produced {len(calls)} full partial fetches"
+    assert len(calls) == 1, (
+        f"20 rapid events produced {len(calls)} full partial fetches from a quiet page "
+        f"(expected exactly 1 — 0 would mean the burst did nothing and the assertion "
+        f"measured nothing)"
+    )
 
 
 @pytest.mark.browser
