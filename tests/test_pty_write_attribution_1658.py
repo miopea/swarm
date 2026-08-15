@@ -178,3 +178,84 @@ def test_a_write_command_with_no_actor_defaults_to_unknown():
     handler._cmd_write({"name": "swarm", "data": base64.b64encode(b"hi").decode()})
 
     assert handler.holder.write_to_worker.call_args.args[2] == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# AC3 — each write path carries its own actor, asserted per verb
+# ---------------------------------------------------------------------------
+
+
+def _proc_capturing_cmds():
+    """A real WorkerProcess whose holder command sender is captured.
+
+    Exercises the ACTUAL public verbs rather than `_write` directly, because the actor is
+    chosen by the verb — testing `_write` alone would pass while every caller above it
+    still sent "unknown".
+    """
+    from swarm.pty.process import WorkerProcess
+
+    proc = WorkerProcess(name="swarm", cwd="/tmp")
+    sent: list[dict] = []
+
+    async def _send(cmd: dict) -> dict:
+        sent.append(cmd)
+        return {"ok": True}
+
+    proc.bind_send_cmd(_send)
+    return proc, sent
+
+
+def _actors(sent: list[dict]) -> list[str]:
+    return [c.get("actor") for c in sent if c.get("cmd") == "write"]
+
+
+@pytest.mark.asyncio
+async def test_the_queen_answer_keystrokes_are_attributed(monkeypatch):
+    """THE PATH THE POSITIVE CONTROL EXERCISED LIVE. Four `queen_answer_prompt` calls on
+    2026-08-15 produced exactly four `queen-answer`/`enter` rows, one per worker, matching
+    the buzz log to the second. This pins that mapping."""
+    proc, sent = _proc_capturing_cmds()
+
+    await proc.send_arrow_down(actor="queen-answer")
+    await proc.send_enter(actor="queen-answer")
+
+    assert _actors(sent) == ["queen-answer", "queen-answer"]
+
+
+@pytest.mark.asyncio
+async def test_the_dismiss_path_is_attributed():
+    """`queen_dismiss_prompt` writes Escape. Distinguishing a dismiss from an answer in
+    the log is the difference between 'the Queen declined it' and 'the Queen chose an
+    option' — #1623 spent a night on exactly that distinction."""
+    proc, sent = _proc_capturing_cmds()
+
+    await proc.send_escape(actor="queen-dismiss")
+
+    assert _actors(sent) == ["queen-dismiss"]
+
+
+@pytest.mark.asyncio
+async def test_an_automated_dispatch_and_an_operator_keystroke_are_told_apart():
+    """AC2's core, at the verb level. `send_keys` serves BOTH the automated dispatch path
+    and the operator's own keystrokes via the web bridge, separated only by the
+    `automated` flag — so if that flag did not reach the actor, the single most important
+    distinction in the record would collapse."""
+    proc, sent = _proc_capturing_cmds()
+
+    await proc.send_keys("a queen message", automated=True)
+    await proc.send_keys("typed by a human", automated=False)
+
+    # text + enter for each send, so two rows per call.
+    assert _actors(sent) == ["automated", "automated", "operator", "operator"]
+
+
+@pytest.mark.asyncio
+async def test_an_unlabelled_verb_reports_unknown_rather_than_borrowing_a_name():
+    """Observed in the wild within minutes of this shipping: one `unknown`/`enter` row on
+    platform-data at 20:39:53. That is the record WORKING — an unlabelled path is visible
+    as unlabelled instead of being silently attributed to whoever wrote last."""
+    proc, sent = _proc_capturing_cmds()
+
+    await proc.send_enter()
+
+    assert _actors(sent) == ["unknown"]
