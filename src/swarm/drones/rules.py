@@ -19,6 +19,36 @@ if TYPE_CHECKING:
     from swarm.providers.events import TerminalEvent
 
 
+# =============================================================================
+# BEFORE YOU ADD OR TIGHTEN A GUARD IN THIS FILE, READ THIS.
+#
+#   RUN IT AGAINST A CORPUS OF ORDINARY COMMANDS AND COUNT THE FALSE POSITIVES,
+#   BEFORE it ships — especially before flipping one from abstain to DENY.
+#
+# This file already states the principle in several docstrings: a guard that fires on
+# ordinary work gets switched off within a day and then protects nothing. Stating it is
+# not the same as testing against it. #1647 quoted that exact sentence in its own commit
+# message and still shipped two guards that fired on everyday commands:
+#
+#   · `2>/dev/null` was DENIED, because any absolute redirect counted as an out-of-tree
+#     write. It was found by tripping over it — the first verification command run after
+#     the deploy was `ss -ltnp 2>/dev/null | grep 9090`, and the guard refused it.
+#   · `cd /repo && pytest` was DENIED, because the deny keyed on a verdict source shared
+#     by four rules when the decision covered three. Ordinary chained work, refused
+#     fleet-wide, including this project's own test and typecheck commands.
+#
+# Both were a few minutes' work to catch and neither was caught, because the corpus was
+# never run. The instrument is trivial — call the predicate on a list of real commands and
+# print the verdicts — and it is the difference between a guard that protects something
+# and a guard that gets disabled.
+#
+# THE SAME APPLIES TO WIDENING. A matcher extended to catch `scp` will also see
+# `git push origin main` and a routine `rsync` to a build host if written carelessly; the
+# false-positive count decides whether the widening survives contact with the fleet.
+# See #1657 for the outbound-transport sweep and the corpus requirement attached to it.
+# =============================================================================
+
+
 @dataclass
 class DryRunResult:
     """Result of a dry-run evaluation against approval rules."""
