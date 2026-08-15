@@ -18,8 +18,10 @@ can tune cadence or catch runaway prompting.
 from __future__ import annotations
 
 import asyncio
+import os
 import time
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from swarm.drones.log import DroneAction, LogCategory, SystemAction
 from swarm.drones.nudge_guard import ESCALATE, SILENT, RepeatNudgeGuard, operator_engaged
@@ -54,7 +56,7 @@ _MCP_FOLLOWUP_DELAY_SECONDS = 5.0
 _IDLE_STATES: frozenset[WorkerState] = frozenset({WorkerState.RESTING, WorkerState.SLEEPING})
 
 
-def _nudge_message(task_numbers: list[int]) -> str:
+def _nudge_message(task_numbers: list[int], *, all_active: bool = False) -> str:
     """Build the PTY message sent to an idle worker.
 
     Kept short and tool-centric — we want the worker to call its existing
@@ -74,12 +76,92 @@ def _nudge_message(task_numbers: list[int]) -> str:
     # unasserted tasks, and rightly: repeated nudges about unactionable state are
     # how operators learn to ignore nudges. This nudge already fires, and the
     # worker it reaches is exactly the one that can resolve the ambiguity.
+    # #1664: DO NOT PRESCRIBE A VERB THE RECIPIENT CANNOT FOLLOW. When every bucketed task
+    # is already ACTIVE, `swarm_start_task` answers "already in progress — nothing changed",
+    # and the sentence asserts the board shows the task as queued when the board shows it
+    # ACTIVE. That is a state claim inherited from the "assigned OR active" bucket rather
+    # than re-read at send time, and a worker acting on it wastes a turn discovering the
+    # message was wrong. Reported by sculpt-studio after three such nudges on #1656.
+    if all_active:
+        return (
+            f"You have {task_ref} in progress but appear idle. "
+            "Run `swarm_task_status filter=mine` and `swarm_check_messages`, "
+            "then continue it, complete it, or report a blocker."
+        )
     return (
         f"You have {task_ref} open but appear idle. "
         "Run `swarm_task_status filter=mine` and `swarm_check_messages`, "
         "then resume or report a blocker. If you are actually working one of them, "
         "call `swarm_start_task` so the board shows it in progress rather than queued."
     )
+
+
+def _all_active(tasks: list[Any]) -> bool:
+    """True when EVERY bucketed task is already ACTIVE (#1664).
+
+    Read from the task objects AT SEND TIME rather than inherited from the
+    ``assigned_or_active_tasks`` bucket, which by construction cannot tell the two apart.
+    That conflation is what let the nudge tell a worker its ACTIVE task was "queued" and
+    prescribe a start verb that answers "already in progress".
+
+    Defensive about the status shape (enum or bare string) because this decides only the
+    WORDING — a misread here should soften the message, never suppress the nudge.
+    """
+    if not tasks:
+        return False
+    for t in tasks:
+        status = getattr(t, "status", None)
+        value = getattr(status, "value", status)
+        if str(value).lower() != "active":
+            return False
+    return True
+
+
+def commit_age_seconds(worker: Any) -> float | None:
+    """Seconds since this worker's repo last recorded a commit, or None if unknowable.
+
+    USES FILE MTIMES, NOT ``git log``, AND THE REASON IS THE EVENT LOOP. This is consulted
+    from ``_suppression_reason``, which is synchronous and runs inside the sweep coroutine
+    — a subprocess there would block PTY polling for however long git takes, and blocking
+    IO on the loop is a defect this codebase has already had to hunt down once. A stat is
+    microseconds.
+
+    ``.git/COMMIT_EDITMSG`` is rewritten by every commit, which makes its mtime a direct
+    commit clock. ``.git/HEAD`` moves on checkout/commit and is the fallback. Handles the
+    worktree case where ``.git`` is a FILE pointing at the real gitdir, because several
+    workers run on worktrees.
+
+    Returns None on anything unexpected — no repo, no permission, a path that is not a
+    checkout. None means "could not tell" and the caller must treat it as such.
+    """
+    path = getattr(worker, "path", None)
+    if not path or not isinstance(path, str):
+        return None
+    try:
+        root = Path(os.path.expanduser(path))
+        git = root / ".git"
+        if git.is_file():
+            # Worktree: `.git` is a file containing `gitdir: /abs/path`.
+            text = git.read_text(errors="replace").strip()
+            if not text.startswith("gitdir:"):
+                return None
+            git = Path(text.split(":", 1)[1].strip())
+        if not git.is_dir():
+            return None
+        newest: float | None = None
+        for name in ("COMMIT_EDITMSG", "HEAD"):
+            candidate = git / name
+            try:
+                mtime = candidate.stat().st_mtime
+            except OSError:
+                continue
+            newest = mtime if newest is None else max(newest, mtime)
+        if newest is None:
+            return None
+        return max(0.0, time.time() - newest)
+    except Exception:
+        _log.debug("idle_watcher: commit_age_seconds failed for %s", path, exc_info=True)
+        return None
 
 
 class IdleWatcher:
@@ -126,6 +208,7 @@ class IdleWatcher:
         escalate_to_operator: Callable[[str, str], None] | None = None,
         worker_busy_check: Callable[[Worker], bool] | None = None,
         loop_armed_check: Callable[[str], float | None] | None = None,
+        commit_activity_check: Callable[[Worker], float | None] | None = None,
     ) -> None:
         self._config = drone_config
         self._task_board = task_board
@@ -133,6 +216,11 @@ class IdleWatcher:
         self._send_to_worker = send_to_worker
         self._rate_limit_check = rate_limit_check
         self._loop_armed_check = loop_armed_check
+        # #1664: seconds since this worker's repo last received a commit, or None when it
+        # cannot be determined. The state machine cannot see an editor, a test run or a
+        # long build — a worker resting past the activity window while committing is
+        # working, and #1656 was nudged three times in that exact state.
+        self._commit_activity_check = commit_activity_check
         # Task #315: how long to wait between firing /mcp and the
         # follow-up task nudge. Overridable so tests can run with 0
         # without sleeping for real wall time.
@@ -332,8 +420,10 @@ class IdleWatcher:
         if decision == ESCALATE:
             self._escalate(worker.name, numbers)
             return False
-        # NUDGE → normal poke.
-        message = _nudge_message(numbers)
+        # NUDGE → normal poke. #1664: re-read the statuses HERE rather than inheriting
+        # "assigned or active" from the bucket, so the message describes the board as it
+        # is at send time.
+        message = _nudge_message(numbers, all_active=_all_active(active))
         try:
             await self._send_to_worker(worker.name, message, _log_operator=False)
         except Exception:
@@ -463,6 +553,31 @@ class IdleWatcher:
         numeric = isinstance(resting_for, int | float) and not isinstance(resting_for, bool)
         if window > 0 and numeric and resting_for < window:
             return f"finished a turn {resting_for:.0f}s ago (within {window:.0f}s window)"
+
+        # #1664: COMMITS ARE ACTIVITY THE STATE MACHINE CANNOT SEE. The guard above keys
+        # on `state_duration`, which measures time since the PTY last changed state — so a
+        # worker mid-build, mid-edit or simply thinking for longer than the window reads as
+        # idle. sculpt-studio was suppressed three times as it approached 600s and nudged
+        # the moment it crossed, while its task was ACTIVE and it was working.
+        #
+        # Same fail-safe shape as the guard above, and for the same reason: `None` means
+        # "could not tell", NOT "recently active", and a non-numeric value is not evidence
+        # of a commit. Both fall through to NUDGING, because absence of evidence must not
+        # become evidence of work — that is exactly how `float(MagicMock())` returning 1.0
+        # silently suppressed every mock-backed worker in #1615.
+        if window > 0 and self._commit_activity_check is not None:
+            try:
+                since_commit = self._commit_activity_check(worker)
+            except Exception:
+                _log.debug(
+                    "idle_watcher: commit_activity_check raised for %s", worker.name, exc_info=True
+                )
+                since_commit = None
+            commit_numeric = isinstance(since_commit, int | float) and not isinstance(
+                since_commit, bool
+            )
+            if commit_numeric and since_commit < window:
+                return f"committed {since_commit:.0f}s ago (within {window:.0f}s window)"
 
         # Native /loop coexistence (task #761): a worker that self-scheduled
         # its next loop tick is parked, not free — leave it until it re-wakes.
@@ -613,7 +728,7 @@ class IdleWatcher:
             return
         numbers = sorted({t.number for t in active})
         task_ids = [t.id for t in active]
-        message = _nudge_message(numbers)
+        message = _nudge_message(numbers, all_active=_all_active(active))
         try:
             await self._send_to_worker(worker_name, message, _log_operator=False)
         except Exception:

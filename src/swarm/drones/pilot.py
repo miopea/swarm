@@ -21,7 +21,7 @@ from swarm.drones.detectors import (
 )
 from swarm.drones.directives import DirectiveExecutor
 from swarm.drones.dreamer import Dreamer
-from swarm.drones.idle_watcher import IdleWatcher
+from swarm.drones.idle_watcher import IdleWatcher, commit_age_seconds
 from swarm.drones.inter_worker_watcher import InterWorkerMessageWatcher
 from swarm.drones.log import DroneAction, DroneLog
 from swarm.drones.oversight_handler import OversightHandler
@@ -319,6 +319,8 @@ class DronePilot(EventEmitter):
             drone_log=self.log,
             send_to_worker=_noop_sender,
             loop_armed_check=self._loop_armed_remaining,
+            # #1664: commits are activity the state machine cannot see.
+            commit_activity_check=commit_age_seconds,
         )
         self._idle_watcher_last_tick: int = 0
         # Inter-worker message watcher (task #235 Phase 3). Same null-
@@ -605,6 +607,8 @@ class DronePilot(EventEmitter):
             escalate_to_operator=escalate_to_operator,
             worker_busy_check=self._worker_busy,
             loop_armed_check=self._loop_armed_remaining,
+            # #1664: commits are activity the state machine cannot see.
+            commit_activity_check=commit_age_seconds,
         )
         self.inter_worker_watcher = InterWorkerMessageWatcher(
             drone_config=self._drone_config,

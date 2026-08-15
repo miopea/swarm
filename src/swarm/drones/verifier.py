@@ -394,9 +394,15 @@ class VerifierDrone:
         body = (
             f"Verifier reopened task #{task.number} — your previous completion "
             f"didn't pass. Reason: {reason}\n\n"
-            "The task is back in your queue (status=ASSIGNED). The IdleWatcher "
-            "will nudge you on its next sweep; address the verifier's finding "
-            "and re-complete when fixed."
+            # #1664: this used to promise "The IdleWatcher will nudge you on its next
+            # sweep". That is a prediction about another component, and it was never
+            # guaranteed — the watcher suppresses on operator engagement, a live busy
+            # PTY, an armed /loop, a recent turn, and now a recent commit. A worker told
+            # a nudge is coming may wait for one that never arrives, which is the same
+            # defect class as telling it a task is queued when the board says ACTIVE.
+            "The task is back in your queue (status=ASSIGNED). Pick it up with "
+            "`swarm_start_task`; address the verifier's finding and re-complete "
+            "when fixed."
         )
         try:
             await self._send_warning(
