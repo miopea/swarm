@@ -17,6 +17,7 @@ from swarm.logging import get_logger
 from swarm.pty.holder import (
     DEFAULT_SOCKET_PATH,
     holder_current_source_hash,
+    holder_source_path,
     start_holder_daemon,
 )
 from swarm.pty.process import ProcessError, WorkerProcess
@@ -121,6 +122,51 @@ class ProcessPool:
             return bool(resp.get("pong"))
         except (ProcessError, OSError):
             return False
+
+    def live_holder_drift(self) -> dict[str, Any]:
+        """Drift recomputed NOW, rather than served from the connect-time snapshot.
+
+        #1679 — THE SNAPSHOT GOES STALE AT EXACTLY THE MOMENT IT MATTERS.
+        ``_check_holder_version`` runs only from ``_try_connect``, and every consumer
+        (``/api/holder/drift``, ``/api/health``, the dashboard) read the stored dict. So
+        the reported answer describes the world as it was when the holder last attached,
+        and the instant someone edits ``holder.py`` the comparison is against a file that
+        no longer exists in that form — which is precisely when an operator asks whether
+        the running holder is current.
+
+        MEASURED 2026-08-15: both reported hashes were `a6d47db2…`, identical to each
+        other, while the file on disk hashed to `77724ec8…`. `drift: False`. A worker
+        spawned after the change had none of the new environment, confirmed by reading
+        `/proc/<pid>/environ` — so the direct observation was right and the indicator was
+        wrong. Every "drift clean" reading taken that day meant only "holder matched the
+        daemon's copy at connect time", never "the running code is current".
+
+        THE ASYMMETRY IS THE DESIGN. The holder's hash is an IMPORT-TIME value and is
+        legitimately fixed for that process's lifetime — caching it is correct and is the
+        entire point of the check. The daemon side is a FILE ON DISK that can change under
+        a running process, so it must be re-read on every question.
+
+        Leaves ``holder_drift`` untouched: that snapshot is evidence of what was true at
+        connect, and the loud warning logged there refers to it.
+        """
+        cached = dict(self.holder_drift or {})
+        holder_hash = str(cached.get("holder_hash") or "")
+        daemon_hash = holder_current_source_hash()
+        return {
+            "checked": bool(cached.get("checked", False)),
+            # "Could not tell" is NOT drift — an old holder that does not know the
+            # `version` command, or a failed probe, must not be reported as stale.
+            "drift": bool(daemon_hash) and bool(holder_hash) and holder_hash != daemon_hash,
+            "holder_hash": holder_hash,
+            "daemon_hash": daemon_hash,
+            "holder_pid": int(cached.get("holder_pid") or 0),
+            "unknown": not holder_hash,
+            # Name the file that was actually hashed. The incident was partly a
+            # two-installations problem — the daemon may run from an installed copy
+            # rather than the tree the operator edits — and a reader cannot notice that
+            # unless the path is on the record.
+            "source_path": holder_source_path(),
+        }
 
     async def _check_holder_version(self) -> None:
         """Detect bytecode skew between the running holder and holder.py.

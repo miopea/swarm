@@ -311,6 +311,12 @@ async def test_holder_drift_endpoint_reports_pool_state(client, daemon):
                 "unknown": False,
             }
 
+        def live_holder_drift(self) -> dict:
+            # #1679: the endpoint now asks for a LIVE answer rather than the
+            # connect-time snapshot. The double must offer the same surface, or the
+            # route raises and the test asserts against a 500 instead of the payload.
+            return dict(self.holder_drift)
+
     daemon.pool = _FakePool()
     resp = await client.get("/api/holder/drift")
     assert resp.status == 200

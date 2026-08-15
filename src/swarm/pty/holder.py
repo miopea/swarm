@@ -91,6 +91,16 @@ def holder_source_hash_at_import() -> str:
     return _SOURCE_HASH_AT_IMPORT
 
 
+def holder_source_path() -> str:
+    """Absolute path of the ``holder.py`` that ``holder_current_source_hash`` hashes.
+
+    #1679: reported alongside the hash so a reader can see WHICH file was measured. The
+    daemon may be running from an installed copy rather than the tree the operator edits,
+    and a hash comparison gives no way to notice that on its own.
+    """
+    return str(_SOURCE_PATH)
+
+
 def holder_current_source_hash() -> str:
     """Return the sha256 of ``holder.py`` as it sits on disk right now.
 

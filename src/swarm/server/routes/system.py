@@ -170,7 +170,8 @@ async def handle_health(request: web.Request) -> web.Response:
     if d.pilot:
         pilot_info = d.pilot.get_diagnostics()
     pool = getattr(d, "pool", None)
-    holder_drift = getattr(pool, "holder_drift", None) if pool is not None else None
+    # #1679: live rather than the connect-time snapshot — see live_holder_drift().
+    holder_drift = pool.live_holder_drift() if pool is not None else None
     # #1203: ``build_sha`` fingerprints the tree but cannot say WHY it differs —
     # "last release" and "code from no commit" produce equally opaque hashes.
     # These fields answer that directly, and being status fields rather than log
@@ -227,7 +228,10 @@ async def handle_holder_drift(request: web.Request) -> web.Response:
         return web.json_response(
             {"checked": False, "drift": False, "unknown": True, "error": "no pool"}
         )
-    return web.json_response(dict(getattr(pool, "holder_drift", {}) or {}))
+    # #1679: LIVE, not the connect-time snapshot. The cached dict compares the holder
+    # against a file as it was when the holder attached, so it reports clean the moment
+    # after holder.py changes — exactly when the operator is asking.
+    return web.json_response(pool.live_holder_drift())
 
 
 @handle_errors
@@ -253,7 +257,7 @@ async def handle_holder_bounce(request: web.Request) -> web.Response:
     if pool is None:
         return json_error("no PTY pool available", 503)
 
-    drift = dict(getattr(pool, "holder_drift", {}) or {})
+    drift = pool.live_holder_drift() if pool is not None else {}
     holder_pid = int(drift.get("holder_pid") or 0)
     if holder_pid <= 0:
         try:
