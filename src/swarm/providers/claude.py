@@ -31,6 +31,15 @@ _RE_CURSOR_OPTION = re.compile(r"^\s*[>❯]\s*\d+\.", re.MULTILINE)
 _RE_OTHER_OPTION = re.compile(r"^\s+\d+\.", re.MULTILINE)
 _RE_HINTS = re.compile(r"(\? for shortcuts|ctrl\+t to hide)", re.IGNORECASE)
 _RE_EMPTY_PROMPT = re.compile(r"^[>❯]\s*$")
+# #1647: the status-footer permission mode, most-specific first. Order is load-bearing —
+# a cycle hint can name several modes on one line, and a looser pattern winning would
+# misreport every worker identically, which is the hardest kind of error to notice.
+_RE_PERMISSION_MODES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("bypass", re.compile(r"bypass(?:ing)?\s+permissions?\s+(?:on|mode)", re.IGNORECASE)),
+    ("plan", re.compile(r"\bplan\s+mode\s+on\b", re.IGNORECASE)),
+    ("accept-edits", re.compile(r"\baccept\s+edits\s+on\b", re.IGNORECASE)),
+    ("auto", re.compile(r"\bauto\s+mode\s+on\b", re.IGNORECASE)),
+)
 # Subagent / spinner activity in the Claude Code 2.x TUI.
 #
 # Three signals — any one means "Claude is actively working":
@@ -454,6 +463,24 @@ class ClaudeProvider(LLMProvider):
         if _RE_HINTS.search(tail):
             return True
         return False
+
+    def detect_permission_mode(self, content: str) -> str | None:
+        """Read the mode off Claude Code's status footer (#1647).
+
+        The footer renders as e.g. ``⏵⏵ auto mode on (shift+tab to cycle)``. Matched
+        most-specific-first, because "accept edits" and "auto" both appear in a cycle
+        hint on some builds and the wrong one winning would misreport the whole fleet.
+
+        Returns None when no footer is visible — see the base-class contract: that means
+        UNKNOWN, never "default".
+        """
+        tail = self._get_tail(content, TAIL_NARROW)
+        if not tail:
+            return None
+        for mode, pattern in _RE_PERMISSION_MODES:
+            if pattern.search(tail):
+                return mode
+        return None
 
     def has_empty_prompt(self, content: str) -> bool:
         tail = self._get_tail(content, TAIL_LAST_LINE)

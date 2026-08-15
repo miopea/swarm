@@ -169,6 +169,27 @@ class LLMProvider(ABC):
         """Check if output shows a normal idle input prompt."""
         return False
 
+    def detect_permission_mode(self, content: str) -> str | None:
+        """Permission mode read off the CLI's status footer, or None if not shown.
+
+        #1647. Nothing in the swarm records a worker's permission mode, and the escalate
+        guards only GATE in some modes — so a control's effectiveness depended on a
+        property nobody could audit. This makes it observable.
+
+        THIS IS AN OBSERVATION OF A RENDERED DISPLAY, NOT A STORED PROPERTY, and callers
+        must treat it that way. Returning ``None`` means "no footer visible in this
+        content" — NOT "default mode". Measured 2026-08-15: a fleet sweep read 17/18 on
+        one pass and 18/18 ninety seconds later, the difference being one worker caught
+        mid-redraw. A caller that folds None into a mode bucket will manufacture exactly
+        that error, and a caller that CLEARS a previous observation on None will lose a
+        good reading to a transient repaint.
+
+        Default None on the base class: the footer is Claude Code's, and a provider whose
+        CLI renders nothing of the kind must report unknown rather than inherit a
+        Claude-shaped guess.
+        """
+        return None
+
     def is_long_running_tool_active(self, content: str) -> bool:
         """Whether the PTY tail shows an in-flight long-running tool.
 

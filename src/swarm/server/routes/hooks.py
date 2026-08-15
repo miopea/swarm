@@ -385,7 +385,44 @@ def _evaluate_rules(
             }
         )
 
+    # #1647: THE THREE EFFECT-BASED GUARDS DENY RATHER THAN ABSTAIN. Operator decision
+    # 2026-08-15, on this measurement: 18 of 18 workers in the live roster were in auto
+    # mode, where `passthrough` hands the call to a classifier that does not implement
+    # worktree boundaries, credential paths or outbound-data rules. A control that only
+    # withholds an auto-approval is not a control on that fleet — two probe commands this
+    # path correctly refused both executed, with no picker shown.
+    #
+    # SCOPED TO `unsafe_command` DELIBERATELY. These three (#1589/#1590) carry the evidence
+    # that justifies a hard deny: 5 of 7 hostile commands auto-approved before they existed.
+    # `default_escalate` and rule-driven escalations keep passing through, so the operator
+    # can still say yes to ordinary work via a picker in default mode.
+    #
+    # Mode is NOT consulted here on purpose: it is display-derived and was measured going
+    # stale inside 90 seconds, and a security decision must not depend on an observation
+    # that transient.
+    if result.source == "unsafe_command":
+        _log_hook_decision(d, tool_name, "block", f"denied: {result.rule_pattern}", worker_name)
+        return web.json_response(
+            {
+                "decision": "block",
+                "reason": (
+                    f"Denied by drone safety guard: {result.rule_pattern}. This is refused "
+                    f"outright rather than escalated, because on an auto-mode worker an "
+                    f"escalation reaches a classifier that does not implement this rule "
+                    f"(#1647). If the command is legitimate, narrow it — write inside the "
+                    f"worktree, or use the session scratchpad, which is exempt."
+                ),
+            }
+        )
+
     # "escalate" → pass through so Claude Code's own permission gate decides.
+    #
+    # WHAT PASSTHROUGH DOES AND DOES NOT GUARANTEE (#1647). It is an ABSTENTION, not an
+    # approval and not a denial: the hook exits 0 with no stdout and Claude Code decides.
+    # In DEFAULT mode that renders a permission picker — a real gate. In AUTO mode the
+    # classifier decides, and the swarm's rules have no say. Do not read the branch below
+    # as gating anything on its own; whether it gates depends on the worker's permission
+    # mode, which is surfaced as `permission_mode` on the worker (last OBSERVED value).
     #
     # #1645, OPERATOR RULING 2026-08-15. This used to consult `_queen_can_approve` and
     # return APPROVE for every tool except Bash — but that helper only checked that a

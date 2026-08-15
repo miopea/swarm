@@ -118,6 +118,28 @@ def _open_prompt_payload(pty_tail: str) -> dict[str, Any] | None:
     }
 
 
+def _permission_mode_line(worker: Any) -> str:
+    """One line naming the worker's last OBSERVED permission mode (#1647).
+
+    Worded as an observation with an age, never as current truth. The mode is read off the
+    CLI's status footer, which vanishes during a repaint, so a reading can be stale and the
+    Queen must be able to see how stale before acting on it.
+
+    It matters because the drone escalate-guards only GATE in some modes: in default mode
+    an escalation renders a picker, and in auto mode it reaches a classifier that does not
+    implement the swarm's rules at all.
+    """
+    import time as _t
+
+    mode = getattr(worker, "permission_mode", "") or ""
+    if not mode:
+        return "perms:  mode NOT OBSERVED — no status footer seen yet (not the same as 'default')\n"
+    seen = float(getattr(worker, "permission_mode_at", 0.0) or 0.0)
+    age = f"{int(_t.time() - seen)}s ago" if seen else "age unknown"
+    note = " — escalate guards DENY here only for the effect-based rules" if mode == "auto" else ""
+    return f"perms:  {mode} (observed {age}){note}\n"
+
+
 def _handle_view_worker_state(
     d: SwarmDaemon, worker_name: str, args: QueenViewWorkerStateArgs
 ) -> HandlerResult:
@@ -255,6 +277,7 @@ def _handle_view_worker_state(
         f"task:   {task_line}\n"
         f"usage:  in={usage['input_tokens']} out={usage['output_tokens']} "
         f"ctx={int(worker.context_pct * 100)}% cost=${worker.usage.cost_usd:.4f}\n"
+        f"{_permission_mode_line(worker)}"
         f"{prompt_line}"
         f"--- pty tail ({lines} lines) ---\n{pty_tail}"
     )
@@ -270,6 +293,12 @@ def _handle_view_worker_state(
                 "state": worker.display_state.value,
                 "state_duration_seconds": int(worker.state_duration),
                 "context_pct": float(worker.context_pct),
+                # #1647: last OBSERVED mode, not a stored property. Empty means never
+                # seen — NOT "default". `_at` is what lets a reader judge staleness.
+                "permission_mode_observed": getattr(worker, "permission_mode", "") or "",
+                "permission_mode_observed_at": float(
+                    getattr(worker, "permission_mode_at", 0.0) or 0.0
+                ),
                 "usage": {
                     "input_tokens": int(usage.get("input_tokens", 0)),
                     "output_tokens": int(usage.get("output_tokens", 0)),

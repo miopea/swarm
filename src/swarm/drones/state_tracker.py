@@ -245,6 +245,30 @@ class WorkerStateTracker:
             tail,
         )
 
+    def _observe_permission_mode(self, worker: Worker, content: str, provider: Any) -> None:
+        """Record the permission mode if the CLI footer is showing one (#1647).
+
+        Runs on the existing poll, on content already in hand — no extra PTY read.
+
+        A NON-MATCH NEVER CLEARS A PREVIOUS OBSERVATION, and that is the whole design.
+        The footer disappears during a repaint: a fleet sweep on 2026-08-15 read 17 of 18
+        workers on one pass and 18 of 18 ninety seconds later, the difference being one
+        worker caught mid-redraw. Clearing on None would turn every repaint into a lost
+        reading, and — worse — an operator watching the field would see modes flicker to
+        unknown and conclude the detection was broken rather than the sample transient.
+
+        Never raises: this is telemetry hanging off the classification path, and a bad
+        regex must not be able to stop a worker's state from being classified.
+        """
+        try:
+            mode = provider.detect_permission_mode(content)
+        except Exception:
+            _log.warning("permission-mode detection failed for %s", worker.name, exc_info=True)
+            return
+        if mode:
+            worker.permission_mode = mode
+            worker.permission_mode_at = time.time()
+
     def _classify_worker_state(
         self,
         worker: Worker,
@@ -255,6 +279,7 @@ class WorkerStateTracker:
         """Classify worker output into a state, with exception safety."""
         try:
             provider = self._get_provider(worker)
+            self._observe_permission_mode(worker, content, provider)
             if styled is not None:
                 new_state, events = provider.classify_styled_with_events(cmd, styled)
             else:

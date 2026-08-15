@@ -30,6 +30,8 @@ class WorkerDict(TypedDict):
     repo_path: str
     worktree_branch: str
     context_pct: float
+    permission_mode: str
+    permission_mode_at: float
     recent_tools: list[dict[str, str]]
     cache_ratio: float
     needs_operator_input: bool
@@ -215,6 +217,13 @@ class Worker:
     repo_path: str = ""  # original repo path (set when using worktree isolation)
     worktree_branch: str = ""  # branch name (e.g. "swarm/api")
     context_pct: float = 0.0  # estimated context window usage (0.0 - 1.0)
+    # #1647: LAST OBSERVED permission mode from the CLI status footer, and when it was
+    # seen. Empty string means never observed — NOT "default". These are deliberately two
+    # fields: a mode with no timestamp invites the reader to treat a stale reading as
+    # current, and the footer can vanish for a repaint (measured: a fleet sweep read 17/18
+    # then 18/18 ninety seconds apart). Only ever written when a footer actually matched.
+    permission_mode: str = ""
+    permission_mode_at: float = 0.0
     sleeping_threshold: float = field(default=SLEEPING_THRESHOLD, repr=False)
     stung_reap_timeout: float = field(default=STUNG_REAP_TIMEOUT, repr=False)
     # Configurable hysteresis thresholds (set from DroneConfig.state_thresholds)
@@ -446,6 +455,8 @@ class Worker:
             repo_path=self.repo_path,
             worktree_branch=self.worktree_branch,
             context_pct=round(self.context_pct, 3),
+            permission_mode=self.permission_mode,
+            permission_mode_at=round(self.permission_mode_at, 3),
             recent_tools=self.recent_tools[-5:],
             cache_ratio=round(self.cache_ratio, 3),
             needs_operator_input=self.needs_operator_input,
