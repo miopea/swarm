@@ -515,7 +515,17 @@ class TaskCoordinator:
                 await asyncio.sleep(0.3)
                 proc = worker.process
                 if proc and not proc.is_user_active:
-                    await proc.send_enter()
+                    # #1675: THE SUBMIT NUDGE, and why it needs its own actor. A
+                    # multi-line paste lands in the CLI's input without submitting, so
+                    # this second Enter commits it. The behaviour is correct; what was
+                    # missing was attribution — the #1658 audit recorded it as `unknown`
+                    # within minutes of shipping, in a fixed triple:
+                    #     automated text Nb / automated enter 1b / unknown enter 1b
+                    # A bare Enter is exactly the write that answers an open picker
+                    # (#1443), so it is the row type that most needs a name. Named per
+                    # SITE rather than a blanket "automated" because the question a later
+                    # investigation asks is WHICH of these three paths fired.
+                    await proc.send_enter(actor="dispatch-submit")
         except (TimeoutError, ProcessError, OSError):
             _log.warning("failed to send task message to %s", worker_name, exc_info=True)
             # Task #527: auto-handoff tasks (the inter-worker watcher's
@@ -664,7 +674,7 @@ class TaskCoordinator:
             await asyncio.sleep(0.3)
             proc = d._require_worker(worker_name).process
             if proc and not proc.is_user_active:
-                await proc.send_enter()
+                await proc.send_enter(actor="goal-arm-submit")
             self._armed_goals[worker_name] = task.number
             # #1524: the detail used to be a bare ``condition[:120]``, which made
             # buzz_log unusable as evidence of WHICH condition was seeded — the
@@ -718,7 +728,7 @@ class TaskCoordinator:
             await asyncio.sleep(0.3)
             proc = d._require_worker(worker_name).process
             if proc and not proc.is_user_active:
-                await proc.send_enter()
+                await proc.send_enter(actor="goal-clear-submit")
         except Exception:
             _log.warning(
                 "native /goal clear failed for %s (%s)", worker_name, reason, exc_info=True

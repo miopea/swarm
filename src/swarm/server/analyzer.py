@@ -392,7 +392,7 @@ class QueenAnalyzer:
                     worker.state.value,
                 )
                 return False
-            await proc.send_enter()
+            await proc.send_enter(actor="analyzer-submit")
         elif action == QueenAction.RESTART:
             await revive_worker(worker, self._get_pool())
             worker.record_revive()

@@ -545,7 +545,7 @@ class WorkerService:
         pilot = self._get_pilot()
         if pilot:
             pilot.wake_worker(name)
-        await worker.process.send_arrow_right()
+        await worker.process.send_arrow_right(actor="operator-arrow")
 
     async def arrow_left_worker(self, name: str) -> None:
         """Send Left Arrow to a worker's process."""
@@ -554,7 +554,7 @@ class WorkerService:
         pilot = self._get_pilot()
         if pilot:
             pilot.wake_worker(name)
-        await worker.process.send_arrow_left()
+        await worker.process.send_arrow_left(actor="operator-arrow")
 
     async def redraw_worker(self, name: str) -> None:
         """Send SIGWINCH to force TUI redraw for a worker."""
@@ -1081,7 +1081,10 @@ class WorkerService:
             and not (w.process and w.process.is_user_active)
         ]
         return await self._send_to_workers(
-            targets, lambda w: w.process.send_enter(), "all", "continued {count} worker(s)"
+            targets,
+            lambda w: w.process.send_enter(actor="operator-continue-all"),
+            "all",
+            "continued {count} worker(s)",
         )
 
     async def send_all(self, message: str) -> int:

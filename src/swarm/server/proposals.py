@@ -370,7 +370,7 @@ class ProposalManager:
                 if proposal.message:
                     await proc.send_keys(proposal.message, automated=True)
                 else:
-                    await proc.send_enter()
+                    await proc.send_enter(actor="proposal-submit")
         return f"escalation approved: {action}"
 
     async def _approve_completion(
