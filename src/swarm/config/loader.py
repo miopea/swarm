@@ -55,6 +55,7 @@ from swarm.config.models import (
     ToolButtonConfig,
     WebhookConfig,
     WorkerConfig,
+    WorkerShortcut,
 )
 
 _log = logging.getLogger("swarm.config")
@@ -297,6 +298,11 @@ def _parse_config(path: Path) -> HiveConfig:
 
     try:
         groups = [GroupConfig(name=g["name"], workers=g["workers"]) for g in data.get("groups", [])]
+        shortcuts = [
+            WorkerShortcut(label=str(sc.get("label", "")), keys=str(sc.get("keys", "")))
+            for sc in data.get("shortcuts", [])
+            if sc.get("label") and sc.get("keys")
+        ]
     except (KeyError, TypeError) as exc:
         raise ConfigError(
             f"Group entry must be a dict with 'name' and 'workers' fields: {exc}"
@@ -569,6 +575,7 @@ def _parse_config(path: Path) -> HiveConfig:
         provider=data.get("provider", "claude"),
         workers=workers,
         groups=groups,
+        shortcuts=shortcuts,
         default_group=data.get("default_group", ""),
         watch_interval=data.get("watch_interval", 5),
         source_path=str(path),

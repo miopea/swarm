@@ -718,6 +718,30 @@ class GroupConfig:
 
 
 @dataclass
+class WorkerShortcut:
+    """An operator-defined key sequence that can be fired at a worker's PTY (#1677).
+
+    GLOBAL, and rendered in the dashboard's shortcut bar. Adding one is a config edit with
+    no code change, which is the whole point of the ticket.
+
+    ``keys`` is written to the PTY verbatim, so it carries escape sequences — Shift+Tab is
+    ``\\x1b[Z`` (CSI Z, back-tab), which is Claude Code's permission-mode cycle. That is
+    why this is not cosmetic: #1647 measured 18 of 18 running workers in auto mode, where
+    the drone escalate-guards abstain to a classifier that does not implement them, and it
+    surfaced ``permission_mode`` on worker state so the dashboard can SHOW the mode. This
+    is the other half — being able to change it.
+
+    NO BROADCAST FIELD, deliberately. One press moving all workers into plan mode is a
+    materially different power from typing at one worker, and broadcast is Queen-only for
+    messages today. Operator decision 2026-08-15: global list, fired at one selected
+    worker.
+    """
+
+    label: str
+    keys: str
+
+
+@dataclass
 class TestConfig:
     """Settings for ``swarm test`` supervised orchestration testing."""
 
@@ -767,6 +791,8 @@ class HiveConfig:
     provider: str = "claude"  # global default: "claude" | "gemini" | "codex"
     workers: list[WorkerConfig] = field(default_factory=list)
     groups: list[GroupConfig] = field(default_factory=list)
+    # #1677: operator-defined PTY key sequences, shown in the shortcut bar.
+    shortcuts: list[WorkerShortcut] = field(default_factory=list)
     default_group: str = ""
     watch_interval: int = 5
     source_path: str | None = None

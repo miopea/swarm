@@ -394,6 +394,7 @@ def serialize_config(config: HiveConfig) -> dict[str, Any]:
         "log_level": config.log_level,
         "workers": [_serialize_worker(w) for w in config.workers],
         "groups": [{"name": g.name, "workers": g.workers} for g in config.groups],
+        "shortcuts": [{"label": sc.label, "keys": sc.keys} for sc in config.shortcuts],
     }
     if config.default_group:
         data["default_group"] = config.default_group
