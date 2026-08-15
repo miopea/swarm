@@ -31,6 +31,7 @@ import pytest
 
 from swarm.config.models import HiveConfig, WorkerShortcut
 from swarm.config.serialization import serialize_config
+from swarm.pty.process import WorkerProcess
 
 SHIFT_TAB = "\x1b[Z"
 
@@ -135,8 +136,14 @@ def _daemon(screen: str = "just working\n", shortcuts=None):
     )
     worker = MagicMock()
     worker.name = "swarm"
+    # SPEC'D against the real class on purpose. A bare MagicMock accepts any kwarg the
+    # real object rejects — which is exactly how the first version of this endpoint
+    # passed every unit test and then raised
+    # `send_keys() got an unexpected keyword argument 'actor'` against the live daemon.
+    # The mock has to refuse what WorkerProcess would refuse.
+    worker.process = MagicMock(spec=WorkerProcess)
     worker.process.get_content.return_value = screen
-    worker.process.send_keys = AsyncMock(return_value=True)
+    worker.process.send_keys = AsyncMock(spec=WorkerProcess.send_keys, return_value=True)
     d.workers = [worker]
     return d, worker
 

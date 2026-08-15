@@ -442,7 +442,9 @@ class WorkerProcess:
         # Fallback to own command
         return self.get_foreground_command()
 
-    async def send_keys(self, text: str, enter: bool = True, *, automated: bool = False) -> bool:
+    async def send_keys(
+        self, text: str, enter: bool = True, *, automated: bool = False, actor: str | None = None
+    ) -> bool:
         """Send text to the worker's PTY.
 
         Text and Enter are sent as separate writes so that interactive
@@ -469,7 +471,10 @@ class WorkerProcess:
             # believing she had no way to act. A send that cannot be delivered must say so.
             return False
         await self._flush_deferred_keys()
-        who = "automated" if automated else "operator"
+        # #1677: an explicit `actor` NAMES a specific caller (e.g. "operator-shortcut");
+        # without one the actor is derived from `automated`, which is #1658's default
+        # and covers the two broad paths — dispatch and the operator's own keystrokes.
+        who = actor or ("automated" if automated else "operator")
         await self._write(text.encode("utf-8"), actor=who)
         if enter:
             await asyncio.sleep(_INPUT_DRAIN_DELAY)
