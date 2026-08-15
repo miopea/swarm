@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from swarm.drones.log import truncate_for_log
+from swarm.logging import get_logger
 from swarm.mcp._arg_types import QueenInterruptWorkerArgs, QueenPromptWorkerArgs
 from swarm.mcp.queen_handlers._common import _assert_queen
 from swarm.mcp.queen_handlers._tasks import _fire_async
@@ -17,6 +18,8 @@ from swarm.worker.worker import QUEEN_WORKER_NAME
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
+
+_log = get_logger("mcp.queen.workers")
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -407,7 +410,44 @@ def _handle_interrupt_worker(
 _PROMPT_HOLD_SCAN_LINES = 120
 
 
-def _refuse_if_prompt_would_hold(worker: Any, target: str) -> list[TextContent] | None:
+def _note_refused_prompt(d: SwarmDaemon, target: str, message: str) -> None:
+    """Tell the RECIPIENT a prompt was attempted and refused (#1648).
+
+    The inbox is the one channel not subject to the #1451 PTY hold, so it can reach a
+    worker sitting on a picker. It carries the body, not just the fact of the attempt: a
+    recipient who learns only THAT something was lost is barely better off than one who
+    learns nothing.
+
+    MEASURED 2026-08-15 — a Queen dispatch describing three tickets was refused while a
+    picker was open and reached the recipient on neither channel. It survived only
+    because a one-line recap appeared in a later message.
+
+    Never raises. This is a courtesy on a failure path, and an exception here would
+    replace a truthful refusal with a stack trace.
+    """
+    try:
+        store = getattr(d, "message_store", None)
+        if store is None:
+            return
+        store.send(
+            QUEEN_WORKER_NAME,
+            target,
+            "status",
+            (
+                "A prompt was sent to you and REFUSED because you had a selection prompt "
+                "open — the #1451 guard blocks automated writes into an open picker. It "
+                "was never typed into your PTY, so this inbox copy is the only place it "
+                "exists. Body follows:\n\n"
+                f"{message}"
+            ),
+        )
+    except Exception:
+        _log.warning("could not leave a refused-prompt note for %s", target, exc_info=True)
+
+
+def _refuse_if_prompt_would_hold(
+    worker: Any, target: str, message: str | None = None
+) -> list[TextContent] | None:
     """Refuse a prompt that the #1451 guard would silently hold (#1608).
 
     MEASURED 2026-08-14: `queen_prompt_worker` reported "Prompt sent" for a message that
@@ -446,6 +486,21 @@ def _refuse_if_prompt_would_hold(worker: Any, target: str) -> list[TextContent] 
                 f"process group, and a picker is an input WAIT rather than a running turn, "
                 f"so the signal has nothing to cancel. Measured on a real prompt "
                 f"2026-08-14 — the picker survived the interrupt."
+            )
+            + (
+                # #1648: hand the body BACK. "Nothing was queued" told the caller the
+                # message was safe to forget while making it their sole responsibility to
+                # remember — and a Queen dispatch was lost to exactly that on 2026-08-15.
+                # A copy also goes to the recipient's inbox, which the PTY hold cannot
+                # reach; this half is so the SENDER does not have to re-derive the text.
+                (
+                    f"\n\nRESEND THIS ONCE THE PICKER IS CLEARED — the body is reproduced "
+                    f"here because it exists nowhere else. A copy has been left in "
+                    f"{target}'s inbox, which the PTY hold does not block.\n"
+                    f"--- BEGIN UNSENT MESSAGE ---\n{message}\n--- END UNSENT MESSAGE ---"
+                )
+                if message
+                else ""
             ),
         }
     ]
@@ -533,8 +588,11 @@ def _handle_prompt_worker(
     # indistinguishable from the Queen's side. She spent a night believing she had no
     # way to act on a stalled worker, because the only tool that could reach it kept
     # telling her it had.
-    refusal = _refuse_if_prompt_would_hold(worker, target)
+    refusal = _refuse_if_prompt_would_hold(worker, target, message=prompt)
     if refusal:
+        # #1648: the refusal is correct, but the CONTENT used to evaporate. Leave the
+        # recipient a copy on the one channel the PTY hold cannot block before returning.
+        _note_refused_prompt(d, target, prompt)
         return refusal
 
     _fire_async(worker_svc.send_to_worker(target, prompt, automated=True, _log_operator=False))
