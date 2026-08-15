@@ -27,6 +27,7 @@ from swarm.server.config_appliers.llms import apply_llms, apply_provider_overrid
 from swarm.server.config_appliers.notifications import apply_notifications
 from swarm.server.config_appliers.playbooks import apply_playbooks
 from swarm.server.config_appliers.queen import apply_queen
+from swarm.server.config_appliers.shortcuts import apply_shortcuts
 from swarm.server.config_appliers.test import apply_test
 from swarm.server.config_appliers.workers import SCALARS_KEYS, apply_scalars
 from swarm.server.config_appliers.workflows import apply_workflows
@@ -69,6 +70,9 @@ SECTION_REGISTRY: list[tuple[str, SectionApplier, bool]] = [
     ("coordination", apply_coordination, True),
     ("jira", apply_jira, True),
     ("playbooks", apply_playbooks, True),
+    # #1677: operator-defined PTY shortcuts. Without this row the config page
+    # reports `unknown: ["shortcuts"]` and silently drops the edit.
+    ("shortcuts", apply_shortcuts, True),
 ]
 
 # Virtual sections — their keys live at the top level of the body,
