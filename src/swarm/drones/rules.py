@@ -641,8 +641,26 @@ def _decide_choice(
     _get_choice_summary = provider.get_choice_summary
     _is_user_question = provider.is_user_question
 
-    selected = _get_choice_summary(content)
-    label = f"choice menu — selected '{selected}'" if selected else "choice menu"
+    # #1659: "HIGHLIGHTED", NOT "selected". `get_choice_summary` scans the SCREEN for the
+    # cursor line and reports the option the cursor is sitting on — nothing has been
+    # chosen, and the drone logging this is deciding to ESCALATE, i.e. explicitly
+    # declining to act.
+    #
+    # The old wording — `choice menu — selected 'X'` — cost a false high-priority security
+    # escalation on 2026-08-15: the Queen read the row as a drone having selected the
+    # highlighted option after escalating, a defect shaped exactly like #1645, and relayed
+    # it to the operator before it was checked against an unfiltered window. There was no
+    # action row. The reasoning was sound; the log lied about tense.
+    #
+    # THE RULE THIS ENCODES: a log line describing a SCREEN STATE must not use the past
+    # tense of an ACTION. The reader cannot tell the two apart, and the reader here had
+    # the source available and still could not.
+    highlighted = _get_choice_summary(content)
+    label = (
+        f"choice menu — HIGHLIGHTED: '{highlighted}' (no selection made)"
+        if highlighted
+        else "choice menu"
+    )
 
     # AskUserQuestion prompts require user decision — never auto-continue.
     question_result = _check_user_question(worker, content, label, events, _esc, _is_user_question)
