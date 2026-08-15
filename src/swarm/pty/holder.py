@@ -143,6 +143,51 @@ def _make_fd_inheritable(fd: int) -> None:
     fcntl.fcntl(fd, fcntl.F_SETFD, flags & ~fcntl.FD_CLOEXEC)
 
 
+def build_worker_env(name: str, command: list[str] | None = None) -> dict[str, str]:
+    """The environment a spawned worker runs with.
+
+    Extracted from the fork child so it can be tested: the child branch runs after
+    ``os.fork`` and ``execvpe``s immediately, so anything built inline there is
+    unreachable from a test and could only be asserted by reading the code.
+
+    #1671 — GIT_COMMITTER_* IS WHY THIS FUNCTION IS INTERESTING.
+
+    `user.email` is set GLOBALLY and nowhere else — measured across rcg-architecture,
+    swarm and rcg-platform-data — so every worker in the fleet commits as the same person.
+    `admin` could not claim commit 4f2d417 as its own, and that is a loss of ATTRIBUTION,
+    which is a different problem from branch collision and is not fixed by worktrees.
+
+    WHY THE ENVIRONMENT RATHER THAN PER-WORKTREE CONFIG. project-root demonstrated with
+    real commits that per-worktree identity works, and also its limit: IDENTITY FOLLOWS
+    THE DIRECTORY — committing inside bravo's worktree while "being" alpha records bravo.
+    That buys which-DIRECTORY, not which-WORKER. The environment follows the PROCESS, so a
+    worker reaching into another repo — the actual incident, d365-solutions running git
+    inside rcg-architecture — still records ITSELF.
+
+    COMMITTER ONLY, AUTHOR UNTOUCHED (operator decision, 2026-08-15). Author stays the
+    human's identity so GitHub linkage and verified-commit status are unaffected and no
+    per-worker address needs adding to the account. Git prefers GIT_COMMITTER_* over
+    `user.email` for the committer field, so this needs no config and leaves no state in
+    any checkout. Recover the worker with: ``git log --format='%h %cn <%ce>'``.
+
+    KNOWN LIMIT: the environment is fixed at spawn, so a worker already running keeps its
+    old identity until it restarts. Attribution improves as workers cycle, not at merge.
+    """
+    env = os.environ.copy()
+    env["TERM"] = "xterm-256color"
+    env["PATH"] = _resolve_user_path()
+    env["SWARM_MANAGED"] = "1"
+    env["SWARM_WORKER_NAME"] = name
+    env["GIT_COMMITTER_NAME"] = f"worker:{name}"
+    env["GIT_COMMITTER_EMAIL"] = f"{name}@workers.swarm"
+    # Claude Code defaults to the alternate screen buffer, which xterm.js renders without
+    # scrollback. Disable it so output flows into the main buffer (and into xterm.js's
+    # 5000-line scrollback). Upstream: anthropics/claude-code#42670.
+    if command and command[0] == "claude":
+        env["CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"] = "1"
+    return env
+
+
 class HolderError(Exception):
     """Raised when a holder operation fails."""
 
@@ -325,17 +370,7 @@ class PtyHolder:
                 if slave_fd > 2:
                     os.close(slave_fd)
                 os.chdir(cwd)
-                env = os.environ.copy()
-                env["TERM"] = "xterm-256color"
-                env["PATH"] = _resolve_user_path()
-                env["SWARM_MANAGED"] = "1"
-                env["SWARM_WORKER_NAME"] = name
-                # Claude Code defaults to the alternate screen buffer, which
-                # xterm.js renders without scrollback. Disable it so output
-                # flows into the main buffer (and into xterm.js's 5000-line
-                # scrollback). Upstream: anthropics/claude-code#42670.
-                if command and command[0] == "claude":
-                    env["CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"] = "1"
+                env = build_worker_env(name, command)
                 if shell_wrap:
                     # Wrap CLI tools in a login shell so the user drops
                     # to an interactive prompt when the tool exits (/exit).
