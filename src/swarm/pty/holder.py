@@ -49,6 +49,19 @@ DEFAULT_PID_PATH = _SWARM_DIR / "holder.pid"
 _WRITE_AUDIT_PATH = _SWARM_DIR / "pty-writes.jsonl"
 
 
+def _audit_path() -> Path:
+    """Where write-audit rows go, resolved per call.
+
+    `SWARM_PTY_WRITE_AUDIT` overrides the default. THE TEST SUITE NEEDS THIS: tests spawn
+    real holders, and the first run of the #1658 audit wrote 52 rows for fixture workers
+    (`keys-pool`, `esc-test`, `snap-gap`) straight into the OPERATOR'S file. A forensic
+    record that test runs quietly append to is not a forensic record — the next person
+    reading it cannot tell a fixture from a fleet event.
+    """
+    override = os.environ.get("SWARM_PTY_WRITE_AUDIT")
+    return Path(override) if override else _WRITE_AUDIT_PATH
+
+
 # Source hash of holder.py captured at module import time. The holder is a
 # double-forked persistent sidecar — daemon reloads (os.execv) replace the
 # daemon but leave the holder running with whatever bytecode it was spawned
@@ -555,7 +568,7 @@ class PtyHolder:
                 "bytes": len(data),
                 "kind": kind,
             }
-            with _WRITE_AUDIT_PATH.open("a") as fh:
+            with _audit_path().open("a") as fh:
                 fh.write(json.dumps(row) + "\n")
         except Exception:
             _log.debug("write audit failed for %s", name, exc_info=True)

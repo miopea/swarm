@@ -113,6 +113,26 @@ def _assert_live_db_untouched(pytestconfig: pytest.Config):
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _isolate_pty_write_audit(tmp_path_factory):
+    """Keep the #1658 PTY write-audit out of the operator's ``~/.swarm``.
+
+    Tests spawn REAL holders, so the first run of that audit appended 52 rows for fixture
+    workers (`keys-pool`, `esc-test`, `snap-gap`) to the operator's live
+    ``~/.swarm/pty-writes.jsonl``. That file is a forensic record — its whole purpose is
+    answering "who wrote to this PTY" — and a record the test suite quietly appends to
+    cannot answer it, because the reader cannot tell a fixture from a fleet event.
+
+    Same intent as ``_isolate_logging`` below: production artefacts are off-limits to
+    tests, and the isolation belongs here rather than in each test that happens to
+    remember.
+    """
+    path = tmp_path_factory.mktemp("pty-audit") / "pty-writes.jsonl"
+    os.environ["SWARM_PTY_WRITE_AUDIT"] = str(path)
+    yield
+    os.environ.pop("SWARM_PTY_WRITE_AUDIT", None)
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _isolate_logging():
     """Prevent tests from writing to the production ``~/.swarm/swarm.log``.
 

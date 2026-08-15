@@ -28,11 +28,15 @@ import pytest
 
 @pytest.fixture
 def audit(tmp_path, monkeypatch):
-    """Point the audit at a temp file and hand back a reader for it."""
-    from swarm.pty import holder as holder_mod
+    """Point the audit at a temp file and hand back a reader for it.
 
+    Sets the ENV VAR rather than patching `_WRITE_AUDIT_PATH`, because the session-scoped
+    conftest isolation already sets that env var and it takes precedence — patching the
+    constant here would be silently overridden and these tests would read an empty file
+    while the writes went somewhere else.
+    """
     path = tmp_path / "pty-writes.jsonl"
-    monkeypatch.setattr(holder_mod, "_WRITE_AUDIT_PATH", path)
+    monkeypatch.setenv("SWARM_PTY_WRITE_AUDIT", str(path))
 
     def rows() -> list[dict]:
         if not path.exists():
@@ -134,9 +138,7 @@ def test_a_write_to_a_dead_worker_records_nothing(audit):
 def test_an_audit_failure_never_blocks_the_write(tmp_path, monkeypatch):
     """Telemetry hanging off the write path must never stop a worker receiving input.
     An unwritable audit file is a degraded record, not a wedged fleet."""
-    from swarm.pty import holder as holder_mod
-
-    monkeypatch.setattr(holder_mod, "_WRITE_AUDIT_PATH", tmp_path / "nope" / "deep" / "x.jsonl")
+    monkeypatch.setenv("SWARM_PTY_WRITE_AUDIT", str(tmp_path / "nope" / "deep" / "x.jsonl"))
     h = _holder_with_worker()
 
     # Must not raise even though the audit path is unwritable.
