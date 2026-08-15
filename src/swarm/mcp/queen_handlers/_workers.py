@@ -61,16 +61,21 @@ TOOLS: list[dict[str, Any]] = [
             "dismissal ('Esc to cancel' appears in the prompt footer). "
             "CALL THIS WHEN a worker is stalled on a picker whose answer should be NO, or "
             "when you want the prompt gone without deciding it. "
-            "NOT YET OBSERVED TO WORK (#1623): the footer says 'Esc to cancel' and the "
-            "keystroke reaches the PTY, but nobody has watched Escape actually close a "
-            "picker, and whether it DENIES the prompt or merely dismisses it without "
-            "recording a choice is unknown. queen_interrupt_worker looked equally sound "
-            "on the same kind of reasoning and does not work at all. The tool reads back "
-            "and will tell you which happened — report it. "
-            "The PROVEN route for declining is queen_answer_prompt selecting the deny "
-            "option. Prefer this over queen_interrupt_worker regardless: Ctrl-C cancels "
-            "the whole turn and loses in-flight work. Always give a reason; it lands in "
-            "the buzz log."
+            "OBSERVED TO WORK 2026-08-15 (#1623), against a picker manufactured on "
+            "purpose because waiting for one to appear naturally had left this untested. "
+            "The Queen fired it at a real open AskUserQuestion on worker 'swarm': the "
+            "picker CLOSED (read-back showed `prompt` null) and that worker's PTY "
+            "recorded 'User declined to answer questions'. So Escape DECLINES the "
+            "prompt — it does NOT commit the highlighted option, which is the failure "
+            "the probe was built to catch (#1443 reached by a new route). "
+            "SCOPE, because one prompt type is not the general case: this was measured "
+            "on an AskUserQuestion picker ONLY. A permission confirmation is a different "
+            "prompt type and may take a different path; it has NOT been measured. The "
+            "tool still reads back — report anything that differs. "
+            "If a read-back shows the fingerprint unchanged, queen_answer_prompt "
+            "selecting the deny option is the fallback. Prefer this over "
+            "queen_interrupt_worker regardless: Ctrl-C loses in-flight work and REFUSES "
+            "on a picker anyway. Always give a reason; it lands in the buzz log."
         ),
         "inputSchema": {
             "type": "object",
@@ -317,8 +322,11 @@ def _handle_dismiss_prompt(
                 f"close this picker and queen_answer_prompt selecting the deny option is "
                 f"the proven route. The verified outcome is written to the buzz log as "
                 f"'dismissed' or 'SENT BUT NOT CONFIRMED'.\n"
-                f"NOTE: whether Escape DENIES the prompt or merely dismisses it without "
-                f"recording a choice has never been observed. Report what you see."
+                f"NOTE: measured 2026-08-15 (#1623) on an AskUserQuestion picker, Escape "
+                f"DECLINED it — the picker closed and the PTY recorded 'User declined to "
+                f"answer questions' rather than committing the highlighted option. A "
+                f"PERMISSION prompt has not been measured and may differ. Report what "
+                f"you see."
             ),
         }
     ]
@@ -427,9 +435,10 @@ def _refuse_if_prompt_would_hold(worker: Any, target: str) -> list[TextContent] 
         {
             "type": "text",
             "text": (
-                f"NOT SENT — {target} has an open selection prompt, so this message would "
-                f"be HELD by the #1451 guard and delivered only once the prompt closes. "
-                f"Nothing was queued.\n"
+                f"NOT SENT — {target} has an open selection prompt, and the #1451 guard "
+                f"would have HELD this message rather than delivering it, so it was "
+                f"refused here instead. Nothing was queued, and nothing will arrive later "
+                f"when the prompt closes — this is a refusal, not a deferral (#1623).\n"
                 f"To act on the prompt itself: queen_view_worker_state(worker='{target}', "
                 f"lines=200) to read the options, then queen_answer_prompt to select one, "
                 f"or queen_dismiss_prompt to send Escape.\n"

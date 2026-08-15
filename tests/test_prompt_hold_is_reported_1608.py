@@ -501,13 +501,46 @@ async def test_dismiss_refuses_when_no_prompt_is_open():
     worker.process.send_escape.assert_not_awaited()
 
 
-def test_the_dismiss_description_does_not_claim_escape_works():
-    """#1623's whole point. The description used to assert 'Escape only closes the
-    prompt' as fact — the same confident code reading that made the interrupt failure
-    surprising. It now says the behaviour is unobserved and names the proven route."""
+def test_the_dismiss_description_records_the_measurement_not_a_code_reading():
+    """#1623 CLOSED BY MEASUREMENT 2026-08-15. The description went through three
+    states: it once asserted 'Escape only closes the prompt' as fact (a confident code
+    reading), then honestly said the behaviour was unobserved, and now records what was
+    actually watched — the Queen dismissing a manufactured AskUserQuestion picker.
+
+    The claim it must carry is the one nobody could predict from the code: Escape
+    DECLINES rather than committing the highlighted option."""
     from swarm.mcp.queen_handlers._workers import TOOLS
 
     desc = next(t for t in TOOLS if t["name"] == "queen_dismiss_prompt")["description"]
 
-    assert "NOT YET OBSERVED" in desc
+    assert "OBSERVED TO WORK" in desc
+    assert "2026-08-15" in desc
+    assert "DECLINES" in desc
     assert "queen_answer_prompt" in desc
+    # The stale claim must be gone, not merely contradicted further down.
+    assert "NOT YET OBSERVED" not in desc
+
+
+def test_the_dismiss_description_keeps_the_scope_caveat_it_earned():
+    """A measurement on ONE prompt type is not a general result, and the failure mode
+    this whole ticket exists to prevent is a plausible claim outrunning its evidence.
+    AskUserQuestion was measured; a permission confirmation was not."""
+    from swarm.mcp.queen_handlers._workers import TOOLS
+
+    desc = next(t for t in TOOLS if t["name"] == "queen_dismiss_prompt")["description"]
+
+    assert "AskUserQuestion" in desc
+    assert "NOT been measured" in desc
+
+
+def test_the_refusal_does_not_promise_a_later_delivery():
+    """The wording described a HOLD while performing a REFUSAL — 'would be HELD and
+    delivered only once the prompt closes' next to 'Nothing was queued'. A Queen reading
+    the first clause waits for a message that is never coming."""
+    from swarm.mcp.queen_handlers._workers import _refuse_if_prompt_would_hold
+
+    text = _refuse_if_prompt_would_hold(_daemon_with(REAL_PLAN_PICKER).workers[0], "x")[0]["text"]
+
+    assert "Nothing was queued" in text
+    assert "nothing will arrive later" in text
+    assert "delivered only once the prompt closes" not in text
