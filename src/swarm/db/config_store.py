@@ -35,6 +35,7 @@ from swarm.config.models import (
     ToolButtonConfig,
     WebhookConfig,
     WorkerConfig,
+    WorkerShortcut,
 )
 from swarm.logging import get_logger
 
@@ -57,6 +58,9 @@ _JSON_KEYS = {
     "tool_buttons",
     "action_buttons",
     "task_buttons",
+    # #1677: operator-defined PTY shortcuts. Same list-of-dataclasses shape as the
+    # button blobs above, so it reuses _parse_button_list rather than a new parser.
+    "shortcuts",
     "custom_llms",
     "provider_overrides",
     # P4b: playbook synthesis loop config. All fields primitive so the
@@ -294,6 +298,7 @@ _BUTTON_BLOBS: dict[str, tuple[str, type]] = {
     "tool_buttons": ("tool_buttons", ToolButtonConfig),
     "action_buttons": ("action_buttons", ActionButtonConfig),
     "task_buttons": ("task_buttons", TaskButtonConfig),
+    "shortcuts": ("shortcuts", WorkerShortcut),
 }
 
 
