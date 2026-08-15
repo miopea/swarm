@@ -27,7 +27,13 @@ _ALWAYS_APPROVE_TOOLS = frozenset({"Read", "Glob", "Grep", "WebSearch", "WebFetc
 # worker can stall indefinitely on a prompt that's definitionally safe.
 _SWARM_MCP_PREFIX = "mcp__swarm__"
 
-# Tools that always need operator approval via the drone rules engine.
+# Tools excluded from the blanket approval given when NO approval rules are configured.
+#
+# #1645 removed this set's second use (the deleted queen-delegation branch) and asked
+# whether it was now redundant. IT IS NOT. The remaining use in `_evaluate_rules` is
+# independent: with an empty rule list every tool is approved outright, and dropping this
+# set would hand Bash a blanket approval on an unconfigured install — a worse failure than
+# the one #1645 fixed. It is kept as a live guard, not as documentation of intent.
 _ALWAYS_ESCALATE_TOOLS = frozenset({"Bash"})
 
 # TOOLS THAT EXIST TO REACH A HUMAN, AND SO CAN NEVER BE AUTO-APPROVED.
@@ -35,7 +41,8 @@ _ALWAYS_ESCALATE_TOOLS = frozenset({"Bash"})
 # Distinct from _ALWAYS_ESCALATE_TOOLS on purpose. That set only guards the
 # no-rules-configured branch; a matching rule still approves, and Bash DEPENDS on that
 # (drones approve safe Bash by rule constantly). This set is checked BEFORE rules run,
-# so no rule, no queen delegation and no empty config can answer for the operator.
+# so no rule and no empty config can answer for the operator. (Queen delegation was the
+# third way in and no longer exists — #1645 deleted it.)
 #
 # WHY THIS EXISTS (task #1443). AskUserQuestion was approvable like any other tool. The
 # drone's approval response for Claude is "\r" — a bare Enter — and Enter on an option
@@ -378,19 +385,19 @@ def _evaluate_rules(
             }
         )
 
-    # "escalate" → check if queen can handle this autonomously
-    if _queen_can_approve(d, tool_name):
-        _log_hook_decision(
-            d, tool_name, "approve", f"queen-delegated: {result.source}", worker_name
-        )
-        return web.json_response(
-            {
-                "decision": "approve",
-                "reason": f"Approved under queen oversight ({result.source})",
-            }
-        )
-
-    # No queen → pass through so Claude Code shows the normal permission prompt
+    # "escalate" → pass through so Claude Code's own permission gate decides.
+    #
+    # #1645, OPERATOR RULING 2026-08-15. This used to consult `_queen_can_approve` and
+    # return APPROVE for every tool except Bash — but that helper only checked that a
+    # Queen object existed and was enabled. She was never sent the call, nothing was
+    # queued for her, and "Approved under queen oversight" meant nothing more than
+    # "a Queen is configured", which is always. A rule that said escalate resolved to
+    # allow with nobody in the loop, including on the `default_escalate` branch — the
+    # fail-safe, inverted. Measured at 519 such approvals in 24h, led by Edit and Write.
+    #
+    # The ruling was to delete it rather than invent a consultation mechanism, because
+    # the correct behaviour was already in the tree: Bash was the one tool excluded from
+    # the branch, it has always taken this path, and nothing was ever stuck on it.
     _log_hook_decision(d, tool_name, "passthrough", f"escalated: {result.source}", worker_name)
     return web.json_response(
         {
@@ -502,17 +509,6 @@ def _record_tool_activity(worker: Worker, tool_name: str, tool_input: dict[str, 
     worker.recent_tools.append({"tool": tool_name, "desc": desc})
     if len(worker.recent_tools) > _MAX_RECENT_TOOLS:
         worker.recent_tools[:] = worker.recent_tools[-_MAX_RECENT_TOOLS:]
-
-
-def _queen_can_approve(d: SwarmDaemon, tool_name: str) -> bool:
-    """Check if the queen is active and can handle this approval autonomously."""
-    queen = getattr(d, "queen", None)
-    if queen is None or not queen.enabled or not queen.can_call:
-        return False
-    # Don't auto-approve Bash under queen — too risky without explicit review
-    if tool_name in _ALWAYS_ESCALATE_TOOLS:
-        return False
-    return True
 
 
 def _build_tool_text(tool_name: str, tool_input: dict[str, Any]) -> str:
