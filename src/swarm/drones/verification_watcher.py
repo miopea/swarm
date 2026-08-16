@@ -71,6 +71,10 @@ _CITATIONS = os.environ.get(
 _ARCH_REPO = os.environ.get(
     "SWARM_ARCH_REPO", os.path.expanduser("~/projects/rcg/rcg-architecture")
 )
+_DIVERGENCE = os.environ.get(
+    "SWARM_DIVERGENCE_CHECKER",
+    str(Path(__file__).resolve().parents[3] / "scripts" / "check-jira-divergence.py"),
+)
 _CONTAINMENT = os.environ.get(
     "SWARM_CONTAINMENT_CHECKER",
     str(Path(__file__).resolve().parents[3] / "scripts" / "verify-branch-containment.py"),
@@ -89,6 +93,11 @@ def default_verification_checks() -> list[tuple[str, list[str], str]]:
             "citations",
             ["python3", _CITATIONS, "--standards-repo", _ARCH_REPO, "--json"],
             "citations",
+        ),
+        (
+            "jira-divergence",
+            ["python3", _DIVERGENCE, "--json"],
+            "divergence",
         ),
         (
             "containment",
@@ -161,6 +170,9 @@ class SweepResult:
 _DENOM_PATTERNS = {
     "citations": re.compile(r"citations[_ ]found\s*[:=]\s*(\d+)", re.I),
     "containment": re.compile(r"branches[_ ]examined\s*[:=]\s*(\d+)", re.I),
+    # #1707: swarm says done, Jira does not. Twelve tasks diverged and nothing would
+    # have caught it — it was found by hand.
+    "divergence": re.compile(r"tasks[_ ]examined\s*[:=]\s*(\d+)", re.I),
 }
 # One line per branch classified — the containment checker's implicit denominator.
 _RE_BRANCH_VERDICT = re.compile(r"^(?:CONTAINED|NOT CONTAINED|SKIPPED|UNMEASURABLE)\s", re.M)
@@ -192,7 +204,7 @@ def parse_denominator(kind: str, output: str) -> int | None:
     # JSON first: --json output is the stable contract, the text is for humans.
     try:
         blob = json.loads(output)
-        for key in ("citations_found", "branches_examined"):
+        for key in ("citations_found", "branches_examined", "tasks_examined"):
             if isinstance(blob, dict) and key in blob:
                 return int(blob[key])
     except (ValueError, TypeError):

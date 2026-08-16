@@ -259,11 +259,14 @@ def test_the_config_key_survives_a_round_trip():
     assert serialize_config(cfg)["drones"]["verification_interval_seconds"] == 3600.0
 
 
-def test_the_default_checks_name_both_scripts():
+def test_the_default_checks_name_every_scheduled_script():
+    """#1707 added board-vs-Jira divergence as a third check. Pinned as an exact list so
+    a check cannot be silently dropped from the sweep — a scheduled job quietly running
+    two of three and reporting clean is the defect this whole file is about."""
     from swarm.drones.verification_watcher import default_verification_checks
 
     labels = [c[0] for c in default_verification_checks()]
-    assert labels == ["citations", "containment"]
+    assert labels == ["citations", "jira-divergence", "containment"]
 
 
 def test_a_missing_checker_raises_so_the_sweep_reports_it():
@@ -311,3 +314,57 @@ def test_each_checker_runs_inside_its_own_repo():
     src = inspect.getsource(run_check_subprocess)
     assert "cwd=cwd" in src
     assert "parents[1]" in src
+
+
+# ---------------------------------------------------------------------------
+# #1707 — board-vs-Jira divergence joins the sweep
+# ---------------------------------------------------------------------------
+
+
+def test_the_divergence_check_is_part_of_the_sweep():
+    from swarm.drones.verification_watcher import default_verification_checks
+
+    assert "jira-divergence" in [c[0] for c in default_verification_checks()]
+
+
+def test_a_divergent_task_is_reported_to_the_queen():
+    """AC5 DEMONSTRATED. A task done in swarm whose Jira ticket never got the transition
+    is exactly what went unnoticed for 12 tasks over three days."""
+    sent: list[str] = []
+    out = '{"tasks_examined": 70, "diverged": [{"number": 1414, "jira_key": "WWD-6852"}]}'
+    VerificationWatcher(
+        checks=[("jira-divergence", ["x"], "divergence")],
+        run_check=lambda a: (1, out),
+        notify_queen=sent.append,
+        interval_seconds=86400.0,
+    ).sweep()
+
+    assert len(sent) == 1
+    assert "WWD-6852" in sent[0]
+
+
+def test_a_divergence_run_that_examined_nothing_is_a_failed_run():
+    """The denominator rule applies here too: zero tasks examined means the board could
+    not be read, not that nothing diverged."""
+    sent: list[str] = []
+    r = VerificationWatcher(
+        checks=[("jira-divergence", ["x"], "divergence")],
+        run_check=lambda a: (0, '{"tasks_examined": 0, "diverged": []}'),
+        notify_queen=sent.append,
+        interval_seconds=86400.0,
+    ).sweep()
+
+    assert r.outcomes[0].measured_nothing is True
+    assert "MEASURED NOTHING" in sent[0]
+
+
+def test_a_clean_divergence_run_stays_silent():
+    sent: list[str] = []
+    VerificationWatcher(
+        checks=[("jira-divergence", ["x"], "divergence")],
+        run_check=lambda a: (0, '{"tasks_examined": 70, "diverged": []}'),
+        notify_queen=sent.append,
+        interval_seconds=86400.0,
+    ).sweep()
+
+    assert sent == []
