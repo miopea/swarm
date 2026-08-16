@@ -104,8 +104,19 @@ def pr_heads(slug: str) -> list[str]:
     stale list gets wrong.
     """
     result = subprocess.run(
-        ["gh", "pr", "list", "--repo", slug, "--state", "open", "--json", "headRefName",
-         "--jq", ".[].headRefName"],
+        [
+            "gh",
+            "pr",
+            "list",
+            "--repo",
+            slug,
+            "--state",
+            "open",
+            "--json",
+            "headRefName",
+            "--jq",
+            ".[].headRefName",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -113,6 +124,47 @@ def pr_heads(slug: str) -> list[str]:
     if result.returncode != 0:
         raise Unmeasurable(f"cannot read open PRs for {slug}: {result.stderr.strip()[:120]}")
     return result.stdout.split()
+
+
+def local_branches(repo: str) -> list[str]:
+    """Every local branch except the checked-out one (git refuses to delete that)."""
+    head = git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
+    return [
+        b.strip()
+        for b in git(repo, "branch", "--format=%(refname:short)").splitlines()
+        if b.strip() and b.strip() != head
+    ]
+
+
+def remote_branches(repo: str, base: str) -> list[str]:
+    """Every remote branch except the base.
+
+    Prunes first. Remote-TRACKING refs go stale: a branch deleted on the server
+    keeps its refs/remotes entry until someone prunes, so an unpruned run reports
+    on branches that no longer exist. CI clones are always fresh; humans are not.
+    """
+    git(repo, "fetch", "origin", "--prune", "--quiet")
+    base_short = base.split("/", 1)[-1]
+    return [
+        ref
+        for ref in git(
+            repo, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"
+        ).split()
+        # "origin" itself and "origin/HEAD" are pointers, not branches.
+        if ref not in (base, "origin")
+        and not ref.endswith("/HEAD")
+        and ref.split("/", 1)[-1] != base_short
+    ]
+
+
+def resolve_branches(args: argparse.Namespace) -> list[str]:
+    """Branches to examine, from the explicit list plus whichever modes are on."""
+    branches = list(args.branches)
+    if args.all:
+        branches = local_branches(args.repo)
+    if args.remote:
+        branches += remote_branches(args.repo, args.base)
+    return branches
 
 
 def check(repo: str, base: str, branch: str) -> tuple[bool, list[str], int]:
@@ -126,6 +178,28 @@ def check(repo: str, base: str, branch: str) -> tuple[bool, list[str], int]:
     return not unaccounted, unaccounted, len(lines)
 
 
+def report_branch(args: argparse.Namespace, branch: str) -> tuple[bool, int]:
+    """Print one branch's verdict. Returns (is_contained, failure_count)."""
+    try:
+        contained, unaccounted, total = check(args.repo, args.base, branch)
+    except Unmeasurable as exc:
+        # Unmeasurable always fails, under EITHER polarity: a result we could not
+        # take must never read as "safe to delete" nor as "all clean".
+        print(f"UNMEASURABLE   {branch}  ({exc}) — DO NOT DELETE")
+        return False, 1
+
+    if contained:
+        print(f"CONTAINED      {branch}  ({total} added lines all present in {args.base})")
+        return True, 1 if args.fail_on == "stale" else 0
+
+    print(f"NOT CONTAINED  {branch}  ({len(unaccounted)} of {total} added lines unaccounted)")
+    for line in unaccounted[: args.show]:
+        print(f"                 | {line[:100]}")
+    if len(unaccounted) > args.show:
+        print(f"                 | … {len(unaccounted) - args.show} more")
+    return False, 1 if args.fail_on == "unaccounted" else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".", help="repository path")
@@ -134,7 +208,10 @@ def main() -> int:
     parser.add_argument(
         "--remote",
         action="store_true",
-        help="every remote branch (this is the only mode CI can use — a CI clone has no local branches)",
+        help=(
+            "every remote branch. The only mode CI can use: a CI clone has no "
+            "local branches, so --all there silently finds nothing and calls it clean."
+        ),
     )
     parser.add_argument(
         "--skip-pr-heads",
@@ -158,31 +235,7 @@ def main() -> int:
     parser.add_argument("branches", nargs="*")
     args = parser.parse_args()
 
-    branches = args.branches
-    if args.all:
-        head = git(args.repo, "rev-parse", "--abbrev-ref", "HEAD").strip()
-        branches = [
-            b.strip()
-            for b in git(args.repo, "branch", "--format=%(refname:short)").splitlines()
-            if b.strip() and b.strip() != head
-        ]
-    if args.remote:
-        # Reads remote-TRACKING refs, which go stale: a branch deleted on the
-        # server keeps its refs/remotes entry until someone prunes. Unpruned, this
-        # mode reports on branches that no longer exist — so prune first rather
-        # than trusting the local view. CI clones are always fresh; humans are not.
-        git(args.repo, "fetch", "origin", "--prune", "--quiet")
-        base_short = args.base.split("/", 1)[-1]
-        branches += [
-            ref
-            for ref in git(
-                args.repo, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"
-            ).split()
-            # "origin" itself and "origin/HEAD" are pointers, not branches.
-            if ref not in (args.base, "origin")
-            and not ref.endswith("/HEAD")
-            and ref.split("/", 1)[-1] != base_short
-        ]
+    branches = resolve_branches(args)
     if args.skip_pr_heads:
         try:
             heads = set(pr_heads(args.skip_pr_heads))
@@ -204,29 +257,10 @@ def main() -> int:
     failures = 0
     stale = []
     for branch in branches:
-        try:
-            contained, unaccounted, total = check(args.repo, args.base, branch)
-        except Unmeasurable as exc:
-            # Unmeasurable always fails, under either polarity: a result we could
-            # not take must never read as either "safe to delete" or "all clean".
-            failures += 1
-            print(f"UNMEASURABLE   {branch}  ({exc}) — DO NOT DELETE")
-            continue
+        contained, failed = report_branch(args, branch)
         if contained:
             stale.append(branch)
-            print(f"CONTAINED      {branch}  ({total} added lines all present in {args.base})")
-            if args.fail_on == "stale":
-                failures += 1
-        else:
-            if args.fail_on == "unaccounted":
-                failures += 1
-            print(
-                f"NOT CONTAINED  {branch}  ({len(unaccounted)} of {total} added lines unaccounted)"
-            )
-            for line in unaccounted[: args.show]:
-                print(f"                 | {line[:100]}")
-            if len(unaccounted) > args.show:
-                print(f"                 | … {len(unaccounted) - args.show} more")
+        failures += failed
 
     if args.fail_on == "stale" and stale:
         print()
@@ -234,8 +268,11 @@ def main() -> int:
         print("Delete them by hand; this reports, it does not delete, because deleting a")
         print("branch a dependent PR points at closes that PR irrecoverably.")
         for branch in stale:
-            print(f"    git push origin --delete {branch.split('/', 1)[-1]}"
-                  if branch.startswith("origin/") else f"    git branch -D {branch}")
+            print(
+                f"    git push origin --delete {branch.split('/', 1)[-1]}"
+                if branch.startswith("origin/")
+                else f"    git branch -D {branch}"
+            )
     return 1 if failures else 0
 
 
