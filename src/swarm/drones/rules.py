@@ -142,7 +142,23 @@ ALWAYS_ESCALATE = re.compile(
     r"|chmod\s+(-[a-zA-Z]+\s+)*777\b"
     r"|authorized_keys"
     r"|\bdd\s+[^\n]*\bof=/dev/"
-    r"|npm\s+publish\b",
+    r"|npm\s+publish\b"
+    # #1684 Phase 2: FORCE-DELETING A BRANCH. Measured — `git branch -D main` was
+    # AUTO-APPROVED via the safe-builtin regex, because `branch` is a safe git subcommand
+    # and `git branch` on its own genuinely is a read. The flag is what makes it
+    # destructive, and unmerged work deleted this way is not in any reflog the worker
+    # will think to check.
+    #
+    # `-D` ONLY, not `-d`. Lowercase refuses to delete an unmerged branch, so it cannot
+    # lose work — denying it would be friction with no payoff.
+    #
+    # WRAPPED IN `(?-i:…)` BECAUSE THIS WHOLE PATTERN IS re.IGNORECASE, and without the
+    # scoped flag `-D` also matches `-d` — the two flags git treats as opposites. This is
+    # the SECOND time today that a case-insensitive pattern erased a case-significant flag
+    # distinction; #1683's was `-x` (proxy) versus `-X` (request method). Every other
+    # alternative in ALWAYS_ESCALATE is genuinely case-insensitive (SQL keywords, verbs),
+    # which is why the flag is right for the pattern and wrong for this one branch.
+    r"|(?-i:git\s+branch\s+(?:-[a-zA-Z]*\s+)*-D\b)",
     re.IGNORECASE,
 )
 
@@ -274,7 +290,24 @@ _RE_SENSITIVE_PATH = re.compile(
     r"|\.env(\.[A-Za-z0-9_-]+)?(?=$|[\s'\"/;|&)])"
     r"|\.npmrc\b|\.pypirc\b|\.netrc\b|\.pgpass\b"
     r"|~?/\.aws/|~?/\.config/gh/|~?/\.docker/config\.json"
-    r"|credentials\b",
+    r"|credentials\b"
+    # #1684 Phase 2: SYSTEM credential files. Measured — `cat /etc/shadow` was
+    # AUTO-APPROVED, because `cat` is a safe verb and the safe-builtin regex (step 4)
+    # runs before any operator escalate rule (step 5). The verb was read; the object
+    # never was.
+    #
+    # `/etc/passwd` is deliberately ABSENT. It is world-readable and holds no
+    # credential — including it would deny ordinary system inspection to catch nothing,
+    # which is this file's definition of a guard that gets switched off.
+    #
+    # `/proc/<pid>/environ` is also deliberately absent, and that one is a genuine
+    # judgement call rather than an obvious exclusion: it does expose secrets held in a
+    # process environment, but it is also the diagnostic this project's own runbooks use
+    # to verify worker identity (#1671, #1679). Denying it would break documented ops
+    # work to close a path that `.env`/`.ssh` coverage already narrows. Revisit if it is
+    # ever seen used for exfiltration.
+    r"|/etc/(shadow|gshadow|sudoers)\b"
+    r"|~?/\.kube/config\b",
     re.IGNORECASE,
 )
 
