@@ -22,6 +22,33 @@ wording. Ancestry could not have distinguished that from genuinely lost work.
 DELETION RULE: `-D` only what this reports CONTAINED. Anything else is reported
 with its unaccounted lines and left alone.
 
+HOW TO READ "N LINES ABSENT FROM MAIN" — THE TOOL CANNOT TELL YOU, SO READ THEM.
+
+An unaccounted line is either a correction main deliberately made, or a finding
+that was written and never landed. Containment proves the line is ABSENT; it
+cannot prove whether it SHOULD be. That distinction is a human read, every time.
+
+Measured once, and the denominator matters: on rcg-architecture (a documentation
+repo), 9 of 9 branches with unaccounted lines turned out to be deliberate
+corrections — retractions, operator rulings, withdrawn advice — and none was lost
+work. So on a doc repo, where corrections land as new commits, "absent from main"
+correlates with "main decided against it" rather than "lost".
+
+DO NOT GENERALISE THAT TO CODE, where an absent line is far more often unfinished
+work. And 9 of 9 is suggestive, not a law: a uniform result on a sample of nine
+is a reason to expect the pattern, not a reason to skip the read.
+
+WHY A STALE BRANCH IS MORE THAN UNTIDY. One of those nine held a finding claiming
+"a D365 role write ARMS a demotion", escalated to the operator as an urgent live
+security issue and REFUTED AND RETRACTED hours later. Main records the retraction;
+the branch does not. Anyone checking that branch out would have read a falsified
+claim in a form that reads as current, with no signal it had been withdrawn. A
+stale branch can preserve a retracted claim past its retraction.
+
+Related, from the same sweep: a retraction in one repo does not automatically
+reach a rule that lives in ANOTHER. Verify the cross-repo copy rather than
+assuming the correction travelled.
+
 Usage:
     verify-branch-containment.py [--repo PATH] [--base REF] [--all | BRANCH...]
     verify-branch-containment.py --repo ~/projects/rcg/rcg-architecture --all
