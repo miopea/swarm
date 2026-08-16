@@ -107,7 +107,14 @@ def run_check_subprocess(argv: list[str]) -> tuple[int, str]:
     script = argv[1] if len(argv) > 1 else ""
     if script and not Path(script).exists():
         raise FileNotFoundError(f"checker not found: {script}")
-    proc = subprocess.run(argv, capture_output=True, text=True, timeout=_CHECK_TIMEOUT)
+    # RUN IT INSIDE ITS OWN REPO. Both checkers resolve refs with plain `git`, so they
+    # inherit whatever cwd the daemon happens to have — and the daemon's is not a repo.
+    # OBSERVED ON THE FIRST LIVE SWEEP: containment printed "no branches to check" and
+    # EXITED 0. A silent empty result reported as success is exactly what this watcher
+    # exists to catch, and it did catch it (BROKEN / MEASURED NOTHING) — but the check
+    # itself had measured nothing. `<repo>/scripts/x.py` -> parents[1] is the repo root.
+    cwd = str(Path(script).resolve().parents[1]) if script else None
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=_CHECK_TIMEOUT, cwd=cwd)
     return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
 

@@ -297,3 +297,17 @@ def test_containment_with_no_branches_examined_is_still_measured_nothing():
     """The other direction, and the one that matters: no verdict lines means it really
     did examine nothing, and that must NOT be reported as clean."""
     assert parse_denominator("containment", "\n1 stale branch(es)\n") is None
+
+
+def test_each_checker_runs_inside_its_own_repo():
+    """OBSERVED ON THE FIRST LIVE SWEEP. Both checkers resolve refs with plain `git` and
+    inherited the daemon's cwd, which is not a repo — containment printed "no branches to
+    check" and EXITED 0. The watcher correctly refused to call that clean, but the check
+    had measured nothing, which is the failure one layer down."""
+    import inspect
+
+    from swarm.drones.verification_watcher import run_check_subprocess
+
+    src = inspect.getsource(run_check_subprocess)
+    assert "cwd=cwd" in src
+    assert "parents[1]" in src
