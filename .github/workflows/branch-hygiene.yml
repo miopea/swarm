@@ -1,0 +1,85 @@
+name: Branch hygiene
+
+# WHAT THIS CAN AND CANNOT SEE — read before trusting a green run.
+#
+# A CI checkout is a FRESH CLONE. It has no local branches, so this job can only
+# ever observe REMOTE branches. That matters because the problem this was written
+# for is partly invisible here: on 2026-08-16 rcg-architecture's shared working
+# copy held 13 branches `git branch --no-merged` flagged, and NINE OF THEM EXISTED
+# ONLY IN THAT WORKING COPY. No GitHub workflow can reach those, ever. A green run
+# here means "no stale REMOTE branch", never "no stale branch".
+#
+# The local half is covered by scripts/sweep-shared-checkouts.sh, which has to run
+# on the machine holding the checkouts. Both layers exist because either alone is
+# a check that reports clean while missing most of what it claims to cover.
+
+on:
+  schedule:
+    # Weekly. Stale branches accumulate at the rate PRs merge, not faster.
+    - cron: "17 6 * * 1"
+  pull_request:
+    paths:
+      - "scripts/verify-branch-containment.py"
+      - ".github/workflows/branch-hygiene.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  containment:
+    name: Remote branches are contained in main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: containment needs the merge-base of every branch, and
+          # a shallow clone silently has none. With fetch-depth 1 this job would
+          # report UNMEASURABLE for everything, which is at least honest — but
+          # it would also never pass.
+          fetch-depth: 0
+
+      - name: Fetch all remote branches
+        # checkout@v4 fetches only the triggering ref's branch by default, so
+        # refs/remotes/origin/* is otherwise nearly empty and the sweep would
+        # find nothing to check and call that clean.
+        run: git fetch origin --prune "+refs/heads/*:refs/remotes/origin/*"
+
+      - name: Positive control — the checker can still fail
+        # Guards the whole job against becoming hollow. If a future edit makes
+        # the script return 0 unconditionally, this step catches it here rather
+        # than the day someone deletes a branch on its say-so.
+        run: |
+          set -euo pipefail
+          if python3 scripts/verify-branch-containment.py --base origin/main no-such-branch-xyz; then
+            echo "::error::POSITIVE CONTROL FAILED — the checker passed an unresolvable ref."
+            echo "It can no longer distinguish measurable from unmeasurable, so its"
+            echo "green results mean nothing. Fix the script, do not disable this step."
+            exit 1
+          fi
+          echo "control OK — unresolvable ref correctly reported UNMEASURABLE"
+
+      - name: Containment sweep
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # --fail-on stale, NOT the default. The two uses have opposite polarity:
+          # the default asks "is it safe to delete what I named" and fails on NOT
+          # CONTAINED; hygiene asks "is anything dead lying around" and fails on
+          # CONTAINED, because a branch whose every line is already on main IS the
+          # stale one. The default here would have gone green while stale branches
+          # piled up — the exact hollow-green this job exists to prevent.
+          python3 scripts/verify-branch-containment.py \
+            --base origin/main \
+            --remote \
+            --skip-pr-heads "${{ github.repository }}" \
+            --fail-on stale \
+            --show 3
+
+      # The sweep exits non-zero when any branch is NOT CONTAINED. That is the
+      # gate: a branch whose lines are not all on main is either work in flight
+      # (open a PR, and it gets SKIPPED) or something that needs a human. It is
+      # deliberately NOT auto-deleted — #1693 measured that deleting a branch a
+      # dependent PR points at closes that PR irrecoverably, ~1s after reporting
+      # success. Automation proposes; a person deletes.

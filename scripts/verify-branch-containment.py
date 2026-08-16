@@ -95,6 +95,26 @@ def base_corpus(repo: str, base: str, paths: list[str]) -> set[str]:
     return corpus
 
 
+def pr_heads(slug: str) -> list[str]:
+    """Head branch names of OPEN PRs, read live from GitHub.
+
+    An open PR's head is work in flight, not a stale branch, and deleting one is
+    how a dependent PR gets irrecoverably closed. Read live rather than passed in
+    as a list: a PR opened since the caller last looked is exactly the case a
+    stale list gets wrong.
+    """
+    result = subprocess.run(
+        ["gh", "pr", "list", "--repo", slug, "--state", "open", "--json", "headRefName",
+         "--jq", ".[].headRefName"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise Unmeasurable(f"cannot read open PRs for {slug}: {result.stderr.strip()[:120]}")
+    return result.stdout.split()
+
+
 def check(repo: str, base: str, branch: str) -> tuple[bool, list[str], int]:
     """Return (contained, unaccounted_lines, total_added)."""
     lines, paths = added_lines(repo, base, branch)
@@ -111,6 +131,29 @@ def main() -> int:
     parser.add_argument("--repo", default=".", help="repository path")
     parser.add_argument("--base", default="origin/main", help="base ref")
     parser.add_argument("--all", action="store_true", help="every local branch")
+    parser.add_argument(
+        "--remote",
+        action="store_true",
+        help="every remote branch (this is the only mode CI can use — a CI clone has no local branches)",
+    )
+    parser.add_argument(
+        "--skip-pr-heads",
+        metavar="OWNER/REPO",
+        help="exclude open-PR head branches, read live via gh; they are work in flight, not stale",
+    )
+    parser.add_argument(
+        "--fail-on",
+        choices=("unaccounted", "stale"),
+        default="unaccounted",
+        help=(
+            "which condition exits non-zero. THE TWO USES HAVE OPPOSITE POLARITY. "
+            "'unaccounted' (default) answers 'is it safe to delete what I named?' — "
+            "NOT CONTAINED fails. 'stale' answers 'is anything dead lying around?' — "
+            "CONTAINED fails, because a branch whose every line is already on main IS "
+            "the stale one. Using the wrong polarity gives a green run that means the "
+            "opposite of what the caller wanted."
+        ),
+    )
     parser.add_argument("--show", type=int, default=5, help="unaccounted lines to print")
     parser.add_argument("branches", nargs="*")
     args = parser.parse_args()
@@ -123,27 +166,76 @@ def main() -> int:
             for b in git(args.repo, "branch", "--format=%(refname:short)").splitlines()
             if b.strip() and b.strip() != head
         ]
+    if args.remote:
+        # Reads remote-TRACKING refs, which go stale: a branch deleted on the
+        # server keeps its refs/remotes entry until someone prunes. Unpruned, this
+        # mode reports on branches that no longer exist — so prune first rather
+        # than trusting the local view. CI clones are always fresh; humans are not.
+        git(args.repo, "fetch", "origin", "--prune", "--quiet")
+        base_short = args.base.split("/", 1)[-1]
+        branches += [
+            ref
+            for ref in git(
+                args.repo, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"
+            ).split()
+            # "origin" itself and "origin/HEAD" are pointers, not branches.
+            if ref not in (args.base, "origin")
+            and not ref.endswith("/HEAD")
+            and ref.split("/", 1)[-1] != base_short
+        ]
+    if args.skip_pr_heads:
+        try:
+            heads = set(pr_heads(args.skip_pr_heads))
+        except Unmeasurable as exc:
+            # Never fall through to a clean report: without the PR set we cannot
+            # tell a stale branch from work in flight, and the permissive answer
+            # is the dangerous one.
+            print(f"UNMEASURABLE   open-PR set ({exc}) — refusing to classify anything")
+            return 1
+        if heads:
+            kept = [b for b in branches if b.split("/", 1)[-1] not in heads and b not in heads]
+            for dropped in sorted(set(branches) - set(kept)):
+                print(f"SKIPPED        {dropped}  (open-PR head — work in flight)")
+            branches = kept
     if not branches:
         print("no branches to check", file=sys.stderr)
         return 1
 
     failures = 0
+    stale = []
     for branch in branches:
         try:
             contained, unaccounted, total = check(args.repo, args.base, branch)
         except Unmeasurable as exc:
+            # Unmeasurable always fails, under either polarity: a result we could
+            # not take must never read as either "safe to delete" or "all clean".
             failures += 1
             print(f"UNMEASURABLE   {branch}  ({exc}) — DO NOT DELETE")
             continue
         if contained:
+            stale.append(branch)
             print(f"CONTAINED      {branch}  ({total} added lines all present in {args.base})")
+            if args.fail_on == "stale":
+                failures += 1
         else:
-            failures += 1
-            print(f"NOT CONTAINED  {branch}  ({len(unaccounted)} of {total} added lines unaccounted)")
+            if args.fail_on == "unaccounted":
+                failures += 1
+            print(
+                f"NOT CONTAINED  {branch}  ({len(unaccounted)} of {total} added lines unaccounted)"
+            )
             for line in unaccounted[: args.show]:
                 print(f"                 | {line[:100]}")
             if len(unaccounted) > args.show:
                 print(f"                 | … {len(unaccounted) - args.show} more")
+
+    if args.fail_on == "stale" and stale:
+        print()
+        print(f"{len(stale)} stale branch(es) — every added line is already on {args.base}.")
+        print("Delete them by hand; this reports, it does not delete, because deleting a")
+        print("branch a dependent PR points at closes that PR irrecoverably.")
+        for branch in stale:
+            print(f"    git push origin --delete {branch.split('/', 1)[-1]}"
+                  if branch.startswith("origin/") else f"    git branch -D {branch}")
     return 1 if failures else 0
 
 
