@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from swarm.drones.log import DroneAction, DroneLog, LogCategory
 from swarm.logging import get_logger
 from swarm.pty.process import ProcessError
+from swarm.pty.prompt_guard import has_open_selection_prompt
 from swarm.server.helpers import truncate_preview
 from swarm.tasks.board import TaskBoard
 from swarm.worker.worker import Worker, WorkerState
@@ -27,6 +28,8 @@ _log = get_logger("server.worker_service")
 # is what makes people click again. The force-kill backstop runs regardless, so
 # these bound politeness, not correctness.
 _KILL_INTERRUPT_DELAY = 0.15  # after Esc, before the quit command
+
+
 _KILL_QUIT_TIMEOUT = 2.0  # wait for the agent to exit after its quit command
 _KILL_POLL_INTERVAL = 0.1  # how often to check whether it has gone
 _KILL_SHELL_EXIT_DELAY = 0.5  # after `exit`, before signalling the process
@@ -47,6 +50,16 @@ _ANSWER_SETTLE_SECONDS = 2.0
 # Pause between arrow keys so a TUI repaints between them. Without it a burst of escape
 # sequences can be coalesced and the cursor lands short of the target.
 _ARROW_STEP_SECONDS = 0.12
+
+
+class PromptOpenError(Exception):
+    """A keystroke was refused because the worker has an open selection prompt.
+
+    Distinct from ``ProcessError`` on purpose: nothing went wrong with the PTY, and the
+    caller should see a 409 (refused, try again once the picker is cleared) rather than a
+    500 (broken). Carrying that distinction in the type is what lets both entry points map
+    it to the same status without either of them re-deriving the reason.
+    """
 
 
 def _remembered_states(loader: Callable[[], dict[str, Any]] | None) -> dict[str, Any]:
@@ -355,6 +368,48 @@ class WorkerService:
         await worker.process.send_escape(actor="operator-escape")
         self._drone_log.add(
             DroneAction.OPERATOR, name, "sent Escape", category=LogCategory.OPERATOR
+        )
+
+    async def shift_tab_worker(self, name: str) -> None:
+        """Send Shift+Tab — the permission-mode cycle — to a worker's process (#1677).
+
+        REFUSES WHEN A SELECTION PROMPT IS OPEN, and does not queue. The ordinary operator
+        write path deliberately BYPASSES the #1451 hold: the operator is the human the
+        prompt is waiting for, and a guard there would make an open question unanswerable.
+        A mode-cycle button is different in kind — it is not an answer to the question on
+        screen, and firing one into an open picker is how an operator's own question gets
+        answered by accident (#1443's shape). Refusing beats queueing for the reason #1608
+        and #1623 settled on: a discrete action delivered whenever the prompt happens to
+        close arrives with no relation to why it was sent.
+
+        The guard lives HERE rather than in the routes because there are two entry points
+        (``/action/shift-tab`` and ``/api/workers/{name}/shift-tab``) and a guard
+        duplicated per route is a guard that will eventually only be on one of them.
+        """
+        worker = self.require_worker(name)
+        self._require_process(worker)
+        assert worker.process is not None
+
+        try:
+            screen = worker.process.get_content(_PROMPT_ANSWER_SCAN_LINES)
+        except Exception:
+            screen = ""
+        if has_open_selection_prompt(screen):
+            raise PromptOpenError(
+                f"NOT SENT — {name} has an open selection prompt, and a mode change fired "
+                f"into one would answer a question the operator was asked. Clear the "
+                f"picker first (answer it, or queen_dismiss_prompt), then try again."
+            )
+
+        pilot = self._get_pilot()
+        if pilot:
+            pilot.wake_worker(name)
+        await worker.process.send_shift_tab(actor="operator-shortcut")
+        self._drone_log.add(
+            DroneAction.OPERATOR,
+            name,
+            "sent Shift+Tab (permission-mode cycle)",
+            category=LogCategory.OPERATOR,
         )
 
     async def dismiss_open_prompt(self, name: str) -> str:

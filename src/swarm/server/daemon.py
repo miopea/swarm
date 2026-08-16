@@ -2331,6 +2331,10 @@ class SwarmDaemon(EventEmitter):
             worker.state_known = True  # #1357: a deliberate set IS a measurement
             worker.state_since = time.time()
 
+    async def shift_tab_worker(self, name: str) -> None:
+        """Send Shift+Tab (permission-mode cycle) to a worker's process."""
+        await self.worker_svc.shift_tab_worker(name)
+
     async def arrow_up_worker(self, name: str) -> None:
         """Send Up Arrow to a worker's process."""
         await self.worker_svc.arrow_up_worker(name)

@@ -15,8 +15,6 @@ _KNOWN_TOP_KEYS = {
     "provider",
     "workers",
     "groups",
-    # #1677: operator-defined PTY key sequences shown in the shortcut bar.
-    "shortcuts",
     "default_group",
     "watch_interval",
     "drones",

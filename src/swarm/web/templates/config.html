@@ -1064,6 +1064,7 @@
                         <option value="arrow_down" {{ 'selected' if btn.action == 'arrow_down' else '' }}>Arrow Down</option>
                         <option value="arrow_right" {{ 'selected' if btn.action == 'arrow_right' else '' }}>Arrow Right</option>
                         <option value="arrow_left" {{ 'selected' if btn.action == 'arrow_left' else '' }}>Arrow Left</option>
+                        <option value="shift_tab" {{ 'selected' if btn.action == 'shift_tab' else '' }}>Shift+Tab (cycle permission mode)</option>
                         <option value="export" {{ 'selected' if btn.action == 'export' else '' }}>Export</option>
                         <option value="" {{ 'selected' if not btn.action else '' }}>Custom</option>
                     </select>
@@ -1893,8 +1894,8 @@
         var row = document.createElement('div');
         row.className = 'approval-rule-row';
         row.draggable = true;
-        var actions = ['revive','refresh','kill','escape','arrow_up','arrow_down','arrow_right','arrow_left','export',''];
-        var actionLabels = ['Revive','Refresh','Kill','Escape','Arrow Up','Arrow Down','Arrow Right','Arrow Left','Export','Custom'];
+        var actions = ['revive','refresh','kill','escape','arrow_up','arrow_down','arrow_right','arrow_left','shift_tab','export',''];
+        var actionLabels = ['Revive','Refresh','Kill','Escape','Arrow Up','Arrow Down','Arrow Right','Arrow Left','Shift+Tab (cycle permission mode)','Export','Custom'];
         var styles = ['secondary','queen','danger'];
         var styleLabels = ['Default','Queen','Danger'];
         var selAction = '';

@@ -88,13 +88,24 @@ def test_a_non_claude_command_does_not_get_the_claude_screen_flag(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _git(repo, *args, env=None):
+# The variables `build_worker_env` injects. The negative control must REMOVE these, not
+# merely decline to set them: since the holder began injecting them at spawn (#1671), a
+# worker's own session HAS them, so a test that inherits `os.environ` measures the
+# operator's shell rather than the absence it claims to prove. That is how this control
+# started failing — correctly — the moment the fix went live in the session running it.
+_IDENTITY_VARS = ("GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL")
+
+
+def _git(repo, *args, env=None, strip=()):
+    merged = {**os.environ, **(env or {})}
+    for key in strip:
+        merged.pop(key, None)
     subprocess.run(
         ["git", *args],
         cwd=repo,
         check=True,
         capture_output=True,
-        env={**os.environ, **(env or {})},
+        env=merged,
     )
 
 
@@ -155,13 +166,18 @@ def test_two_workers_committing_to_THE_SAME_directory_stay_distinguishable(repo)
 def test_without_the_env_both_commits_are_indistinguishable(repo):
     """THE NEGATIVE CONTROL — the bug itself, reproduced. Without the injected identity
     the two commits above collapse to the same committer, which is why `admin` could not
-    claim 4f2d417. Without this test the one above proves only that git works."""
+    claim 4f2d417. Without this test the one above proves only that git works.
+
+    STRIPS the identity vars explicitly. Inheriting the ambient environment made this
+    control pass for the wrong reason before #1671 shipped and fail for the right one
+    after — a worker session now carries `GIT_COMMITTER_*`, so "did not set it" and "it
+    is not set" stopped being the same statement."""
     (repo / "a.txt").write_text("x")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "plain one")
+    _git(repo, "add", "-A", strip=_IDENTITY_VARS)
+    _git(repo, "commit", "-qm", "plain one", strip=_IDENTITY_VARS)
     (repo / "b.txt").write_text("x")
-    _git(repo, "add", "-A")
-    _git(repo, "commit", "-qm", "plain two")
+    _git(repo, "add", "-A", strip=_IDENTITY_VARS)
+    _git(repo, "commit", "-qm", "plain two", strip=_IDENTITY_VARS)
 
     out = subprocess.run(
         ["git", "log", "-2", "--format=%cn <%ce>"],

@@ -590,16 +590,6 @@
     <span><span class="sc-key">Alt+N</span> <span class="sc-label">New Task</span></span>
     <span><span class="sc-key">Alt+X</span> <span class="sc-label">Quit</span></span>
     <span><span class="sc-key">?</span> <span class="sc-label">Help</span></span>
-    {#- #1677: operator-defined PTY shortcuts. These are a DIFFERENT KIND from the
-        entries above: those are browser actions (panel toggles, API calls), these write
-        a key sequence into the selected worker's PTY. They share the bar because the
-        operator asked for one place to see them, not because one drives the other.
-        Only LABELS reach the browser — the bytes stay server-side so the endpoint stays
-        a named-shortcut API rather than an arbitrary-PTY-write one. -#}
-    {% for sc in shortcuts %}
-    <span><button class="sc-shortcut" data-action="fireShortcut" data-label="{{ sc.label }}"
-        title="Send this key sequence to the selected worker">{{ sc.label }}</button></span>
-    {% endfor %}
     <a href="/api/docs/ui" target="_blank" class="sc-label no-underline" style="color:var(--muted)" title="Interactive API documentation">API Docs</a>
     <span class="shortcut-bar-version">
         <span class="sc-label" id="footer-version">{% if is_dev %}<span style="color:var(--honey)">(dev)</span>{% if build_sha %} <span style="color:var(--muted)">@ {{ build_sha }}</span>{% endif %}{% else %}v{{ version }}{% if build_sha %} <span style="color:var(--muted)">@ {{ build_sha }}</span>{% endif %}{% endif %}</span>

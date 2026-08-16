@@ -17,15 +17,10 @@ from swarm.server.helpers import (
     validate_worker_name,
     worker_action,
 )
+from swarm.server.worker_service import PromptOpenError
 from swarm.worker.worker import TokenUsage, Worker
 
 _log = get_logger("server.routes.workers")
-
-
-# #1677: how much screen the shortcut guard reads before firing. Matches the window
-# WorkerProcess uses for the #1451 hold — prompt HEIGHT is what defeated earlier
-# detectors, so a tail slice would report "no prompt" on the tallest pickers.
-_SHORTCUT_PROMPT_SCAN_LINES = 120
 
 
 def register(app: web.Application) -> None:
@@ -46,7 +41,7 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/workers/{name}/memory", handle_worker_memory)
     app.router.add_put("/api/workers/{name}/memory", handle_worker_memory_save)
     app.router.add_post("/api/workers/{name}/send", handle_worker_send)
-    app.router.add_post("/api/workers/{name}/shortcut", handle_worker_shortcut)
+    app.router.add_post("/api/workers/{name}/shift-tab", handle_worker_shift_tab)
     app.router.add_post("/api/workers/{name}/continue", handle_worker_continue)
     app.router.add_post("/api/workers/{name}/kill", handle_worker_kill)
     app.router.add_post("/api/workers/{name}/escape", handle_worker_escape)
@@ -207,64 +202,20 @@ async def handle_worker_update(request: web.Request) -> web.Response:
 
 
 @handle_errors
-async def handle_worker_shortcut(request: web.Request) -> web.Response:
-    """Fire an operator-defined key sequence at a worker's PTY (#1677).
+async def handle_worker_shift_tab(request: web.Request) -> web.Response:
+    """Send Shift+Tab (permission-mode cycle) to a worker's PTY (#1677).
 
-    THE KEYS COME FROM CONFIG, NEVER FROM THE REQUEST. The body names a shortcut by
-    label; the bytes are looked up in ``config.shortcuts``. Accepting `keys` from the
-    caller would turn this into a general write-arbitrary-bytes-to-any-PTY endpoint
-    reachable by anything holding a session cookie, which is a much larger surface than
-    the feature needs.
-
-    REFUSES WHEN A SELECTION PROMPT IS OPEN, and does not queue. The ordinary operator
-    write path deliberately BYPASSES the #1451 hold — the operator is the human the
-    prompt is waiting for, and a guard there would make an open question unanswerable —
-    but a shortcut is a button press, not a considered answer to the question on screen.
-    Firing one into an open picker is how an operator's own question gets answered by
-    accident (#1443's shape). Refusing beats queueing for the same reason #1608 and #1623
-    settled on: a discrete action delivered whenever the prompt happens to close arrives
-    with no relation to why it was sent.
+    A sibling of the escape / arrow endpoints, not a mechanism of its own. The refusal
+    when a selection prompt is open lives in ``worker_svc.shift_tab_worker`` so this
+    route and ``/action/shift-tab`` cannot drift apart.
     """
     d = get_daemon(request)
     name = request.match_info["name"]
-    body = await request.json()
-    label = str(body.get("label", "")).strip()
-    if not label:
-        return json_error("Missing 'label' — shortcuts are named, and keys come from config")
-
-    shortcut = next((s for s in d.config.shortcuts if s.label == label), None)
-    if shortcut is None:
-        known = ", ".join(s.label for s in d.config.shortcuts) or "(none configured)"
-        return json_error(f"No configured shortcut named {label!r}. Configured: {known}", 404)
-
-    worker = next((w for w in d.workers if w.name == name), None)
-    if worker is None or worker.process is None:
-        return json_error(f"Worker '{name}' not found or has no process", 404)
-
-    from swarm.pty.prompt_guard import has_open_selection_prompt
-
     try:
-        screen = worker.process.get_content(_SHORTCUT_PROMPT_SCAN_LINES)
-    except Exception:
-        screen = ""
-    if has_open_selection_prompt(screen):
-        return json_error(
-            f"NOT SENT — {name} has an open selection prompt, and a shortcut fired into "
-            f"one would answer a question the operator was asked. Clear the picker first "
-            f"(answer it, or queen_dismiss_prompt), then fire the shortcut.",
-            409,
-        )
-
-    # `automated=True` DESPITE a human pressing the button, and the distinction is
-    # #1451's own: the flag means "no human chose to send this INTO THIS SCREEN".
-    # An operator clicking a shortcut chose to send a key sequence; they did not
-    # choose to answer whatever question happens to be on the worker's screen. It
-    # also closes the race the explicit guard above cannot: a picker can render
-    # between the check and this write, and the #1451 hold is the backstop.
-    await worker.process.send_keys(
-        shortcut.keys, enter=False, automated=True, actor="operator-shortcut"
-    )
-    return web.json_response({"status": "sent", "worker": name, "label": label})
+        await d.shift_tab_worker(name)
+    except PromptOpenError as exc:
+        return json_error(str(exc), 409)
+    return web.json_response({"status": "shift_tab_sent", "worker": name})
 
 
 @handle_errors

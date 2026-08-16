@@ -100,8 +100,6 @@ async def handle_dashboard(request: web.Request) -> dict[str, Any]:
 
     return {
         "workers": _worker_dicts(d),
-        # #1677: operator-defined PTY shortcuts, rendered into the shortcut bar.
-        "shortcuts": [{"label": sc.label} for sc in d.config.shortcuts],
         "queen": _queen_dict(d),
         "selected_worker": selected,
         "worker_output": worker_output,

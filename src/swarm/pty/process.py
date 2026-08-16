@@ -561,6 +561,15 @@ class WorkerProcess:
         """Send Left Arrow (ANSI escape) to the worker's PTY."""
         await self._write(b"\x1b[D", actor=actor)
 
+    async def send_shift_tab(self, *, actor: str = "unknown") -> None:
+        """Send Shift+Tab (CSI Z, back-tab) to the worker's PTY.
+
+        Claude Code's permission-mode cycle. #1647 measured 18 of 18 running workers in
+        auto mode, where the drone escalate-guards abstain to a classifier that does not
+        implement them — this is the operator's control for changing that.
+        """
+        await self._write(b"\x1b[Z", actor=actor)
+
     async def send_sigwinch(self) -> None:
         """Send SIGWINCH to force TUI redraw."""
         await self._signal(signal.SIGWINCH)

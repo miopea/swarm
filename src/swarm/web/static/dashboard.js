@@ -249,29 +249,6 @@
         toggleBottomPanel: function() { toggleBottomPanel(); },
         toggleTabUtils: function(el, e) { e.stopPropagation(); toggleTabUtils(); },
         showShortcuts: function() { document.getElementById('shortcuts-modal').style.display = 'flex'; },
-        // #1677: fire an operator-defined key sequence at the SELECTED worker. The bytes
-        // live in config server-side; the browser only names the shortcut, so this stays
-        // a named-shortcut call rather than an arbitrary-PTY-write one.
-        // A 409 means the worker has an open picker and the shortcut was REFUSED — that
-        // is the #1451 guard doing its job, not an error to retry.
-        fireShortcut: function(el) {
-            // Resolved at CALL time: showToast is assigned far later in this file, so
-            // capturing it at definition time would bind undefined.
-            var _scToast = window.showToast || function (m) { console.log(m); };
-            var label = el && el.dataset ? el.dataset.label : '';
-            if (!label) return;
-            if (!selectedWorker) { _scToast('Select a worker first', 'error'); return; }
-            fetch('/api/workers/' + encodeURIComponent(selectedWorker) + '/shortcut', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-                body: JSON.stringify({ label: label })
-            }).then(function (r) {
-                return r.json().then(function (b) { return { ok: r.ok, body: b }; });
-            }).then(function (res) {
-                if (res.ok) { _scToast(label + ' \u2192 ' + selectedWorker); }
-                else { _scToast(res.body.error || 'Shortcut refused', 'error'); }
-            }).catch(function () { _scToast('Shortcut failed', 'error'); });
-        },
         hideShortcuts: function() { document.getElementById('shortcuts-modal').style.display = 'none'; },
         hideOnboarding: function() { var m = document.getElementById('onboarding-modal'); if (m) m.style.display = 'none'; },
         toggleTileMode: function() { toggleTileMode(); },
@@ -7044,6 +7021,7 @@
         if (action === 'kill') { killWorker(); return; }
         if (action === 'merge') { mergeWorker(); return; }
         if (action === 'escape') { sendSpecialKey('escape'); return; }
+        if (action === 'shift_tab') { sendSpecialKey('shift-tab'); return; }
         if (action === 'arrow_up') { sendSpecialKey('arrow-up'); return; }
         if (action === 'arrow_down') { sendSpecialKey('arrow-down'); return; }
         if (action === 'arrow_right') { sendSpecialKey('arrow-right'); return; }
@@ -7055,8 +7033,20 @@
 
     window.sendSpecialKey = function(key) {
         if (!selectedWorker) return;
-        actionFetch('/action/' + key + '/' + encodeURIComponent(selectedWorker), { method: 'POST' })
-            .then(function() { showToast(key + ' sent to ' + selectedWorker); });
+        var target = selectedWorker;
+        actionFetch('/action/' + key + '/' + encodeURIComponent(target), { method: 'POST' })
+            .then(function(resp) {
+                // A 409 means the worker has an open picker and the key was REFUSED.
+                // Toasting "sent" here would report a write that never happened — the
+                // failure mode #1677 exists to avoid.
+                if (resp.status === 409) {
+                    return resp.json().then(function(b) {
+                        showToast(b.error || (key + ' refused — open prompt on ' + target));
+                    });
+                }
+                if (!resp.ok) { showToast(key + ' FAILED on ' + target); return; }
+                showToast(key + ' sent to ' + target);
+            });
     }
 
     window.mergeWorker = function() {

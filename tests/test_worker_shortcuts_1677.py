@@ -1,39 +1,43 @@
-"""#1677 — operator-defined PTY shortcuts, settable in config.
+"""#1677 — Shift+Tab as an ACTION BUTTON, in the mechanism that already existed.
 
-The operator asked for Shift+Tab as a shortcut and clarified: settable in CONFIG, as a
-global option in the shortcut bar. Shift+Tab is `\\x1b[Z` (CSI Z, back-tab) — Claude Code's
-PERMISSION-MODE CYCLE, which is why this is not cosmetic: #1647 measured 18 of 18 running
-workers in auto mode, where the drone escalate-guards abstain to a classifier that does not
-implement them, and surfaced `permission_mode` so the dashboard can SHOW the mode. This is
-the other half.
+THE CORRECTION IS THE POINT OF THIS FILE. The first implementation read "this is a global
+option in the shortcut bar set in the config like we already do" as "a new config list,
+like the other config lists" and built a parallel `shortcuts:` section with its own
+endpoint and its own rendering. The operator meant the ACTION BUTTONS list — the one that
+already has Escape, Arrow Up, Arrow Down, Arrow Left and Arrow Right in its dropdown, all
+of which are keystrokes written to a worker's PTY. "Like we already do" was a pointer at
+an existing mechanism, not a description of a shape.
 
-TWO DESIGN CONSTRAINTS, both learned the hard way and both tested here:
+The visible symptom was the button rendering in the bottom status strip next to
+`Alt+X Quit` and `? Help` instead of in the dashboard action bar beside Kill and Revive.
 
-  KEYS COME FROM CONFIG, NEVER FROM THE REQUEST. Accepting `keys` from the caller would
-  make this a general write-arbitrary-bytes-to-any-PTY endpoint reachable by anything
-  holding a session cookie — far more surface than the feature needs.
+So Shift+Tab is now one more `action` value on the existing `ActionButtonConfig`, which
+means it needs NO config plumbing at all: `action` is a free-form string, so the label,
+order, style and mobile/desktop visibility all come from the machinery that already
+shipped. That is why the config half of this file is short — the correct fix deleted more
+than it added.
 
-  THE SHORTCUT REFUSES ON AN OPEN PICKER. The ordinary operator write path deliberately
-  BYPASSES the #1451 hold, because the operator IS the human the prompt waits for and a
-  guard there would make an open question unanswerable. But a shortcut is a button press,
-  not a considered answer to the question on screen — firing one into a picker is how the
-  operator's own question gets answered by accident (#1443's shape). It REFUSES rather
-  than queues, for the reason #1608 and #1623 settled: a discrete action delivered
-  whenever the prompt happens to close arrives with no relation to why it was sent.
+WHY SHIFT+TAB SPECIFICALLY: it is Claude Code's permission-mode cycle. #1647 measured
+18 of 18 running workers in auto mode, where the drone escalate-guards abstain to a
+classifier that does not implement them, and surfaced `permission_mode` on worker state so
+the dashboard can SHOW the mode. This is the other half — being able to change it.
 """
 
 from __future__ import annotations
 
-import json
+import re
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from swarm.config.models import HiveConfig, WorkerShortcut
+from swarm.config.models import ActionButtonConfig
 from swarm.config.serialization import serialize_config
 from swarm.pty.process import WorkerProcess
+from swarm.server.worker_service import PromptOpenError, WorkerService
 
 SHIFT_TAB = "\x1b[Z"
+_SRC = Path(__file__).resolve().parent.parent / "src" / "swarm"
 
 REAL_PICKER = """\
   Would you like to proceed?
@@ -44,197 +48,242 @@ REAL_PICKER = """\
 
 
 # ---------------------------------------------------------------------------
-# AC1 — defined in config, no code change to add one
+# AC1 — settable in config, with no new config plumbing
 # ---------------------------------------------------------------------------
 
 
-def test_a_shortcut_round_trips_through_config_serialization():
-    """`serialize_config` is explicit per field, so a new list only survives if it was
-    wired. If this fails, a shortcut added by an operator silently vanishes on save."""
-    cfg = HiveConfig(shortcuts=[WorkerShortcut(label="Cycle permission mode", keys=SHIFT_TAB)])
+def test_a_shift_tab_button_round_trips_through_the_existing_action_button_config():
+    """AC1. The operator adds it in the Action Buttons list on the config page. If this
+    fails, the button vanishes on save — which is exactly what happened twice while the
+    parallel `shortcuts:` section was being wired, because the config applier and the DB
+    store each dropped an unknown section silently."""
+    from swarm.config.models import HiveConfig
+
+    cfg = HiveConfig(
+        action_buttons=[ActionButtonConfig(label="Mode", action="shift_tab", style="secondary")]
+    )
 
     data = serialize_config(cfg)
 
-    assert data["shortcuts"] == [{"label": "Cycle permission mode", "keys": SHIFT_TAB}]
+    assert {"label": "Mode", "action": "shift_tab"}.items() <= data["action_buttons"][0].items()
 
 
-def test_the_escape_sequence_survives_serialization_intact():
-    """The whole payload is a control sequence. A serializer that escaped, stripped or
-    normalised it would leave the shortcut firing the wrong bytes — and `\\x1b[Z` mangled
-    into literal text would type `[Z` into the worker's prompt."""
-    cfg = HiveConfig(shortcuts=[WorkerShortcut(label="st", keys=SHIFT_TAB)])
+def test_the_action_value_needs_no_whitelist_entry():
+    """WHY THE CORRECTED FIX IS SMALL. `ActionButtonConfig.action` is a free-form string,
+    so a new action type costs zero config-layer changes. A whitelist appearing here later
+    would silently drop `shift_tab` on save, so this test is the tripwire for that."""
+    import dataclasses
 
-    assert serialize_config(cfg)["shortcuts"][0]["keys"] == "\x1b[Z"
-    assert len(serialize_config(cfg)["shortcuts"][0]["keys"]) == 3
+    field = {f.name: f for f in dataclasses.fields(ActionButtonConfig)}["action"]
 
-
-def _write_yaml(tmp_path, body: str):
-    """A real swarm.yaml on disk, loaded through the real loader.
-
-    Deliberately not a dict helper: the operator edits a FILE, and the question AC1 asks
-    is whether a shortcut added that way takes effect. Parsing a dict would skip the YAML
-    layer where an escape sequence is most likely to be mangled.
-    """
-    path = tmp_path / "swarm.yaml"
-    path.write_text(body)
-    return path
+    assert field.type in ("str", str), "action must stay a plain string"
 
 
-def test_shortcuts_load_from_a_real_yaml_file(tmp_path):
-    """AC1's core: an operator adds a shortcut in config and it becomes usable, with no
-    code change."""
-    from swarm.config.loader import load_config
+def test_the_operator_can_name_and_style_the_button_freely():
+    """The label is the operator's, not ours — `Mode` in the screenshot. The action is
+    what binds behaviour, so the two must be independent."""
+    from swarm.config.models import HiveConfig
 
-    cfg = load_config(
-        str(
-            _write_yaml(
-                tmp_path,
-                "session_name: t\nworkers: []\n"
-                "shortcuts:\n"
-                '  - label: "Cycle permission mode"\n'
-                '    keys: "\\e[Z"\n',
+    cfg = HiveConfig(
+        action_buttons=[
+            ActionButtonConfig(
+                label="Cycle mode", action="shift_tab", style="danger", show_mobile=False
             )
-        )
+        ]
     )
 
-    assert [s.label for s in cfg.shortcuts] == ["Cycle permission mode"]
-    assert cfg.shortcuts[0].keys in ("\x1b[Z", "\\e[Z")
+    got = serialize_config(cfg)["action_buttons"][0]
 
-
-def test_an_incomplete_shortcut_entry_is_dropped_rather_than_half_built(tmp_path):
-    """A shortcut with a label and no keys would render a button that writes nothing —
-    worse than absent, because it looks like it works."""
-    from swarm.config.loader import load_config
-
-    cfg = load_config(
-        str(
-            _write_yaml(
-                tmp_path,
-                "session_name: t\nworkers: []\n"
-                "shortcuts:\n"
-                '  - label: "broken"\n'
-                '  - keys: "x"\n'
-                '  - label: "ok"\n    keys: "y"\n',
-            )
-        )
-    )
-
-    assert [s.label for s in cfg.shortcuts] == ["ok"]
+    assert got["label"] == "Cycle mode"
+    assert got["style"] == "danger"
+    assert got["show_mobile"] is False
 
 
 # ---------------------------------------------------------------------------
-# The endpoint
+# The keystroke itself
 # ---------------------------------------------------------------------------
 
 
-def _daemon(screen: str = "just working\n", shortcuts=None):
-    d = MagicMock()
-    d.config.shortcuts = (
-        shortcuts
-        if shortcuts is not None
-        else [WorkerShortcut(label="Cycle permission mode", keys=SHIFT_TAB)]
-    )
+def _proc_capturing():
+    proc = WorkerProcess(name="swarm", cwd="/tmp")
+    sent: list[dict] = []
+
+    async def _send(cmd: dict) -> dict:
+        sent.append(cmd)
+        return {"ok": True}
+
+    proc.bind_send_cmd(_send)
+    return proc, sent
+
+
+@pytest.mark.asyncio
+async def test_send_shift_tab_writes_csi_z_and_nothing_else():
+    """Shift+Tab is CSI Z (back-tab), 3 bytes. A wrong sequence would type visible junk
+    into the worker's prompt rather than cycling the mode."""
+    proc, sent = _proc_capturing()
+
+    await proc.send_shift_tab(actor="operator-shortcut")
+
+    import base64
+
+    writes = [c for c in sent if c.get("cmd") == "write"]
+    assert len(writes) == 1
+    assert base64.b64decode(writes[0]["data"]) == b"\x1b[Z"
+
+
+@pytest.mark.asyncio
+async def test_the_keystroke_carries_its_actor():
+    """AC3, and #1658's requirement: a bare control sequence arriving in
+    ~/.swarm/pty-writes.jsonl with no name cannot be traced to whoever pressed the
+    button."""
+    proc, sent = _proc_capturing()
+
+    await proc.send_shift_tab(actor="operator-shortcut")
+
+    assert [c["actor"] for c in sent if c.get("cmd") == "write"] == ["operator-shortcut"]
+
+
+@pytest.mark.asyncio
+async def test_an_unlabelled_call_still_records_unknown():
+    """#1675's rule holds for the new verb too: `unknown` MUST STAY REACHABLE. A confident
+    wrong name in a forensic record is worse than an honest gap, because it cannot be
+    questioned."""
+    proc, sent = _proc_capturing()
+
+    await proc.send_shift_tab()
+
+    assert [c["actor"] for c in sent if c.get("cmd") == "write"] == ["unknown"]
+
+
+# ---------------------------------------------------------------------------
+# AC4 — the open-picker refusal, in the service so both routes inherit it
+# ---------------------------------------------------------------------------
+
+
+def _service(screen: str = "just working\n"):
+    svc = WorkerService.__new__(WorkerService)
     worker = MagicMock()
     worker.name = "swarm"
     # SPEC'D against the real class on purpose. A bare MagicMock accepts any kwarg the
-    # real object rejects — which is exactly how the first version of this endpoint
-    # passed every unit test and then raised
-    # `send_keys() got an unexpected keyword argument 'actor'` against the live daemon.
-    # The mock has to refuse what WorkerProcess would refuse.
+    # real object rejects — which is how the first version of this feature passed ten unit
+    # tests and then raised `send_keys() got an unexpected keyword argument 'actor'`
+    # against the live daemon.
     worker.process = MagicMock(spec=WorkerProcess)
     worker.process.get_content.return_value = screen
-    worker.process.send_keys = AsyncMock(spec=WorkerProcess.send_keys, return_value=True)
-    d.workers = [worker]
-    return d, worker
-
-
-async def _fire(daemon, label: str = "Cycle permission mode", name: str = "swarm"):
-    from swarm.server.routes.workers import handle_worker_shortcut
-
-    request = MagicMock()
-    request.match_info = {"name": name}
-    request.json = AsyncMock(return_value={"label": label})
-    request.app = {"daemon": daemon}
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("swarm.server.helpers.get_daemon", lambda _r: daemon)
-        mp.setattr("swarm.server.routes.workers.get_daemon", lambda _r: daemon)
-        return await handle_worker_shortcut(request)
+    worker.process.send_shift_tab = AsyncMock(spec=WorkerProcess.send_shift_tab)
+    svc.require_worker = lambda _n: worker  # type: ignore[method-assign]
+    svc._require_process = lambda _w: None  # type: ignore[method-assign]
+    svc._get_pilot = lambda: None  # type: ignore[method-assign]
+    svc._drone_log = MagicMock()
+    return svc, worker
 
 
 @pytest.mark.asyncio
-async def test_firing_a_shortcut_writes_the_configured_bytes_with_an_actor():
-    """AC3. The write must be attributable in ~/.swarm/pty-writes.jsonl — a bare control
-    sequence arriving with no name is exactly what #1658 exists to prevent."""
-    daemon, worker = _daemon()
+async def test_an_open_picker_refuses_the_keystroke_and_writes_NOTHING():
+    """AC4, and the load-bearing half. Asserted on the WRITE PATH, not just the raised
+    type: a guard that raised and still wrote would pass an exception-only test while
+    committing the operator's picker to an answer."""
+    svc, worker = _service(screen=REAL_PICKER)
 
-    resp = await _fire(daemon)
+    with pytest.raises(PromptOpenError):
+        await svc.shift_tab_worker("swarm")
 
-    assert resp.status == 200
-    worker.process.send_keys.assert_awaited_once()
-    kwargs = worker.process.send_keys.await_args.kwargs
-    assert worker.process.send_keys.await_args.args[0] == SHIFT_TAB
-    assert kwargs["actor"] == "operator-shortcut"
-    assert kwargs["enter"] is False, "a shortcut must not append Enter — that would submit"
+    worker.process.send_shift_tab.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_an_open_picker_refuses_the_shortcut_and_writes_NOTHING():
-    """AC4, and the load-bearing half. Asserted on the WRITE PATH, not just the status
-    code: a handler that returned 409 and still wrote would pass a response-only test
-    while committing the operator's picker to an answer."""
-    daemon, worker = _daemon(screen=REAL_PICKER)
+async def test_a_quiet_worker_gets_the_keystroke():
+    """POSITIVE CONTROL. A guard that refused unconditionally would pass the test above
+    and make the button permanently inert — indistinguishable from working, which is the
+    defect class this codebase kept hitting."""
+    svc, worker = _service()
 
-    resp = await _fire(daemon)
+    await svc.shift_tab_worker("swarm")
 
-    assert resp.status == 409
-    worker.process.send_keys.assert_not_awaited()
+    worker.process.send_shift_tab.assert_awaited_once()
+    assert worker.process.send_shift_tab.await_args.kwargs["actor"] == "operator-shortcut"
 
 
 @pytest.mark.asyncio
 async def test_the_refusal_names_what_to_do_about_it():
     """A refusal that only says no leaves the operator stuck — the #1608 lesson."""
-    daemon, _ = _daemon(screen=REAL_PICKER)
+    svc, _ = _service(screen=REAL_PICKER)
 
-    body = json.loads((await _fire(daemon)).body)
+    with pytest.raises(PromptOpenError) as exc:
+        await svc.shift_tab_worker("swarm")
 
-    assert "open selection prompt" in body["error"]
-    assert "dismiss" in body["error"].lower() or "answer it" in body["error"].lower()
-
-
-@pytest.mark.asyncio
-async def test_an_unknown_label_is_refused_and_lists_what_is_configured():
-    daemon, worker = _daemon()
-
-    resp = await _fire(daemon, label="not-a-shortcut")
-
-    assert resp.status == 404
-    assert "Cycle permission mode" in json.loads(resp.body)["error"]
-    worker.process.send_keys.assert_not_awaited()
+    assert "open selection prompt" in str(exc.value)
+    assert "answer it" in str(exc.value) or "dismiss" in str(exc.value).lower()
 
 
 @pytest.mark.asyncio
-async def test_keys_supplied_by_the_caller_are_ignored():
-    """THE SECURITY PROPERTY. The endpoint resolves bytes from config by label; if it
-    honoured a caller-supplied `keys` it would be an arbitrary-PTY-write API for anyone
-    with a session cookie."""
-    from swarm.server.routes.workers import handle_worker_shortcut
+async def test_an_unreadable_screen_does_not_block_the_keystroke():
+    """`get_content` raising means "could not tell". Refusing on that would make the
+    button fail closed on any transient read error, and the #1451 hold in `_write` is the
+    real backstop underneath this advisory check."""
+    svc, worker = _service()
+    worker.process.get_content.side_effect = OSError("ring buffer gone")
 
-    daemon, worker = _daemon()
-    request = MagicMock()
-    request.match_info = {"name": "swarm"}
-    request.json = AsyncMock(return_value={"label": "Cycle permission mode", "keys": "rm -rf /\r"})
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("swarm.server.routes.workers.get_daemon", lambda _r: daemon)
-        await handle_worker_shortcut(request)
+    await svc.shift_tab_worker("swarm")
 
-    assert worker.process.send_keys.await_args.args[0] == SHIFT_TAB
+    worker.process.send_shift_tab.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_no_configured_shortcuts_refuses_rather_than_guessing():
-    daemon, worker = _daemon(shortcuts=[])
+# ---------------------------------------------------------------------------
+# The layers — a source sweep, because silent drops are how this ticket went wrong
+# ---------------------------------------------------------------------------
 
-    resp = await _fire(daemon)
 
-    assert resp.status == 404
-    worker.process.send_keys.assert_not_awaited()
+@pytest.mark.parametrize(
+    "path,needle,why",
+    [
+        (
+            "web/templates/config.html",
+            'value="shift_tab"',
+            "the dropdown the operator picks it from",
+        ),
+        (
+            "web/templates/config.html",
+            "'shift_tab'",
+            "the JS actions array for rows added after page load",
+        ),
+        (
+            "web/static/dashboard.js",
+            "action === 'shift_tab'",
+            "doAction, or the button renders and does nothing",
+        ),
+        (
+            "web/static/dashboard.js",
+            "sendSpecialKey('shift-tab')",
+            "the URL segment must match the route",
+        ),
+        (
+            "web/routes/workers.py",
+            '"/action/shift-tab/{name}"',
+            "the endpoint the dashboard actually calls",
+        ),
+        ("server/daemon.py", "async def shift_tab_worker", "the daemon delegate"),
+    ],
+)
+def test_every_layer_of_the_chain_is_present(path, needle, why):
+    """THE LESSON OF THIS TICKET, as a test. The first implementation passed its whole
+    unit suite while TWO layers — the config applier and the DB store — silently dropped
+    the section, because each layer is explicit per-field and a missing row is not an
+    error anywhere. An action button is a six-layer chain; a gap in any one of them
+    renders a button that looks right and does nothing."""
+    assert needle in (_SRC / path).read_text(), f"missing from {path}: {why}"
+
+
+def test_the_button_is_not_also_wired_into_the_bottom_shortcut_bar():
+    """THE REPORTED DEFECT, as a regression test. The parallel mechanism rendered into the
+    status strip beside `Alt+X Quit`, which is where the operator found it and asked why.
+    Two mechanisms for one capability is also how they drift apart."""
+    leftovers = [
+        f"{p.relative_to(_SRC.parent.parent)}"
+        for p in _SRC.rglob("*")
+        if p.is_file()
+        and p.suffix in {".py", ".js", ".html"}
+        and re.search(r"fireShortcut|WorkerShortcut|config\.shortcuts", p.read_text())
+    ]
+
+    assert leftovers == [], f"parallel shortcut mechanism still referenced in: {leftovers}"

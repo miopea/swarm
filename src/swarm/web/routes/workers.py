@@ -6,6 +6,7 @@ from aiohttp import web
 
 from swarm.server.daemon import console_log
 from swarm.server.helpers import get_daemon, handle_errors, json_error
+from swarm.server.worker_service import PromptOpenError
 
 
 @handle_errors
@@ -72,6 +73,23 @@ async def handle_action_escape(request: web.Request) -> web.Response:
     await d.escape_worker(name)
     console_log(f'Escape sent to "{name}"')
     return web.json_response({"status": "escape_sent", "worker": name})
+
+
+@handle_errors
+async def handle_action_shift_tab(request: web.Request) -> web.Response:
+    """Shift+Tab — Claude Code's permission-mode cycle — from an action button (#1677).
+
+    Refused with 409 when a selection prompt is open; the guard is in
+    ``worker_svc.shift_tab_worker`` so this and the /api sibling cannot drift.
+    """
+    d = get_daemon(request)
+    name = request.match_info["name"]
+    try:
+        await d.shift_tab_worker(name)
+    except PromptOpenError as exc:
+        return web.json_response({"error": str(exc)}, status=409)
+    console_log(f'Shift+Tab sent to "{name}"')
+    return web.json_response({"status": "shift_tab_sent", "worker": name})
 
 
 @handle_errors
@@ -248,6 +266,7 @@ def register(app: web.Application) -> None:
     app.router.add_post("/action/kill/{name}", handle_action_kill)
     app.router.add_post("/action/revive/{name}", handle_action_revive)
     app.router.add_post("/action/escape/{name}", handle_action_escape)
+    app.router.add_post("/action/shift-tab/{name}", handle_action_shift_tab)
     app.router.add_post("/action/arrow-up/{name}", handle_action_arrow_up)
     app.router.add_post("/action/arrow-down/{name}", handle_action_arrow_down)
     app.router.add_post("/action/arrow-right/{name}", handle_action_arrow_right)

@@ -45,6 +45,7 @@ _VERBS = (
     "send_arrow_down",
     "send_arrow_left",
     "send_arrow_right",
+    "send_shift_tab",
 )
 _CALL = re.compile(r"\.(" + "|".join(_VERBS) + r")\s*\(([^)]*)\)")
 
