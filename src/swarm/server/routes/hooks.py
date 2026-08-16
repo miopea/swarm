@@ -404,13 +404,18 @@ def _evaluate_rules(
     # compound-segment and command-substitution refusals, which the ruling did not cover
     # and which must keep abstaining. Blocking on the coarse source denied `cd /repo &&
     # pytest` fleet-wide within a minute of the daemon restart.
-    if result.source == "unsafe_effect":
+    # #1685: THE TYPE, NOT THE STRING. `result.gate` is a `Denial` or None, and only
+    # `gate_verdict` can construct one — so a change to the BRAKE cannot reach this
+    # branch. That is the #1647 class made structurally impossible: `2>/dev/null` and
+    # `cd /repo && pytest` were harmless brake decisions that became fleet-wide outages
+    # the moment a string comparison let them through here.
+    if result.gate is not None:
         _log_hook_decision(d, tool_name, "block", f"denied: {result.rule_pattern}", worker_name)
         return web.json_response(
             {
                 "decision": "block",
                 "reason": (
-                    f"Denied by drone safety guard: {result.rule_pattern}. This is refused "
+                    f"Denied by drone safety guard: {result.gate.reason}. This is refused "
                     f"outright rather than escalated, because on an auto-mode worker an "
                     f"escalation reaches a classifier that does not implement this rule "
                     f"(#1647). If the command is legitimate, narrow it — write inside the "

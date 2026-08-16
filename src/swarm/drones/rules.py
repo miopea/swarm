@@ -60,6 +60,12 @@ class DryRunResult:
     rule_index: int  # -1 when no user rule matched
     rule_pattern: str  # regex that matched, or "" if none
     source: str  # "always_escalate", "unsafe_command", "safe_builtin", "rule", "default_escalate"
+    # #1685 — THE TYPED VERDICT, and what enforcement now keys off. `source` is still
+    # populated (the drone log and four test files read it) but nothing DECIDES on it.
+    # Before this, the hook compared `source == "unsafe_effect"`, a string rebuilt in
+    # dry_run_rules by RE-RUNNING the three effect guards whose answer the verdict
+    # function had already computed and thrown away. Three representations of one fact.
+    gate: Denial | None = None
 
 
 class Decision(Enum):
@@ -625,6 +631,80 @@ def _segment_approver(safe: re.Pattern[str], config: DroneConfig) -> Callable[[s
     return _ok
 
 
+@dataclass(frozen=True)
+class Denial:
+    """A GATE verdict: this must not run AT ALL.
+
+    #1685. The type is the point. Only :func:`gate_verdict` constructs one, so a change
+    to the brake CANNOT reach the enforcement path — it has no way to build this object.
+    That makes the #1647 class structurally impossible rather than remembered: both
+    `2>/dev/null` and `cd /repo && pytest` were harmless BRAKE decisions that became
+    fleet-wide outages the moment one ruling turned them into GATE decisions.
+
+    Unsure -> deny. Cost of being wrong: a blocked fleet.
+    """
+
+    reason: str
+
+
+@dataclass(frozen=True)
+class Defer:
+    """A BRAKE verdict: not auto-approvable — a human should decide.
+
+    Unsure -> escalate. Cost of being wrong: a prompt, or on an auto-mode fleet nothing
+    at all (#1647 measured 0 of 19 workers in a mode where escalate renders a picker).
+    """
+
+    reason: str
+
+
+def gate_verdict(cmd: str) -> Denial | None:
+    """May this run AT ALL? EFFECT-BASED ONLY, and deliberately small.
+
+    Exactly the three guards the operator's #1647 ruling covered. The bar is
+    catastrophic AND irreversible AND unambiguous, and Phase 2 is the evidence for
+    holding it there: 12 of 12 dangerous auto-approvals came from the ALLOWLIST, and
+    closing them needed only two new credential paths — not a wider gate.
+
+    WHICH LAYER OWNS THIS: code, never operator config. Phase 2 measured why. Two
+    attempts to express "curl to loopback" as a config regex each re-created an evasion
+    this layer already handles — `localhost` matched `localhost.evil.example`, and the
+    tightened form matched `curl -x http://evil:8080 http://localhost/x`. A config rule
+    is a substring regex with no parser and no notion of a proxy flag. Effect-based
+    policy lives here; config expresses convenience, not boundaries.
+    """
+    if writes_outside_worktree(cmd):
+        return Denial("redirects output outside the worktree")
+    if reads_sensitive_path(cmd):
+        return Denial("reads a path whose contents are a credential")
+    if sends_data_outbound(cmd):
+        return Denial("sends a payload to a remote host")
+    return None
+
+
+def brake_verdict(content: str, approve_segment: Callable[[str], bool]) -> Defer | None:
+    """May this run WITHOUT A HUMAN? Withholds auto-approval; never denies.
+
+    THIS FUNCTION MUST NOT BE ABLE TO CONSTRUCT A ``Denial``, and a test asserts that
+    both behaviourally and by source sweep. The two reasons here — an unapproved segment
+    in a compound command, and command substitution — were never in the #1647 ruling and
+    must keep abstaining.
+    """
+    cmd = extract_bash_command(content)
+    if cmd is None:
+        return None
+    if not is_compound_command(cmd):
+        return None
+    if _has_substitution(cmd):
+        # The substituted text is not statically knowable, so no segment check can
+        # clear it. Refusing to auto-approve is the only honest answer.
+        return Defer("command substitution — the executed text is not visible for review")
+    for segment in split_command_segments(cmd):
+        if not approve_segment(segment):
+            return Defer(f"compound command with an unapproved segment: {segment[:60]}")
+    return None
+
+
 def unsafe_command_verdict(
     content: str, approve_segment: Callable[[str], bool]
 ) -> tuple[bool, str]:
@@ -668,30 +748,19 @@ def unsafe_command_verdict(
     passthrough cannot produce a gate. Until that is decided, treat these as
     auto-approval brakes rather than as enforcement.
     """
+    # #1685 — NOW A COMPOSITION, not a fifth implementation. Kept because two callers
+    # (`_decide_choice`, `dry_run_rules`) and tests/test_permission_mode_and_denial_1647.py
+    # depend on this exact signature; deleting it would turn a refactor into a behaviour
+    # change. GATE FIRST, so the reason string is unchanged for every input.
     cmd = extract_bash_command(content)
     if cmd is None:
         return False, ""
-    # Applies to SINGLE commands too, not just chains — `echo x > /etc/cron.d/backdoor`
-    # needs no chaining to be a persistence mechanism, and the safe list approved it
-    # standalone because `echo` is a read-only verb.
-    if writes_outside_worktree(cmd):
-        return True, "redirects output outside the worktree"
-    # #1590: effect, not verb. Both apply to SINGLE commands as well as chains — a bare
-    # `cat ~/.ssh/id_rsa` needs no chaining to leak a key, and the safe list approved it
-    # standalone because `cat` is a read-only verb.
-    if reads_sensitive_path(cmd):
-        return True, "reads a path whose contents are a credential"
-    if sends_data_outbound(cmd):
-        return True, "sends a payload to a remote host"
-    if not is_compound_command(cmd):
-        return False, ""
-    if _has_substitution(cmd):
-        # The substituted text is not statically knowable, so no segment check can
-        # clear it. Refusing is the only honest answer.
-        return True, "command substitution — the executed text is not visible for review"
-    for segment in split_command_segments(cmd):
-        if not approve_segment(segment):
-            return True, f"compound command with an unapproved segment: {segment[:60]}"
+    gate = gate_verdict(cmd)
+    if gate is not None:
+        return True, gate.reason
+    brake = brake_verdict(content, approve_segment)
+    if brake is not None:
+        return True, brake.reason
     return False, ""
 
 
@@ -1246,17 +1315,18 @@ def dry_run_rules(
         # a hard DENY the moment the daemon restarted. Ordinary chained work, refused
         # fleet-wide. The coarse signal was the whole bug: one source string for four
         # rules meant the hook could not honour a ruling that applied to three of them.
-        cmd = extract_bash_command(content) or ""
-        effect_based = (
-            writes_outside_worktree(cmd) or reads_sensitive_path(cmd) or sends_data_outbound(cmd)
-        )
+        # #1685: ASK ONCE. This used to re-run all three effect guards to rebuild a
+        # string the verdict already knew. Now the typed answer is carried through and
+        # `source` is derived FROM it, rather than the other way round.
+        gate = gate_verdict(extract_bash_command(content) or "")
         return [
             DryRunResult(
                 matched=True,
                 decision="escalate",
                 rule_index=-1,
                 rule_pattern=reason,
-                source="unsafe_effect" if effect_based else "unsafe_command",
+                source="unsafe_effect" if gate is not None else "unsafe_command",
+                gate=gate,
             )
         ]
 
