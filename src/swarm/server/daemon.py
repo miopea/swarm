@@ -54,7 +54,7 @@ from swarm.tasks.task import (
     TaskType,
 )
 from swarm.tunnel import TunnelManager, TunnelState
-from swarm.worker.worker import Worker, WorkerState
+from swarm.worker.worker import QUEEN_WORKER_NAME, Worker, WorkerState
 
 _log = get_logger("server.daemon")
 
@@ -309,7 +309,18 @@ class SwarmDaemon(EventEmitter):
         from swarm.integrations.jira import JiraSyncService
 
         self.jira_mgr = self._build_jira_token_manager(config)
-        self.jira = JiraSyncService(config.jira, token_manager=self.jira_mgr)
+        # #1695: the citation check on ticket close warns rather than blocks, and the
+        # warning goes to the Queen because she triages and is a channel a human reads.
+        # A WARNING log alone would be the silent nothing this family of tickets removes.
+        self.jira = JiraSyncService(
+            config.jira,
+            token_manager=self.jira_mgr,
+            notify_queen=(
+                lambda key, content: self.message_store.send(
+                    sender="jira", recipient=QUEEN_WORKER_NAME, msg_type="warning", content=content
+                )
+            ),
+        )
         self._jira_auth_pending: dict[str, str] = {}  # state → csrf token
         self.pilot: DronePilot | None = None
         # --- BroadcastHub: WebSocket client management and debounced broadcasts ---
@@ -706,7 +717,18 @@ class SwarmDaemon(EventEmitter):
             new_mgr = old_mgr
 
         self.jira_mgr = new_mgr
-        self.jira = JiraSyncService(self.config.jira, token_manager=self.jira_mgr)
+        # #1695: the citation check on ticket close warns rather than blocks, and the
+        # warning goes to the Queen because she triages and is a channel a human reads.
+        # A WARNING log alone would be the silent nothing this family of tickets removes.
+        self.jira = JiraSyncService(
+            self.config.jira,
+            token_manager=self.jira_mgr,
+            notify_queen=(
+                lambda key, content: self.message_store.send(
+                    sender="jira", recipient=QUEEN_WORKER_NAME, msg_type="warning", content=content
+                )
+            ),
+        )
 
     def _get_worker_state(self, name: str) -> str | None:
         """Return a worker's current state value, or None if not found."""

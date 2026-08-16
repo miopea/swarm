@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import aiohttp
@@ -22,8 +26,6 @@ from swarm.tasks.task import (
 from swarm.tasks.worklog import worklog_marker
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from swarm.auth.jira import JiraTokenManager
 
 _log = get_logger("integrations.jira")
@@ -38,6 +40,14 @@ _JIRA_SYNC_MARKER = JIRA_SYNC_MARKER
 # ticket count as agreement — a done-category ticket while Swarm says ACTIVE is a real
 # divergence, not a match.
 _TERMINAL_STATUSES = (TaskStatus.DONE, TaskStatus.FAILED)
+
+# #1695: the citation resolver, on the branch consumers pull. Overridable so a test or a
+# differently-laid-out checkout can point at its own copy.
+_DEFAULT_CITATION_CHECKER = os.path.expanduser(
+    "~/projects/rcg/claude-team-config/scripts/verify-citations.py"
+)
+# Bounded so a hung git call cannot stall a Jira export.
+_CITATION_CHECK_TIMEOUT = 30.0
 
 _JIRA_ISSUE_FIELDS = (
     "summary,description,status,issuetype,priority,labels,comment,attachment,"
@@ -569,11 +579,16 @@ class JiraSyncService:
         config: JiraConfig,
         token_manager: JiraTokenManager | None = None,
         uploads_dir: str | Path | None = None,
+        notify_queen: Callable[[str, str], None] | None = None,
     ) -> None:
         from pathlib import Path as _Path
 
         self._config = config
         self._token_manager = token_manager
+        # #1695: injected rather than reached for, the same shape as IdleWatcher's
+        # commit_activity_check. Keeps this module free of a MessageStore import and
+        # lets a test assert what would have been sent without a database.
+        self._notify_queen = notify_queen
         self.client = JiraClient(config, token_manager)
         self.stats = JiraSyncStats()
         self._running = False
@@ -998,6 +1013,90 @@ class JiraSyncService:
 
     # --- Export: Swarm → Jira ---
 
+    def _check_citations_on_close(self, task: SwarmTask) -> None:
+        """Resolve any repo paths this ticket cites, at the moment it becomes the record.
+
+        CALLS verify-citations.py; does not reimplement it. Everything that makes
+        extraction correct lives there — URLs stripped before matching (the
+        `tree/main/configs` false positive), trailing punctuation trimmed, directory
+        references dropped, and bare `docs/...` treated as prose because a Jira body is
+        not self-referential. A regex here would be a second resolver that drifts from
+        the first, which is exactly what #1691 declined to build.
+
+        WARN, NOT BLOCK, chosen deliberately. Blocking a close would strand a worker
+        whose document is merging in a parallel PR, and it would leave the Swarm task
+        DONE while the ticket stayed open — a divergence this codebase already treats as
+        a defect. So the ticket closes and the Queen is told.
+
+        WHY THE QUEEN IS THE RIGHT RECIPIENT: she triages, she is a channel a human
+        actually reads, and a dangling decision record is precisely a cross-cutting fact
+        rather than one worker's problem. A WARNING log alone would be the silent nothing
+        this whole family of tickets exists to remove.
+
+        NEVER RAISES. A citation check must not be able to fail a Jira export.
+        """
+        checker = os.environ.get("SWARM_CITATION_CHECKER", _DEFAULT_CITATION_CHECKER)
+        if not checker or not Path(checker).exists():
+            # LOUD, not silent. "The checker is not installed" and "the citations are
+            # fine" are different claims, and a check that quietly does nothing is the
+            # defect this ticket is downstream of.
+            _log.warning(
+                "jira: %s closed WITHOUT a citation check — checker not found at %s. "
+                "Set SWARM_CITATION_CHECKER to the verify-citations.py path.",
+                task.jira_key,
+                checker or "(unset)",
+            )
+            return
+
+        body = "\n".join(
+            str(x) for x in (task.title, task.description, getattr(task, "resolution", "")) if x
+        )
+        try:
+            proc = subprocess.run(
+                ["python3", checker, "--scan-text", "-", "--json"],
+                input=body,
+                capture_output=True,
+                text=True,
+                timeout=_CITATION_CHECK_TIMEOUT,
+                cwd=str(Path(checker).parent.parent),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            _log.warning("jira: citation check for %s could not run: %s", task.jira_key, exc)
+            return
+
+        if proc.returncode == 0:
+            return
+        if proc.returncode not in (1, 2):
+            _log.warning(
+                "jira: citation check for %s exited %d: %s",
+                task.jira_key,
+                proc.returncode,
+                proc.stderr[:200],
+            )
+            return
+
+        detail = proc.stdout.strip() or proc.stderr.strip()
+        _log.warning(
+            "jira: %s was CLOSED citing a document that does not resolve on the branch "
+            "consumers pull. %s",
+            task.jira_key,
+            detail[:400],
+        )
+        if self._notify_queen is None:
+            return
+        try:
+            self._notify_queen(
+                task.jira_key or "(no key)",
+                f"{task.jira_key} was closed citing a repo document that DOES NOT RESOLVE "
+                f"on the branch consumers pull, so the decision record it points at is "
+                f"unreadable to anyone who follows it.\n\n{detail[:1200]}\n\n"
+                f"This verifies the cited file EXISTS. It does NOT verify the claim about "
+                f"that file is true. The ticket was NOT blocked from closing — either "
+                f"promote the document to the default branch or correct the citation.",
+            )
+        except Exception:
+            _log.warning("jira: could not notify the Queen about %s", task.jira_key, exc_info=True)
+
     async def export_status(self, task: SwarmTask, new_status: TaskStatus) -> bool:
         """Update a Jira ticket's status to match the Swarm task status."""
         if not self.enabled or not task.jira_key:
@@ -1085,6 +1184,15 @@ class JiraSyncService:
 
         if ok:
             self.stats.total_exported += 1
+            # #1695 — CLOSE-ONLY, and this is the operator's ruling not an implementation
+            # convenience. A citation in an OPEN ticket is often aspirational because the
+            # document is still being written; firing on creation would cry wolf on
+            # legitimate work in progress. Closing is when a citation stops being a
+            # working note and becomes THE RECORD — and it is the moment that failed:
+            # WWD-6829 was closed citing a file unreadable from origin/main at that
+            # instant, and nothing noticed for hours.
+            if new_status in _TERMINAL_STATUSES:
+                self._check_citations_on_close(task)
             # WARNING for every WRITE to the shared tracker. Operators run at the default
             # level, so an INFO line is invisible — and "Swarm changed someone's ticket"
             # is precisely what they need to be able to see afterwards. Verifying #1339
