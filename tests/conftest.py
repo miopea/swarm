@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import os
 import tempfile
@@ -25,6 +26,12 @@ import pytest
 import swarm.db.core as _swarm_db_core
 
 _TEST_DB_DIR = Path(tempfile.mkdtemp(prefix="swarm-tests-"))
+# #1697 — every throwaway path a non-fixture helper needs lives UNDER the session dir,
+# which `pytest_sessionfinish` reaps. `make_daemon` is a plain helper with many callers,
+# so threading `tmp_path` through it would churn every one; giving it an owned directory
+# costs nothing and leaves no file behind. The counter keeps concurrent daemons in one
+# session from sharing a history file.
+_HISTORY_SEQ = itertools.count()
 _LIVE_DB_PATH = Path.home() / ".swarm" / "swarm.db"
 _LIVE_DB_MTIME_AT_START = _LIVE_DB_PATH.stat().st_mtime if _LIVE_DB_PATH.exists() else None
 _DAEMON_LOCK_PATH = Path.home() / ".swarm" / "daemon.lock"
@@ -248,7 +255,7 @@ def make_daemon(
     d._worker_lock = asyncio.Lock()
     d.drone_log = DroneLog()
     d.task_board = TaskBoard()
-    d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
+    d.task_history = TaskHistory(log_file=_TEST_DB_DIR / f"task-history-{next(_HISTORY_SEQ)}.jsonl")
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
     d.queen_queue = QueenCallQueue(max_concurrent=2)
     d.proposal_store = ProposalStore()
@@ -522,7 +529,22 @@ def _no_production_log_writes(request):
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Name the tests that re-attached a production-log handler."""
+    """Name the tests that re-attached a production-log handler, and reap the session dir.
+
+    #1697 — THE SESSION DIR HAD NO OWNER. `_TEST_DB_DIR` is created with `mkdtemp` at
+    MODULE IMPORT, deliberately: it must exist before any fixture runs, because the
+    `_DEFAULT_DB_PATH` override it feeds has to beat code paths that fire earlier than
+    the function-scoped fixtures. That design is right and stays — but nothing ever
+    removed it, so every run left one more directory in /tmp forever.
+
+    Reaped HERE rather than with an atexit handler so it runs inside pytest's own
+    lifecycle, and swallowed on failure because a cleanup that can fail a green suite is
+    worse than a leaked directory.
+    """
+    import shutil
+
+    shutil.rmtree(_TEST_DB_DIR, ignore_errors=True)
+
     if _LOG_REATTACHERS:
         print(
             f"\n#1285: {len(_LOG_REATTACHERS)} test(s) re-attached a handler on "

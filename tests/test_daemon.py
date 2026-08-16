@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -34,7 +32,7 @@ from tests.fakes.process import FakeWorkerProcess
 
 
 @pytest.fixture
-def daemon(monkeypatch):
+def daemon(monkeypatch, tmp_path):
     """Create a minimal daemon without starting it."""
     monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
     monkeypatch.setattr("swarm.queen.queen.save_session", lambda *a: None)
@@ -50,7 +48,7 @@ def daemon(monkeypatch):
     d._worker_lock = asyncio.Lock()
     d.drone_log = DroneLog()
     d.task_board = TaskBoard()
-    d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
+    d.task_history = TaskHistory(log_file=tmp_path / "task-history.jsonl")
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
 
     from swarm.queen.queue import QueenCallQueue
@@ -816,7 +814,7 @@ def test_check_config_file_changed(daemon, tmp_path, monkeypatch):
 # --- task_board on_change auto-broadcast ---
 
 
-def test_task_board_on_change_broadcasts(monkeypatch):
+def test_task_board_on_change_broadcasts(monkeypatch, tmp_path):
     """Creating tasks should auto-broadcast via on_change wiring."""
     monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
     monkeypatch.setattr("swarm.queen.queen.save_session", lambda *a: None)
@@ -828,7 +826,7 @@ def test_task_board_on_change_broadcasts(monkeypatch):
     d._worker_lock = asyncio.Lock()
     d.drone_log = DroneLog()
     d.task_board = TaskBoard()
-    d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
+    d.task_history = TaskHistory(log_file=tmp_path / "task-history.jsonl")
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
 
     from swarm.queen.queue import QueenCallQueue
@@ -1392,7 +1390,7 @@ def test_reject_proposal_not_found(daemon):
         daemon.reject_proposal("nonexistent")
 
 
-def test_reject_all_proposals(daemon):
+def test_reject_all_proposals(daemon, tmp_path):
     task1 = daemon.create_task(title="Fix bug")
     task2 = daemon.create_task(title="Add feature")
     p1 = AssignmentProposal(worker_name="api", task_id=task1.id, task_title=task1.title)
@@ -1624,12 +1622,10 @@ async def test_approve_escalation_wait(daemon):
 
 
 @pytest.mark.asyncio
-async def testbroadcast_ws_dead_client(monkeypatch):
+async def testbroadcast_ws_dead_client(monkeypatch, tmp_path):
     """Dead WS clients should be discarded without crash."""
     monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
     monkeypatch.setattr("swarm.queen.queen.save_session", lambda *a: None)
-
-    import tempfile
 
     from swarm.config import HiveConfig, QueenConfig
     from swarm.tasks.history import TaskHistory
@@ -1641,7 +1637,7 @@ async def testbroadcast_ws_dead_client(monkeypatch):
     d._worker_lock = asyncio.Lock()
     d.drone_log = DroneLog()
     d.task_board = TaskBoard()
-    d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
+    d.task_history = TaskHistory(log_file=tmp_path / "task-history.jsonl")
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
 
     from swarm.queen.queue import QueenCallQueue

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -17,9 +15,9 @@ from swarm.tasks.task import TaskPriority, TaskStatus, TaskType
 
 
 @pytest.fixture
-def mgr():
+def mgr(tmp_path):
     board = TaskBoard()
-    history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
+    history = TaskHistory(log_file=tmp_path / "task-history.jsonl")
     drone_log = DroneLog()
     pilot = MagicMock(spec=DronePilot)
     config = HiveConfig()
@@ -47,7 +45,7 @@ def test_require_task_wrong_status(mgr):
         mgr.require_task(task.id, {TaskStatus.DONE})
 
 
-def test_create_task_basic(mgr):
+def test_create_task_basic(mgr, tmp_path):
     task = mgr.create_task(
         title="Basic Task",
         description="Description",
@@ -134,17 +132,17 @@ async def test_create_task_smart_auto_classify_type(mgr):
 # --- Acceptance-criteria synthesis (Outcomes rubric) ---------------------
 
 
-def _synth_mgr(enabled: bool) -> TaskManager:
+def _synth_mgr(enabled: bool, tmp_path) -> TaskManager:
     board = TaskBoard()
-    history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
+    history = TaskHistory(log_file=tmp_path / "task-history.jsonl")
     config = HiveConfig()
     config.drones.verifier_criteria_synthesis = enabled
     return TaskManager(board, history, DroneLog(), MagicMock(spec=DronePilot), config=config)
 
 
 @pytest.mark.asyncio
-async def test_synthesis_disabled_skips_llm():
-    mgr = _synth_mgr(enabled=False)
+async def test_synthesis_disabled_skips_llm(tmp_path):
+    mgr = _synth_mgr(enabled=False, tmp_path=tmp_path)
     task = mgr.create_task("Do a thing", description="details")
     with patch("swarm.tasks.task.synthesize_acceptance_criteria") as synth:
         await mgr.apply_synthesized_criteria(task)
@@ -154,8 +152,8 @@ async def test_synthesis_disabled_skips_llm():
 
 
 @pytest.mark.asyncio
-async def test_synthesis_populates_criteria_and_tier():
-    mgr = _synth_mgr(enabled=True)
+async def test_synthesis_populates_criteria_and_tier(tmp_path):
+    mgr = _synth_mgr(enabled=True, tmp_path=tmp_path)
     task = mgr.create_task("Add endpoint", description="add GET /widgets")
     with patch(
         "swarm.tasks.task.synthesize_acceptance_criteria",
@@ -168,10 +166,10 @@ async def test_synthesis_populates_criteria_and_tier():
 
 
 @pytest.mark.asyncio
-async def test_synthesis_skips_standing_loop_tasks():
+async def test_synthesis_skips_standing_loop_tasks(tmp_path):
     from swarm.drones.standing_loop import STANDING_LOOP_TAG
 
-    mgr = _synth_mgr(enabled=True)
+    mgr = _synth_mgr(enabled=True, tmp_path=tmp_path)
     task = mgr.create_task("Idle filler", description="x", tags=[STANDING_LOOP_TAG])
     with patch("swarm.tasks.task.synthesize_acceptance_criteria") as synth:
         await mgr.apply_synthesized_criteria(task)
@@ -180,8 +178,8 @@ async def test_synthesis_skips_standing_loop_tasks():
 
 
 @pytest.mark.asyncio
-async def test_synthesis_skips_when_criteria_already_present():
-    mgr = _synth_mgr(enabled=True)
+async def test_synthesis_skips_when_criteria_already_present(tmp_path):
+    mgr = _synth_mgr(enabled=True, tmp_path=tmp_path)
     task = mgr.create_task("Has criteria", description="x")
     mgr.edit_task(task.id, acceptance_criteria=["worker-supplied"])
     with patch("swarm.tasks.task.synthesize_acceptance_criteria") as synth:
@@ -191,8 +189,8 @@ async def test_synthesis_skips_when_criteria_already_present():
 
 
 @pytest.mark.asyncio
-async def test_synthesis_empty_result_leaves_task_untouched():
-    mgr = _synth_mgr(enabled=True)
+async def test_synthesis_empty_result_leaves_task_untouched(tmp_path):
+    mgr = _synth_mgr(enabled=True, tmp_path=tmp_path)
     task = mgr.create_task("Open-ended", description="investigate the flakiness")
     with patch("swarm.tasks.task.synthesize_acceptance_criteria", return_value=([], "")):
         await mgr.apply_synthesized_criteria(task)

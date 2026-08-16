@@ -212,7 +212,7 @@ def _blocked(board: TaskBoard, ref: str, reason: str) -> SwarmTask:
     return t
 
 
-def test_the_raw_internal_reason_never_reaches_the_ticket():
+def test_the_raw_internal_reason_never_reaches_the_ticket(tmp_path):
     """OBSERVED ON WWD-6743 2026-08-09. The note posted the block reason verbatim:
 
         "Swarm is BLOCKED on this: Closing-comment template needs the 2026.8.9.17
@@ -225,7 +225,7 @@ def test_the_raw_internal_reason_never_reaches_the_ticket():
     from swarm.integrations.jira import _blocker_note_body
     from swarm.tasks.task import AWAITING_OPERATOR_REF
 
-    task = _blocked(_board_for(), AWAITING_OPERATOR_REF, "needs the 2026.8.9.17 reload")
+    task = _blocked(_board_for(tmp_path), AWAITING_OPERATOR_REF, "needs the 2026.8.9.17 reload")
     body = _blocker_note_body(task, task.block_reason, "[swarm:blocker:1347]")
 
     assert "2026.8.9.17" not in body, "an internal version number reached the ticket"
@@ -233,51 +233,50 @@ def test_the_raw_internal_reason_never_reaches_the_ticket():
     assert "pending a decision from the team" in body
 
 
-def test_an_external_blocker_NAMES_the_artifact():
+def test_an_external_blocker_NAMES_the_artifact(tmp_path):
     """external_blocker_ref is an artifact by design — the verb asks for "npm
     eslint@^10" or a PR URL — so naming it tells a reader something true and checkable,
     unlike the free-text reason."""
     from swarm.integrations.jira import _blocker_note_body
 
-    task = _blocked(_board_for(), "platform release 6.2", "some long internal narrative")
+    task = _blocked(_board_for(tmp_path), "platform release 6.2", "some long internal narrative")
     body = _blocker_note_body(task, task.block_reason, "[swarm:blocker:1347]")
 
     assert "platform release 6.2" in body
     assert "internal narrative" not in body
 
 
-def test_a_blocker_with_no_artifact_says_only_what_is_certain():
+def test_a_blocker_with_no_artifact_says_only_what_is_certain(tmp_path):
     from swarm.integrations.jira import _blocker_note_body
 
-    task = _blocked(_board_for(), "", "internal-only explanation")
+    task = _blocked(_board_for(tmp_path), "", "internal-only explanation")
     body = _blocker_note_body(task, task.block_reason, "[swarm:blocker:9]")
 
     assert "internal-only" not in body
     assert "wait on a dependency" in body
 
 
-def test_clearing_reads_plainly():
+def test_clearing_reads_plainly(tmp_path):
     from swarm.integrations.jira import _blocker_note_body
 
-    body = _blocker_note_body(_blocked(_board_for(), "", ""), "", "[swarm:blocker:9]")
+    body = _blocker_note_body(_blocked(_board_for(tmp_path), "", ""), "", "[swarm:blocker:9]")
     assert body == "[swarm:blocker:9] Work on this has resumed."
 
 
-def test_it_does_not_say_BLOCKED_in_swarm_jargon():
+def test_it_does_not_say_BLOCKED_in_swarm_jargon(tmp_path):
     """ "Swarm is BLOCKED on this" is our vocabulary, not the reporter's."""
     from swarm.integrations.jira import _blocker_note_body
 
-    task = _blocked(_board_for(), "a PR", "r")
+    task = _blocked(_board_for(tmp_path), "a PR", "r")
     body = _blocker_note_body(task, "r", "[swarm:blocker:1]")
     assert "BLOCKED" not in body
     assert "Work on this is paused" in body
 
 
-def _board_for() -> TaskBoard:
+def _board_for(tmp_path) -> TaskBoard:
     """A throwaway board — these check pure formatting, not persistence."""
-    import tempfile
 
     from swarm.db.core import SwarmDB
     from swarm.db.task_store import SqliteTaskStore
 
-    return TaskBoard(store=SqliteTaskStore(SwarmDB(Path(tempfile.mkdtemp()) / "b.db")))
+    return TaskBoard(store=SqliteTaskStore(SwarmDB(tmp_path / "b.db")))

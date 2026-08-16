@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -454,9 +453,9 @@ class TestCrossTaskFileParsing:
 
 
 @pytest.fixture
-def mgr():
+def mgr(tmp_path):
     board = TaskBoard()
-    history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
+    history = TaskHistory(log_file=tmp_path / "task-history.jsonl")
     drone_log = DroneLog()
     pilot = MagicMock(spec=DronePilot)
     return TaskManager(board, history, drone_log, pilot)

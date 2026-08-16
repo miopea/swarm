@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -46,7 +44,7 @@ def _inject_session_cookie(client: TestClient, password: str = _TEST_PASSWORD) -
 
 
 @pytest.fixture
-def daemon(monkeypatch):
+def daemon(monkeypatch, tmp_path):
     """Create a minimal daemon without starting it."""
     monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
     monkeypatch.setattr("swarm.queen.queen.save_session", lambda *a: None)
@@ -63,7 +61,7 @@ def daemon(monkeypatch):
     d._worker_lock = asyncio.Lock()
     d.drone_log = DroneLog()
     d.task_board = TaskBoard()
-    d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
+    d.task_history = TaskHistory(log_file=tmp_path / "task-history.jsonl")
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
 
     # In-memory Queen chat store for the interactive-Queen routes that
@@ -72,7 +70,7 @@ def daemon(monkeypatch):
     from swarm.db.core import SwarmDB
     from swarm.db.queen_chat_store import QueenChatStore
 
-    _chat_db_path = Path(tempfile.mktemp(suffix=".db"))
+    _chat_db_path = tmp_path / "queen-chat.db"
     d.swarm_db = SwarmDB(_chat_db_path)
     d.queen_chat = QueenChatStore(d.swarm_db)
 
@@ -3071,13 +3069,13 @@ async def test_config_notification_validation(client):
 # ---------------------------------------------------------------------------
 
 
-def test_pipeline_schedule_in_engine():
+def test_pipeline_schedule_in_engine(tmp_path):
     """Pipeline steps preserve schedule field through create/serialize."""
     from swarm.pipelines.engine import PipelineEngine
     from swarm.pipelines.models import PipelineStep
     from swarm.pipelines.store import PipelineStore
 
-    store = PipelineStore(path=Path(tempfile.mktemp(suffix=".json")))
+    store = PipelineStore(path=tmp_path / "pipeline.json")
     engine = PipelineEngine(store=store)
     p = engine.create(
         "Scheduled",

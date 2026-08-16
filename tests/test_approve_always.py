@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -35,12 +33,12 @@ _HEADERS = {"X-Requested-With": "Dashboard"}
 
 
 @pytest.fixture
-def daemon(monkeypatch):
+def daemon(monkeypatch, tmp_path):
     monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
     monkeypatch.setattr("swarm.queen.queen.save_session", lambda *a: None)
 
     cfg = HiveConfig(session_name="test", api_password=_TEST_PASSWORD)
-    cfg.source_path = str(Path(tempfile.mktemp(suffix=".yaml")))
+    cfg.source_path = str(tmp_path / "swarm.yaml")
     d = SwarmDaemon.__new__(SwarmDaemon)
     d.config = cfg
     d.workers = [
@@ -49,7 +47,7 @@ def daemon(monkeypatch):
     d._worker_lock = asyncio.Lock()
     d.drone_log = DroneLog()
     d.task_board = TaskBoard()
-    d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
+    d.task_history = TaskHistory(log_file=tmp_path / "task-history.jsonl")
     d.queen = Queen(config=QueenConfig(cooldown=0.0), session_name="test")
     d.queen_queue = QueenCallQueue(max_concurrent=2)
     d.proposal_store = ProposalStore()

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import tempfile
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -22,7 +20,7 @@ from tests.fakes.process import FakeWorkerProcess
 
 
 @pytest.fixture
-def daemon(monkeypatch):
+def daemon(monkeypatch, tmp_path):
     """Minimal daemon with one shell-wrapped worker."""
     monkeypatch.setattr("swarm.queen.queen.load_session", lambda _: None)
     monkeypatch.setattr("swarm.queen.queen.save_session", lambda *a: None)
@@ -34,7 +32,7 @@ def daemon(monkeypatch):
     d._worker_lock = asyncio.Lock()
     d.drone_log = DroneLog()
     d.task_board = TaskBoard()
-    d.task_history = TaskHistory(log_file=Path(tempfile.mktemp(suffix=".jsonl")))
+    d.task_history = TaskHistory(log_file=tmp_path / "task-history.jsonl")
 
     from swarm.queen.queen import Queen
     from swarm.queen.queue import QueenCallQueue
