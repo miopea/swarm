@@ -25,6 +25,19 @@ INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
 [ -z "$TOOL_NAME" ] && exit 0
 
+# #1698: FORWARD THE WORKER'S TRUE IDENTITY, which is independent of where it is
+# standing. The daemon otherwise identifies a worker by matching cwd to a configured
+# path, so a worker operating inside ANOTHER worker's repo is recorded as the worker who
+# OWNS that repo — the cross-repo event is invisible by construction, not merely
+# unlogged. SWARM_WORKER_NAME is injected by the PTY holder at spawn.
+#
+# Falls back to the untouched payload if jq fails: identity is a measurement, and a
+# measurement must never be able to break an approval decision.
+if [ -n "$SWARM_WORKER_NAME" ]; then
+  ENRICHED=$(echo "$INPUT" | jq -c --arg w "$SWARM_WORKER_NAME"     '. + {swarm_worker_name: $w}' 2>/dev/null)
+  [ -n "$ENRICHED" ] && INPUT="$ENRICHED"
+fi
+
 AUTH_HEADER=""
 [ -n "$SWARM_API_PASSWORD" ] && AUTH_HEADER="Authorization: Bearer $SWARM_API_PASSWORD"
 

@@ -341,6 +341,9 @@ def _evaluate_rules(
     drone_config = d.config.drones
     worker = _identify_worker(d, body)
     worker_name = worker.name if worker else "unknown"
+    # #1698: computed once, recorded on every decision below, ACTED ON BY NOTHING. The
+    # rate is the deliverable — a guard cannot be designed against a number nobody has.
+    oop = out_of_path(worker, str(body.get("cwd") or ""))
 
     # BEFORE any rule evaluation — see _NEVER_AUTO_APPROVE. Checked here rather than in
     # the branches below because there are three separate ways to reach "approve" (rule
@@ -349,7 +352,7 @@ def _evaluate_rules(
     # no-rules branch already consulted _ALWAYS_ESCALATE_TOOLS while the rule-matched
     # branch did not.
     if tool_name in _NEVER_AUTO_APPROVE:
-        _log_hook_decision(d, tool_name, "passthrough", "never auto-approved", worker_name)
+        _log_hook_decision(d, tool_name, "passthrough", "never auto-approved", worker_name, oop)
         return web.json_response(
             {
                 "decision": "passthrough",
@@ -366,7 +369,7 @@ def _evaluate_rules(
     all_rules = worker_rules + list(drone_config.approval_rules)
 
     if not all_rules and tool_name not in _ALWAYS_ESCALATE_TOOLS:
-        _log_hook_decision(d, tool_name, "approve", "no rules configured", worker_name)
+        _log_hook_decision(d, tool_name, "approve", "no rules configured", worker_name, oop)
         return web.json_response({"decision": "approve", "reason": "no approval rules configured"})
 
     results = dry_run_rules(
@@ -377,7 +380,9 @@ def _evaluate_rules(
 
     result = results[0]
     if result.decision == "approve":
-        _log_hook_decision(d, tool_name, "approve", f"rule matched: {result.source}", worker_name)
+        _log_hook_decision(
+            d, tool_name, "approve", f"rule matched: {result.source}", worker_name, oop
+        )
         return web.json_response(
             {
                 "decision": "approve",
@@ -410,7 +415,9 @@ def _evaluate_rules(
     # `cd /repo && pytest` were harmless brake decisions that became fleet-wide outages
     # the moment a string comparison let them through here.
     if result.gate is not None:
-        _log_hook_decision(d, tool_name, "block", f"denied: {result.rule_pattern}", worker_name)
+        _log_hook_decision(
+            d, tool_name, "block", f"denied: {result.rule_pattern}", worker_name, oop
+        )
         return web.json_response(
             {
                 "decision": "block",
@@ -444,7 +451,7 @@ def _evaluate_rules(
     # The ruling was to delete it rather than invent a consultation mechanism, because
     # the correct behaviour was already in the tree: Bash was the one tool excluded from
     # the branch, it has always taken this path, and nothing was ever stuck on it.
-    _log_hook_decision(d, tool_name, "passthrough", f"escalated: {result.source}", worker_name)
+    _log_hook_decision(d, tool_name, "passthrough", f"escalated: {result.source}", worker_name, oop)
     return web.json_response(
         {
             "decision": "passthrough",
@@ -604,8 +611,24 @@ def _identify_worker(d: SwarmDaemon, body: dict[str, Any]) -> Worker | None:
 
     Tries session_id first, then CWD matching against worker paths.
     """
-    # Try session_id if present (future: map session IDs to workers)
-    # For now, match by CWD — hooks inherit the Claude Code process CWD
+    # #1698 — TRUE IDENTITY FIRST, LOCATION ONLY AS FALLBACK.
+    #
+    # Matching cwd to a configured path answers "whose repo is this", not "who is
+    # running". Those coincide until a worker operates in a repo it does not own — which
+    # is the #1671 incident exactly — and then the location match names the WRONG WORKER
+    # with full confidence. The forwarded `swarm_worker_name` comes from the PTY holder's
+    # spawn environment and cannot be confused by a `cd`.
+    #
+    # Measured 2026-08-16: 19 of 20 live worker processes carry SWARM_WORKER_NAME; the
+    # one without predates the injection. So the cwd fallback below stays — an identity
+    # that is absent must degrade to today's behaviour, not to nobody.
+    declared = str(body.get("swarm_worker_name") or "").strip()
+    if declared:
+        for w in d.workers:
+            if getattr(w, "name", None) == declared:
+                return w
+
+    # Fall back to CWD matching — hooks inherit the Claude Code process CWD.
     cwd = body.get("cwd", "")
     if not cwd:
         # Fall back to SWARM_WORKER env var if the hook script forwards it
@@ -643,12 +666,44 @@ def _identify_worker(d: SwarmDaemon, body: dict[str, Any]) -> Worker | None:
     return None
 
 
+def out_of_path(worker: Worker | None, cwd: str) -> bool | None:
+    """Is *worker* operating outside its own configured path?
+
+    #1698 — MEASUREMENT ONLY. Nothing acts on this; it is recorded so the rate can be
+    known before anyone designs a guard, which is the ticket's explicit order and this
+    file's standing rule (run a candidate against a corpus and count false positives
+    BEFORE flipping abstain to deny).
+
+    Returns None for "cannot tell" rather than False. An unreadable cwd or an
+    unconfigured worker is not evidence of good standing, and a measurement that reports
+    absence of evidence as evidence of absence is the failure this codebase keeps paying
+    for. A zero built from Nones is not a clean rate.
+
+    KNOWN BLIND SPOT, stated here because it is the incident shape: this compares the
+    PROCESS cwd. A worker can `cd /other/repo && git commit` inside a single Bash call
+    without ever changing it. So a False here means "the shell is at home", not "nothing
+    reached outside".
+    """
+    if worker is None or not cwd:
+        return None
+    path = getattr(worker, "path", "") or ""
+    if not path:
+        return None
+    try:
+        home = os.path.realpath(os.path.expanduser(str(path)))
+        here = os.path.realpath(os.path.expanduser(cwd))
+    except (OSError, ValueError):
+        return None
+    return not (here == home or here.startswith(home + "/"))
+
+
 def _log_hook_decision(
     d: SwarmDaemon,
     tool_name: str,
     decision: str,
     reason: str,
     worker_name: str = "unknown",
+    oop: bool | None = None,
 ) -> None:
     """Log a hook-based approval decision to the drone log."""
     if d.drone_log is not None:
@@ -656,7 +711,14 @@ def _log_hook_decision(
             DroneAction.CONTINUED if decision == "approve" else SystemAction.QUEEN_BLOCKED,
             worker_name,
             f"hook:{tool_name} → {decision} ({reason})",
-            metadata={"source": "hook", "tool_name": tool_name},
+            metadata={
+                "source": "hook",
+                "tool_name": tool_name,
+                # #1698: recorded, never acted on. `None` means "could not tell" and is
+                # kept distinct from False so a rate can be computed with an honest
+                # denominator rather than one padded with unknowns.
+                "out_of_path": oop,
+            },
             category=LogCategory.DRONE,
         )
 
