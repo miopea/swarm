@@ -69,7 +69,28 @@ PERMISSIONS_CONFIG = {
 _CC_VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
 
 
-def install(global_install: bool = False, sandbox: object | None = None) -> None:
+_UNSET = object()
+
+
+def _live_sandbox_config() -> object | None:
+    """The sandbox section from the live config, or None if it cannot be read.
+
+    #1687. Loaded HERE rather than passed by each caller because the defect this fixes
+    was precisely that no caller passed it: `_apply_sandbox` was correct, reachable, and
+    received None at all six call sites, so `sandbox.enabled: true` produced no error, no
+    warning and no sandbox. Fixing the call sites would have left a seventh forgettable.
+    Fails soft — a config that cannot be read must not stop hooks installing.
+    """
+    try:
+        from swarm.cli import _load_config_db_first
+
+        return getattr(_load_config_db_first(None), "sandbox", None)
+    except Exception:
+        _log.debug("could not load config for sandbox settings", exc_info=True)
+        return None
+
+
+def install(global_install: bool = False, sandbox: object | None = _UNSET) -> None:
     """Install permissions and hooks into Claude Code settings.
 
     Only installs for the Claude provider — other providers do not
@@ -136,7 +157,7 @@ def install(global_install: bool = False, sandbox: object | None = None) -> None
 
     # Apply CC native sandbox settings when opted in and the installed
     # CC version is new enough to support them.
-    _apply_sandbox(settings, sandbox)
+    _apply_sandbox(settings, _live_sandbox_config() if sandbox is _UNSET else sandbox)
 
     _atomic_write_text(settings_path, json.dumps(settings, indent=2) + "\n")
 
@@ -158,7 +179,17 @@ def _apply_sandbox(settings: dict[str, Any], sandbox_cfg: object | None) -> None
         return
     overrides = getattr(sandbox_cfg, "settings_overrides", None) or {}
     if not overrides:
-        _log.info("sandbox enabled but no settings_overrides provided; skipping")
+        # WARNING, not INFO. #1687: this is a SECURITY setting that reads as ON and does
+        # nothing, and an operator running at the default level would never see an INFO
+        # line. `enabled: true` with no overrides writes no sandbox keys at all, so the
+        # enabled state and the absent state are indistinguishable from outside — the
+        # exact shape this ticket exists to remove.
+        _log.warning(
+            "sandbox.enabled is TRUE but settings_overrides is empty — NO sandbox keys "
+            "were written to settings.json and this worker is NOT sandboxed. Set "
+            "sandbox.settings_overrides (e.g. {'enabled': true}) or set "
+            "sandbox.enabled to false so the config stops claiming otherwise."
+        )
         return
     min_version = str(getattr(sandbox_cfg, "min_claude_version", "") or "")
     if min_version and not _claude_version_at_least(min_version):
