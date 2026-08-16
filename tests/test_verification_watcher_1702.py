@@ -208,3 +208,92 @@ def test_it_does_not_run_again_until_the_interval_elapses():
 
 def test_a_zero_interval_disables_it():
     assert _watcher(lambda a: (0, ""), interval=0).enabled is False
+
+
+# ---------------------------------------------------------------------------
+# The wiring — a policy nothing constructs is the defect this ticket is about
+# ---------------------------------------------------------------------------
+
+
+def test_the_pilot_constructs_the_watcher():
+    """#1681's `measure.py` was a correct tool with ZERO CALLERS for months. A watcher
+    that exists and is never built is the same artefact wearing a newer docstring."""
+    import inspect
+
+    from swarm.drones import pilot as pilot_mod
+
+    src = inspect.getsource(pilot_mod)
+    assert "VerificationWatcher(" in src
+    assert "verification_interval_seconds" in src
+
+
+def test_the_dispatcher_ticks_it():
+    import inspect
+
+    from swarm.drones import poll_dispatcher
+
+    src = inspect.getsource(poll_dispatcher)
+    assert "_run_verification_sweep" in src
+    assert "self._run_verification_sweep," in src, "declared but never added to the sweep list"
+
+
+def test_the_daemon_binds_the_queen_channel():
+    import inspect
+
+    from swarm.server import daemon as daemon_mod
+
+    src = inspect.getsource(daemon_mod)
+    assert "set_verification_notifier" in src
+    assert "QUEEN_WORKER_NAME" in src
+
+
+def test_the_config_key_survives_a_round_trip():
+    """Four layers dropped `shortcuts` silently in #1677 while every unit test passed.
+    A config key is not wired until it round-trips."""
+    from swarm.config.models import HiveConfig
+    from swarm.config.serialization import serialize_config
+
+    cfg = HiveConfig()
+    cfg.drones.verification_interval_seconds = 3600.0
+
+    assert serialize_config(cfg)["drones"]["verification_interval_seconds"] == 3600.0
+
+
+def test_the_default_checks_name_both_scripts():
+    from swarm.drones.verification_watcher import default_verification_checks
+
+    labels = [c[0] for c in default_verification_checks()]
+    assert labels == ["citations", "containment"]
+
+
+def test_a_missing_checker_raises_so_the_sweep_reports_it():
+    """ "Did not run" and "found nothing" are different claims. The runner raises; the
+    watcher turns that into a FINDING rather than a clean result."""
+    import pytest as _pytest
+
+    from swarm.drones.verification_watcher import run_check_subprocess
+
+    with _pytest.raises(FileNotFoundError):
+        run_check_subprocess(["python3", "/nonexistent/checker.py"])
+
+
+def test_the_containment_denominator_is_derived_from_its_per_branch_verdicts():
+    """CAUGHT BY RUNNING IT FOR REAL. The containment checker prints no total, so this
+    returned None and the watcher labelled a GENUINE finding (one stale branch) as
+    "BROKEN — MEASURED NOTHING". A checker that prints one line per branch has already
+    said how many it examined; demanding it change format would have been wrong twice —
+    it belongs to another worker, and the information was already there."""
+    out = (
+        "CONTAINED      origin/x  (28 added lines all present in origin/main)\n"
+        "SKIPPED        origin/y  (open PR)\n"
+        "UNMEASURABLE   origin/z  (no merge-base) — DO NOT DELETE\n"
+        "\n1 stale branch(es) — every added line is already on origin/main."
+    )
+
+    assert parse_denominator("containment", out) == 3
+
+
+def test_containment_with_no_branches_examined_is_still_measured_nothing():
+    """The other direction, and the one that matters: no verdict lines means it really
+    did examine nothing, and that must NOT be reported as clean."""
+    assert parse_denominator("containment", "\n1 stale branch(es)\n") is None

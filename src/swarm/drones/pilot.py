@@ -29,6 +29,11 @@ from swarm.drones.poll_dispatcher import PollDispatcher
 from swarm.drones.pressure import PressureManager
 from swarm.drones.state_tracker import WorkerStateTracker
 from swarm.drones.task_lifecycle import TaskLifecycle
+from swarm.drones.verification_watcher import (
+    VerificationWatcher,
+    default_verification_checks,
+    run_check_subprocess,
+)
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
 from swarm.worker.manager import revive_worker  # noqa: F401 — monkeypatched by tests
@@ -358,6 +363,18 @@ class DronePilot(EventEmitter):
             learnings_store=None,
             drone_log=self.log,
         )
+
+        # #1702: same bootstrap idiom — constructed eagerly so
+        # ``pilot.verification_watcher`` is never absent, with no notifier until the
+        # daemon binds one via ``set_verification_notifier``. Until then it still RUNS
+        # the checkers and logs at WARNING on a finding; only the Queen message waits.
+        # A sweep that could not report is still better than a sweep that never ran.
+        self.verification_watcher: VerificationWatcher = VerificationWatcher(
+            checks=default_verification_checks(),
+            run_check=run_check_subprocess,
+            notify_queen=None,
+            interval_seconds=getattr(self._drone_config, "verification_interval_seconds", 86400.0),
+        )
         self._dispatcher = PollDispatcher(self)
         # Wire the drone-continued callback
         self._decision_exec.set_drone_continued_callback(self._state_tracker.mark_drone_continued)
@@ -626,6 +643,10 @@ class DronePilot(EventEmitter):
             send_to_worker=send_to_worker,
             interrupt_worker=interrupt_worker or _noop_interrupt,
         )
+
+    def set_verification_notifier(self, notify: Callable[[str], object]) -> None:
+        """Bind the Queen channel once the daemon's message store is live (#1702)."""
+        self.verification_watcher._notify_queen = notify
 
     def set_dreamer_stores(
         self,

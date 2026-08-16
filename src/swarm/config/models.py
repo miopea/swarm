@@ -297,6 +297,12 @@ class DroneConfig:
     # crosses ``dreamer_min_pattern_count`` AND involves at least 2
     # distinct workers (single-worker chatter doesn't mint patterns).
     dreamer_interval_seconds: float = 14400.0  # 4h
+    # #1702: how often the verification sweep runs the fleet's checkers. Daily is
+    # enough — dangling citations and stale branches do not degrade in hours. 0
+    # disables. Daemon-side rather than CI because a GitHub runner cannot reach the
+    # Queen (127.0.0.1, no tunnel, zero self-hosted runners) and has no
+    # FLEET_READ_TOKEN, so 0 of 3 checks reach full coverage there.
+    verification_interval_seconds: float = 86400.0  # 24h
     dreamer_lookback_hours: float = 24.0
     dreamer_min_pattern_count: int = 3
     # --- Criteria-graded verification (Outcomes pattern) ---

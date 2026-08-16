@@ -817,6 +817,20 @@ class SwarmDaemon(EventEmitter):
             buzz_store=getattr(self.drone_log, "_buzz_store", None),
             learnings_store=getattr(self, "queen_chat", None),
         )
+        # #1702: bind the Queen channel for the verification sweep. Done HERE because
+        # this is where the message store is live; the watcher runs its checkers either
+        # way and only the reporting waits on this. Sends ONLY on a finding — a daily
+        # "all clear" is how a channel gets muted and the one real finding arrives
+        # inside a stream of noise.
+        self.pilot.set_verification_notifier(
+            lambda content: self.message_store.send(
+                sender="verification",
+                recipient=QUEEN_WORKER_NAME,
+                msg_type="warning",
+                content=content,
+            )
+        )
+
         self.drone_log.on_entry(self._on_drone_entry)
 
         self.tasks._pilot = self.pilot

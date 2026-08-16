@@ -96,6 +96,7 @@ _KNOWN_DRONE_KEYS = {
     "standing_loop_topics",
     "user_request_plan_mode",
     "dreamer_interval_seconds",
+    "verification_interval_seconds",
     "dreamer_lookback_hours",
     "dreamer_min_pattern_count",
     "verifier_criteria_synthesis",

@@ -376,6 +376,7 @@ def _parse_config(path: Path) -> HiveConfig:
         standing_loop_topics=list(drones_data.get("standing_loop_topics", []) or []),
         user_request_plan_mode=drones_data.get("user_request_plan_mode", True),
         dreamer_interval_seconds=drones_data.get("dreamer_interval_seconds", 14400.0),
+        verification_interval_seconds=drones_data.get("verification_interval_seconds", 86400.0),
         dreamer_lookback_hours=drones_data.get("dreamer_lookback_hours", 24.0),
         dreamer_min_pattern_count=drones_data.get("dreamer_min_pattern_count", 3),
         verifier_criteria_synthesis=bool(drones_data.get("verifier_criteria_synthesis", True)),

@@ -26,6 +26,11 @@ import pytest
 import swarm.db.core as _swarm_db_core
 
 _TEST_DB_DIR = Path(tempfile.mkdtemp(prefix="swarm-tests-"))
+
+# #1702: the verification sweep shells out to git and two checker scripts. Tests must not
+# run it — it is slow, it touches repos outside the sandbox, and its result is not what
+# any pilot test is asserting. Disabled by interval, the same switch an operator has.
+os.environ.setdefault("SWARM_VERIFICATION_INTERVAL_SECONDS", "0")
 # #1697 — every throwaway path a non-fixture helper needs lives UNDER the session dir,
 # which `pytest_sessionfinish` reaps. `make_daemon` is a plain helper with many callers,
 # so threading `tmp_path` through it would churn every one; giving it an owned directory

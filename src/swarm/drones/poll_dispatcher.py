@@ -186,14 +186,21 @@ class PollDispatcher:
         ):
             if await p._oversight_handler.oversight_cycle():
                 had_action = True
-        if await self._run_idle_watcher_sweep():
-            had_action = True
-        if await self._run_inter_worker_watcher_sweep():
-            had_action = True
-        if await self._run_context_pressure_sweep():
-            had_action = True
-        if await self._run_dreamer_sweep():
-            had_action = True
+        # #1702: a LIST rather than a chain of `if await ...`. Each added sweep used to
+        # cost a branch against the complexity gate, which is a bad reason to hesitate
+        # before scheduling a check — and hesitating to schedule checks is the defect
+        # this sweep was added to fix. Every one is independently fault-isolated inside
+        # its own helper, so ordering carries no meaning and one failure cannot skip the
+        # rest.
+        for sweep in (
+            self._run_idle_watcher_sweep,
+            self._run_inter_worker_watcher_sweep,
+            self._run_context_pressure_sweep,
+            self._run_verification_sweep,
+            self._run_dreamer_sweep,
+        ):
+            if await sweep():
+                had_action = True
         return had_action
 
     async def _run_idle_watcher_sweep(self) -> bool:
@@ -227,6 +234,32 @@ class PollDispatcher:
         except Exception:
             _log.warning("inter_worker_watcher sweep failed", exc_info=True)
             return False
+
+    async def _run_verification_sweep(self) -> bool:
+        """Run the #1702 verification sweep — the fleet's checkers, on a schedule.
+
+        Wall-clock driven on a daily cadence, enforced by the watcher's own ``due()``.
+        Same fault isolation as every sweep here: a checker that cannot run must not be
+        able to take down the poll loop, and it is reported as a FINDING rather than
+        swallowed — "the checker could not run" and "the checks are clean" are different
+        claims, which is the defect class this whole watcher exists to remove.
+        """
+        p = self._pilot
+        watcher = getattr(p, "verification_watcher", None)
+        if watcher is None or not (p.enabled and watcher.enabled):
+            return False
+        if not watcher.due():
+            return False
+        try:
+            await asyncio.to_thread(watcher.sweep)
+        except Exception:
+            _log.warning("verification sweep failed", exc_info=True)
+        # ALWAYS False — a verification sweep is HOUSEKEEPING, not worker activity.
+        # Returning its finding-ness reset the pilot's adaptive backoff and made
+        # `poll_once` report the fleet as busy on an idle tick (4 test_pilot failures
+        # caught it). Whether a citation dangles says nothing about whether a worker
+        # did something, and conflating them would make the poll loop spin.
+        return False
 
     async def _run_dreamer_sweep(self) -> bool:
         """Run the Dreamer pattern-mining sweep.

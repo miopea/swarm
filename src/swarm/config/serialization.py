@@ -332,6 +332,7 @@ def _serialize_drones(config: HiveConfig) -> dict[str, Any]:
         "standing_loop_topics": list(d.standing_loop_topics),
         "user_request_plan_mode": d.user_request_plan_mode,
         "dreamer_interval_seconds": d.dreamer_interval_seconds,
+        "verification_interval_seconds": d.verification_interval_seconds,
         "dreamer_lookback_hours": d.dreamer_lookback_hours,
         "dreamer_min_pattern_count": d.dreamer_min_pattern_count,
         "verifier_criteria_synthesis": d.verifier_criteria_synthesis,

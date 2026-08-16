@@ -43,15 +43,73 @@ TWO RULES THIS FILE EXISTS TO HOLD.
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from swarm.logging import get_logger
 
 _log = get_logger("drones.verification")
+
+# Bounded so a hung git call cannot stall the poll loop. Generous because the containment
+# sweep walks every remote branch.
+_CHECK_TIMEOUT = 300.0
+
+# WHERE THE CHECKERS LIVE. Overridable because #1691 measured that a checkout can sit on a
+# branch that does not contain the script at all — claude-team-config's tree was on
+# `ablation` while verify-citations.py existed only on origin/main, and a `find` for it
+# returned nothing.
+_CITATIONS = os.environ.get(
+    "SWARM_CITATION_CHECKER",
+    os.path.expanduser("~/projects/rcg/claude-team-config/scripts/verify-citations.py"),
+)
+_ARCH_REPO = os.environ.get(
+    "SWARM_ARCH_REPO", os.path.expanduser("~/projects/rcg/rcg-architecture")
+)
+_CONTAINMENT = os.environ.get(
+    "SWARM_CONTAINMENT_CHECKER",
+    str(Path(__file__).resolve().parents[3] / "scripts" / "verify-branch-containment.py"),
+)
+
+
+def default_verification_checks() -> list[tuple[str, list[str], str]]:
+    """The checkers this sweep runs, as (label, argv, denominator-kind).
+
+    A checker whose script is MISSING is still returned, so the sweep reports it as a
+    broken check rather than quietly running two of three and calling that clean. That
+    distinction — "did not run" versus "found nothing" — is the whole point of #1702.
+    """
+    return [
+        (
+            "citations",
+            ["python3", _CITATIONS, "--standards-repo", _ARCH_REPO, "--json"],
+            "citations",
+        ),
+        (
+            "containment",
+            ["python3", _CONTAINMENT, "--base", "origin/main", "--remote", "--fail-on", "stale"],
+            "containment",
+        ),
+    ]
+
+
+def run_check_subprocess(argv: list[str]) -> tuple[int, str]:
+    """Run one checker and return (exit_code, combined output).
+
+    Raises on a missing interpreter or script — the caller turns that into a FINDING,
+    which is correct: a checker that cannot run has not reported clean.
+    """
+    script = argv[1] if len(argv) > 1 else ""
+    if script and not Path(script).exists():
+        raise FileNotFoundError(f"checker not found: {script}")
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=_CHECK_TIMEOUT)
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
 
 # A checker is (label, argv, denominator-key). The denominator key names the number that
 # makes the run readable; absent or zero => the run measured nothing.
@@ -97,6 +155,8 @@ _DENOM_PATTERNS = {
     "citations": re.compile(r"citations[_ ]found\s*[:=]\s*(\d+)", re.I),
     "containment": re.compile(r"branches[_ ]examined\s*[:=]\s*(\d+)", re.I),
 }
+# One line per branch classified — the containment checker's implicit denominator.
+_RE_BRANCH_VERDICT = re.compile(r"^(?:CONTAINED|NOT CONTAINED|SKIPPED|UNMEASURABLE)\s", re.M)
 _DEGRADED = re.compile(r"PARTIAL coverage|--skip-arch|UNREADABLE SOURCE|UNMEASURABLE", re.I)
 
 
@@ -108,6 +168,17 @@ def parse_denominator(kind: str, output: str) -> int | None:
     failures, and both are reportable, but conflating them would hide a checker whose
     output format changed underneath us.
     """
+    # CONTAINMENT PRINTS NO TOTAL, so its denominator is DERIVED from its own per-branch
+    # verdicts. Measured 2026-08-16: the real sweep returned a genuine finding (one stale
+    # branch) and this function returned None, so the watcher labelled a true positive
+    # "BROKEN — MEASURED NOTHING". Demanding the script change format would have been the
+    # wrong fix twice over: it belongs to another worker, and a checker that reports one
+    # line per branch has already told us how many it examined.
+    if kind == "containment":
+        verdicts = _RE_BRANCH_VERDICT.findall(output)
+        if verdicts:
+            return len(verdicts)
+
     pat = _DENOM_PATTERNS.get(kind)
     if pat is None:
         return None
