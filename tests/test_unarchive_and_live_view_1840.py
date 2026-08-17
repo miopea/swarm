@@ -161,6 +161,20 @@ def test_the_board_refuses_to_restore_something_already_on_it(store):
     assert board.unarchive("t1") is False
 
 
+def test_a_migrated_task_cannot_be_restored(store):
+    """#12 gave remove/archive an ownership guard: Swarm Next owns MIGRATED tasks. A
+    restore without the same guard would be the one mutator that can put such a task
+    back on this board — a stale duplicate of work living somewhere else."""
+    board = TaskBoard(store=store)
+    board.add(_task(1))
+    board.archive("t1")
+    store._db.execute("UPDATE tasks SET status = ? WHERE id = ?", (TaskStatus.MIGRATED.value, "t1"))
+    store._db.commit()
+
+    assert board.unarchive("t1") is False
+    assert store.get_archived("t1") is not None, "it was un-stamped despite being refused"
+
+
 def test_find_archived_does_not_see_live_tasks(store):
     board = TaskBoard(store=store)
     board.add(_task(7))

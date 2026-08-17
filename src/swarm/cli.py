@@ -2382,6 +2382,116 @@ def update(check_only: bool, no_restart: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# swarm migration — explicit second phase after a Swarm Next import
+# ---------------------------------------------------------------------------
+
+
+@main.group()
+def migration() -> None:
+    """Verify and finish a migration to Swarm Next."""
+
+
+def _migration_db(database: Path | None):
+    from swarm.db.core import SwarmDB
+
+    return SwarmDB(database) if database is not None else SwarmDB()
+
+
+def _require_migration_offline() -> None:
+    from swarm.server.runner import _pid_alive, _read_lock_pid
+
+    pid = _read_lock_pid()
+    if pid is not None and _pid_alive(pid):
+        raise click.ClickException(
+            f"Swarm Legacy is running (PID {pid}). Stop it briefly with 'swarm stop' "
+            "before changing migration state. Swarm Next workers are not affected."
+        )
+
+
+@migration.command("preview")
+@click.argument("bundle_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument("receipt_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--database", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+def migration_preview(bundle_file: Path, receipt_file: Path, database: Path | None) -> None:
+    """Prove a Next receipt matches unchanged Legacy source tasks."""
+    from swarm.migration.next_finalize import (
+        MigrationFinalizationError,
+        NextMigrationFinalizer,
+        load_json,
+    )
+
+    sdb = _migration_db(database)
+    try:
+        result = NextMigrationFinalizer(sdb).preview(
+            load_json(bundle_file), load_json(receipt_file)
+        )
+    except MigrationFinalizationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        sdb.close()
+    click.echo(f"Receipt verified: {result.batch_id}")
+    click.echo(f"Ready to finalize: {len(result.task_ids)} unchanged Legacy task(s)")
+    click.echo("Preview only. No Legacy data was changed.")
+
+
+@migration.command("finish")
+@click.argument("bundle_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument("receipt_file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--database", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--yes", is_flag=True, help="Skip the final confirmation")
+def migration_finish(
+    bundle_file: Path, receipt_file: Path, database: Path | None, yes: bool
+) -> None:
+    """Back up Legacy and mark receipt-proven tasks as moved to Next."""
+    from swarm.migration.next_finalize import (
+        MigrationFinalizationError,
+        NextMigrationFinalizer,
+        load_json,
+    )
+
+    _require_migration_offline()
+    sdb = _migration_db(database)
+    try:
+        bundle = load_json(bundle_file)
+        receipt = load_json(receipt_file)
+        preview = NextMigrationFinalizer(sdb).preview(bundle, receipt)
+        if not yes:
+            click.confirm(
+                f"Back up Legacy and mark {len(preview.task_ids)} task(s) read-only in Legacy?",
+                abort=True,
+            )
+        result = NextMigrationFinalizer(sdb).finish(bundle, receipt)
+    except MigrationFinalizationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        sdb.close()
+    click.echo(f"Finalized: {result.finalized_tasks} task(s) moved to Swarm Next")
+    click.echo(f"Safety backup: {result.backup_path}")
+    click.echo(f"Reversible with: swarm migration reverse {result.batch_id}")
+
+
+@migration.command("reverse")
+@click.argument("batch_id")
+@click.option("--database", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--yes", is_flag=True, help="Skip the final confirmation")
+def migration_reverse(batch_id: str, database: Path | None, yes: bool) -> None:
+    """Restore an untouched finalized batch to the Legacy board."""
+    from swarm.migration.next_finalize import MigrationFinalizationError, NextMigrationFinalizer
+
+    _require_migration_offline()
+    if not yes:
+        click.confirm(f"Restore Legacy tasks from migration batch {batch_id}?", abort=True)
+    sdb = _migration_db(database)
+    try:
+        result = NextMigrationFinalizer(sdb).reverse(batch_id)
+    except MigrationFinalizationError as exc:
+        raise click.ClickException(str(exc)) from exc
+    finally:
+        sdb.close()
+    click.echo(f"Restored: {result.restored_tasks} Legacy task(s)")
+
+
+# ---------------------------------------------------------------------------
 # swarm db — database management commands
 # ---------------------------------------------------------------------------
 

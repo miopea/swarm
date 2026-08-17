@@ -159,7 +159,7 @@ class SqliteTaskStore(BaseStore):
         DUPLICATE task instead of recognising it.
         """
         # DELIBERATELY UNFILTERED — DO NOT ADD ``archived_at IS NULL``, AND DO NOT SWAP
-        # THIS ONTO THE ``live_tasks`` VIEW (v22, #1840). That view exists so ad-hoc
+        # THIS ONTO THE ``live_tasks`` VIEW (v23, #1840). That view exists so ad-hoc
         # queries stop counting archived rows; this query is the one place that MUST
         # count them. A dedupe blind to archived rows re-imports an archived issue as a
         # brand-new duplicate task, and nothing errors — you get two tasks for one
