@@ -8,6 +8,7 @@ live in :mod:`swarm.mcp.handlers._queen_relay`.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from swarm.mcp._arg_types import CheckMessagesArgs, NoteToQueenArgs, SendMessageArgs
@@ -16,6 +17,8 @@ from swarm.mcp.types import TextContent
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
+
+_log = logging.getLogger(__name__)
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -139,14 +142,52 @@ def _handle_check_messages(
     d: SwarmDaemon, worker_name: str, _args: CheckMessagesArgs
 ) -> list[TextContent]:
     messages = d.message_store.get_unread(worker_name)
-    if not messages:
-        return [{"type": "text", "text": "No pending messages."}]
-    # Mark as read
-    d.message_store.mark_read(worker_name, [m.id for m in messages])
-    lines = []
-    for m in messages:
-        lines.append(f"[{m.msg_type}] from {m.sender}: {m.content}")
+    if messages:
+        # Mark as read
+        d.message_store.mark_read(worker_name, [m.id for m in messages])
+    lines = [f"[{m.msg_type}] from {m.sender}: {m.content}" for m in messages]
+    if not lines:
+        lines.append("No pending messages.")
+
+    # #1843: THE OTHER DIRECTION, which nothing reported. A sender was told "Message
+    # sent" and could not find out — from anywhere a worker can reach — that it was
+    # never read. Reported here rather than as a new tool because the failure is one
+    # nobody thinks to go looking for: it has to appear where workers already look.
+    outbound = _undelivered_notice(d, worker_name)
+    if outbound:
+        lines.append(outbound)
     return [{"type": "text", "text": "\n".join(lines)}]
+
+
+def _undelivered_notice(d: SwarmDaemon, worker_name: str) -> str:
+    """Report the caller's own sent-but-unread messages, or '' if there are none.
+
+    Best-effort: a failure here must never break an inbox read, because the inbox is
+    the thing a worker actually needs.
+    """
+    try:
+        pending = d.message_store.unread_sent_by(worker_name)
+    except Exception:
+        _log.warning("could not read undelivered-sent for %s", worker_name, exc_info=True)
+        return ""
+    if not pending:
+        return ""
+    import time as _time
+
+    from swarm.drones.inter_worker_watcher import _ACTION_REQUIRED_MSG_TYPES
+
+    rows = []
+    for m in pending:
+        age_min = max(0, int((_time.time() - m.created_at) / 60))
+        nudged = "" if m.msg_type in _ACTION_REQUIRED_MSG_TYPES else ", no nudge sent"
+        rows.append(f"  → {m.recipient} [{m.msg_type}] {age_min}m ago{nudged}: {m.content[:70]}")
+    return (
+        f"\n--- {len(pending)} MESSAGE(S) YOU SENT ARE STILL UNREAD ---\n"
+        + "\n".join(rows)
+        + "\nThese were queued, not delivered. An informational type ('finding', "
+        "'status', 'note') never wakes the recipient — resend as 'dependency' or "
+        "'warning' if it needs action, or ask the Queen to relay it."
+    )
 
 
 def _known_worker_names(d: SwarmDaemon) -> set[str] | None:
@@ -300,6 +341,47 @@ def _handle_broadcast(
     ]
 
 
+def _delivery_notice(recipient: str, msg_type: str) -> str:
+    """What actually happened, for a worker→worker send (#1843).
+
+    "Message sent to X." WAS TRUE AND USELESS. It reported the WRITE, not the
+    delivery — the same shape as #1832's transport-acceptance defect. A worker→worker
+    message lands in an inbox and is delivered only when the recipient calls
+    ``swarm_check_messages``; nothing pushes it, because workers deliberately cannot
+    auto-interrupt each other.
+
+    THE MEASURED INCIDENT (#1843): project-root relayed two operator rulings to
+    bfg-ops-console as ``status`` at 21:50:21 and was told "Message sent to
+    bfg-ops-console." The row is still unread. At 22:09:48 the inter-worker watcher
+    looked straight at it, classified it "informational only (finding, status)" and
+    logged AUTO_NUDGE_MESSAGE_SKIPPED — so the one mechanism that could have woken the
+    recipient declined to, BY TYPE. Four commits then sat behind the unimplemented
+    ruling. The gate was never involved; it is loud and says "GATED, not delivered".
+
+    So the type is not a label — it decides whether anyone gets woken. Saying so at
+    the send is the difference between a caveat and something the sender can act on:
+    the fix is to resend as ``dependency``/``warning``, and that is named here.
+    """
+    from swarm.drones.inter_worker_watcher import _ACTION_REQUIRED_MSG_TYPES
+
+    if msg_type in _ACTION_REQUIRED_MSG_TYPES:
+        return (
+            f"Queued for {recipient} — action-required type '{msg_type}', so the "
+            f"inter-worker watcher WILL nudge them. Delivery still happens when they "
+            f"call swarm_check_messages; swarm_check_messages tells you which of your "
+            f"own sent messages are still unread."
+        )
+    return (
+        f"Queued for {recipient} — NOT DELIVERED YET, and '{msg_type}' is classified "
+        f"informational, so the watcher will NOT nudge them (it logs "
+        f"AUTO_NUDGE_MESSAGE_SKIPPED instead). It is delivered only when they happen to "
+        f"call swarm_check_messages, which may be never.\n"
+        f"IF THIS NEEDS ACTION, RESEND AS type='dependency' OR type='warning' — that is "
+        f"the only difference that makes the recipient get woken. Your own "
+        f"swarm_check_messages reports which of your sent messages are still unread."
+    )
+
+
 def _handle_send_message(
     d: SwarmDaemon, worker_name: str, args: SendMessageArgs
 ) -> list[TextContent]:
@@ -391,7 +473,8 @@ def _handle_send_message(
         # bypass is Queen-only).
         if recipient == QUEEN_WORKER_NAME and worker_name != QUEEN_WORKER_NAME:
             _auto_relay_to_queen(d, worker_name, msg_type, content, message_id=msg_id)
-        return [{"type": "text", "text": f"Message sent to {recipient}."}]
+            return [{"type": "text", "text": f"Message sent to {recipient}."}]
+        return [{"type": "text", "text": _delivery_notice(recipient, msg_type)}]
     return [{"type": "text", "text": "Failed to send message."}]
 
 

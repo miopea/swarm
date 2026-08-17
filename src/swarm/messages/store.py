@@ -265,6 +265,35 @@ class MessageStore:
                 _log.warning("failed to get messages", exc_info=True)
                 return []
 
+    def unread_sent_by(self, sender: str, limit: int = 20) -> list[Message]:
+        """Messages *sender* SENT that the recipient has never read (#1843).
+
+        THE INVERSE OF ``get_unread``, and the one direction nothing could ask.
+        ``read_at`` has always been recorded, but it was reachable only through
+        Queen-only tools — so a worker could not find out that their own message
+        never arrived, and the only way to learn it was for the recipient to say so.
+        That is what made the #1843 relay unfalsifiable from both ends: the sender
+        saw "Message sent", the recipient had no record, and neither could tell a
+        lost message from an ignored one.
+
+        Read-only: it does not touch ``read_at``, so asking cannot mark anything.
+        """
+        if not self._conn:
+            return []
+        with self._lock:
+            try:
+                rows = self._conn.execute(
+                    "SELECT id, sender, recipient, msg_type, content, created_at, read_at"
+                    " FROM messages"
+                    " WHERE sender = ? AND read_at IS NULL AND recipient != '*'"
+                    " ORDER BY created_at ASC LIMIT ?",
+                    (sender, limit),
+                ).fetchall()
+                return [Message(*r) for r in rows]
+            except sqlite3.Error:
+                _log.warning("failed to read unread-sent for %s", sender, exc_info=True)
+                return []
+
     def mark_read(self, recipient: str, message_ids: list[int] | None = None) -> int:
         """Mark messages as read. Returns count of messages marked."""
         if not self._conn:

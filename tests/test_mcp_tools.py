@@ -1017,7 +1017,10 @@ class TestSendGuards:
             d, "platform", "swarm_send_message", {"to": "hub", "type": "finding", "content": "x"}
         )
         d.message_store.send.assert_called_once()
-        assert "Message sent to hub" in res[0]["text"]
+        # #1843 changed the acceptance wording from "Message sent to hub" — which claimed
+        # a delivery the handler cannot observe — to "Queued for hub". Same meaning here
+        # (the guard let it through); the marker moved.
+        assert "Queued for hub" in res[0]["text"]
 
     def test_recipient_is_canonicalized(self):
         """A case-variant recipient resolves to the roster's canonical name,
@@ -1046,7 +1049,7 @@ class TestSendGuards:
             d, "w", "swarm_send_message", {"to": "anything", "type": "finding", "content": "x"}
         )
         d.message_store.send.assert_called_once()
-        assert "Message sent" in res[0]["text"]
+        assert "Queued for anything" in res[0]["text"]  # acceptance marker, see #1843
 
     def test_fanout_cap_blocks_burst_beyond_limit(self):
         """The exact #873 symptom: identical message hand-sent to many
@@ -1063,7 +1066,7 @@ class TestSendGuards:
             )
             for t in targets
         ]
-        delivered = [r for r in results if "Message sent" in r[0]["text"]]
+        delivered = [r for r in results if "Queued for" in r[0]["text"]]  # #1843 wording
         blocked = [r for r in results if "Fan-out cap reached" in r[0]["text"]]
         assert len(delivered) == 3
         assert len(blocked) == 3
@@ -1080,7 +1083,7 @@ class TestSendGuards:
                 "swarm_send_message",
                 {"to": t, "type": "finding", "content": f"distinct finding {i}"},
             )
-            assert "Message sent" in res[0]["text"]
+            assert "Queued for" in res[0]["text"]  # #1843 wording
         assert d.message_store.send.call_count == 4
 
     def test_queen_is_exempt_from_fanout_cap(self):
