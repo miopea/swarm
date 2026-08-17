@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 21
+CURRENT_VERSION = 22
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -158,6 +158,33 @@ CREATE TABLE IF NOT EXISTS task_history (
 
 CREATE INDEX IF NOT EXISTS idx_task_history_task ON task_history(task_id);
 CREATE INDEX IF NOT EXISTS idx_task_history_time ON task_history(created_at);
+
+-- Swarm Next migration finalization is deliberately separate from import. The
+-- receipt proves Next accepted the exact source records; these tables retain
+-- the reversible Legacy-side handoff without pretending the work completed.
+CREATE TABLE IF NOT EXISTS next_migration_batches (
+  batch_id                   TEXT PRIMARY KEY,
+  bundle_digest              TEXT UNIQUE NOT NULL,
+  source_installation_id     TEXT NOT NULL,
+  source_snapshot_digest     TEXT NOT NULL,
+  receipt_json               TEXT NOT NULL,
+  backup_path                TEXT NOT NULL,
+  applied_at                 REAL NOT NULL,
+  reversed_at                REAL
+);
+
+CREATE TABLE IF NOT EXISTS next_migration_tasks (
+  batch_id                   TEXT NOT NULL REFERENCES next_migration_batches(batch_id),
+  task_id                    TEXT NOT NULL REFERENCES tasks(id),
+  original_status            TEXT NOT NULL,
+  original_assigned_worker   TEXT,
+  migration_task_digest      TEXT NOT NULL,
+  reversed_at                REAL,
+  PRIMARY KEY (batch_id, task_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_next_migration_tasks_task
+  ON next_migration_tasks(task_id);
 
 -- ============================================================
 -- PROPOSALS
