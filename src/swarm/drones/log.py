@@ -113,6 +113,8 @@ class SystemAction(Enum):
     TASK_COMPLETED = "TASK_COMPLETED"
     TASK_FAILED = "TASK_FAILED"
     TASK_REMOVED = "TASK_REMOVED"
+    # #1840: the inverse of TASK_REMOVED — an archived task came back.
+    TASK_RESTORED = "TASK_RESTORED"
     TASK_SEND_FAILED = "TASK_SEND_FAILED"
     # #762: a task crossed its per-task output-token ceiling. The governor
     # escalates (notification) and parks the task (ACTIVE → BLOCKED) so it

@@ -316,6 +316,39 @@ class TaskManager:
         )
         return True
 
+    def unarchive_task(self, task_id: str, actor: str = "user", reason: str = "") -> bool:
+        """THE single write path for putting an archived task back on the board (#1840).
+
+        Counterpart to :meth:`archive_task`, and deliberately NOT its mirror image:
+
+        * It cannot use ``require_task``. That reads the board, and an archived task is
+          absent from the board by definition — the lookup it would need is the one the
+          restore exists to perform.
+        * It does NOT restore blocker rows. ``archive_task`` cleared them in both
+          directions, and those clears are not recorded anywhere, so there is nothing to
+          replay. Re-blocking a restored task on a stale dependency would be worse than
+          leaving it unblocked: #529's shape is a worker waiting on something it cannot
+          see. A restored task starts unblocked, and that is a deliberate asymmetry.
+        * ``depends_on`` references scrubbed on archive are likewise gone for good.
+
+        NOTHING RECORDS WHY A TASK WAS ARCHIVED. ``TaskAction.REMOVED`` carries a free
+        text ``detail`` that surfaces may leave empty, and the restore has no way to
+        recover an absent reason — so *reason* here documents the restore, never the
+        removal.
+        """
+        if not self.task_board.unarchive(task_id):
+            return False
+        task = self.task_board.get(task_id)
+        title = task.title if task else task_id
+        self.task_history.append(task_id, TaskAction.RESTORED, actor=actor, detail=reason)
+        self.drone_log.add(
+            SystemAction.TASK_RESTORED,
+            actor,
+            f"restored to the board: {title}{f' — {reason}' if reason else ''}",
+            category=LogCategory.TASK,
+        )
+        return True
+
     def remove_task(self, task_id: str, actor: str = "user") -> bool:
         """Remove a task from the board. ARCHIVES it (#1298). Raises if not found.
 

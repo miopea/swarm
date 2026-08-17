@@ -271,6 +271,49 @@ class TaskBoard(EventEmitter):
             self._notify()
         return True
 
+    def find_archived(self, number: int) -> SwarmTask | None:
+        """Look up an ARCHIVED task by display number. Returns None if live or absent.
+
+        The board's own lookups (``all_tasks``, ``get``) cannot see archived tasks, so
+        every restore surface would otherwise have to reach into ``self._store``
+        directly. Kept here so the store stays private and the handler for a restore
+        reads the same way as the handler for an archive.
+        """
+        finder = getattr(self._store, "get_archived_by_number", None) if self._store else None
+        return finder(number) if finder is not None else None
+
+    def unarchive(self, task_id: str) -> bool:
+        """Put an archived task back on the board. Inverse of :meth:`archive`.
+
+        ORDER IS LOAD-BEARING HERE TOO, IN THE OPPOSITE DIRECTION. The row is READ
+        first, un-stamped second, and only then inserted into ``self._tasks``. A store
+        that un-stamped before the read could leave a live row that memory does not
+        know about — and ``_persist()`` DELETES any live row missing from memory, so
+        the failure mode of a botched restore is a hard delete of the task you were
+        trying to save.
+
+        Returns False without mutating anything if the id is unknown, already live, or
+        its row will not parse.
+        """
+        with self._lock:
+            if task_id in self._tasks:
+                return False
+            reader = getattr(self._store, "get_archived", None) if self._store else None
+            restorer = getattr(self._store, "unarchive", None) if self._store else None
+            if reader is None or restorer is None:
+                # In-memory board: archive() dropped the task outright, so there is
+                # nothing to restore and claiming otherwise would be a false success.
+                return False
+            task = reader(task_id)
+            if task is None:
+                return False
+            if not restorer(task_id):
+                return False
+            self._tasks[task_id] = task
+            self._persist()
+            self._notify()
+        return True
+
     def remove_tasks(self, task_ids: set[str]) -> int:
         """Remove multiple tasks by ID. Returns count removed."""
         removed = 0

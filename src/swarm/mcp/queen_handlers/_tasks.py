@@ -835,8 +835,109 @@ def _handle_queen_archive_task(
     ]
 
 
+QUEEN_UNARCHIVE_TOOL: dict[str, Any] = {
+    "name": "queen_unarchive_task",
+    "description": (
+        "Put an ARCHIVED task back on the board — the inverse of queen_archive_task, "
+        "which had no inverse at all until #1840. Use it when a task was taken off the "
+        "board and the problem it addresses turns out to still be live. The task comes "
+        "back with the status it carried when it was archived, because archiving never "
+        "overwrote it. TWO THINGS DO NOT COME BACK: blocker rows cleared on archive, "
+        "and depends_on references scrubbed on archive — neither is recorded anywhere, "
+        "so a restored task starts unblocked and you may need to re-state its "
+        "dependencies. NOTHING RECORDS WHY A TASK WAS ARCHIVED either, so do not expect "
+        "the original reason to be recoverable; say why you are restoring it instead."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "number": {"type": "integer", "description": "Display number of the archived task."},
+            "reason": {
+                "type": "string",
+                "description": "Why it is coming back — recorded in task_history.",
+            },
+        },
+        "required": ["number", "reason"],
+        "examples": [{"number": 1672, "reason": "operator ruling: the problem is still live"}],
+    },
+}
+
+
+def _handle_queen_unarchive_task(
+    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+) -> list[TextContent]:
+    err = _assert_queen(worker_name)
+    if err:
+        return err
+    board = getattr(d, "task_board", None)
+    if board is None:
+        return [{"type": "text", "text": "Task board unavailable on this daemon."}]
+
+    raw = args.get("number")
+    try:
+        number = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return [{"type": "text", "text": f"'number' must be a task number, got {raw!r}."}]
+
+    reason = str(args.get("reason") or "").strip()
+    if not reason:
+        return [
+            {
+                "type": "text",
+                "text": "'reason' is required — it is the only record of why the task came back.",
+            }
+        ]
+
+    if not hasattr(board, "find_archived"):
+        return [{"type": "text", "text": "This board cannot restore archived tasks."}]
+    task = board.find_archived(number)
+    if task is None:
+        # DISTINGUISH THE TWO MISSES. "already on the board" and "no such task" are
+        # different facts, and reporting the second for the first would send an
+        # operator hunting for a row that is sitting in front of them.
+        live = next((t for t in board.all_tasks if t.number == number), None)
+        if live is not None:
+            return [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Task #{number} is not archived — it is on the board now, "
+                        f"status {live.status.value}. Nothing was changed."
+                    ),
+                }
+            ]
+        return [{"type": "text", "text": f"No archived task found with number #{number}."}]
+
+    manager = getattr(d, "tasks", None)
+    if manager is None or not hasattr(manager, "unarchive_task"):
+        return [{"type": "text", "text": "Task manager unavailable on this daemon."}]
+    if not manager.unarchive_task(task.id, actor="queen", reason=reason):
+        return [
+            {
+                "type": "text",
+                "text": (
+                    f"Task #{number} could not be restored — the board reported no "
+                    f"change and nothing was modified."
+                ),
+            }
+        ]
+
+    return [
+        {
+            "type": "text",
+            "text": (
+                f"Task #{number} restored to the board with status {task.status.value} "
+                f"(the status it carried when archived — archiving never changed it). "
+                f"Blocker rows and depends_on references cleared on archive were NOT "
+                f"restored; re-state them if it needs them. Reason recorded: {reason}"
+            ),
+        }
+    ]
+
+
 TOOLS.append(QUEEN_UNBLOCK_TOOL)
 TOOLS.append(QUEEN_ARCHIVE_TOOL)
+TOOLS.append(QUEEN_UNARCHIVE_TOOL)
 
 HANDLERS = {
     "queen_reassign_task": _handle_reassign_task,
@@ -844,4 +945,5 @@ HANDLERS = {
     "queen_force_complete_task": _handle_force_complete_task,
     "queen_edit_task": _handle_edit_task,
     "queen_archive_task": _handle_queen_archive_task,
+    "queen_unarchive_task": _handle_queen_unarchive_task,
 }

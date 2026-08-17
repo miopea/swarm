@@ -7,7 +7,7 @@ incrementally.
 
 from __future__ import annotations
 
-CURRENT_VERSION = 21
+CURRENT_VERSION = 22
 
 PRAGMAS = """\
 PRAGMA journal_mode=WAL;
@@ -416,4 +416,21 @@ CREATE TABLE IF NOT EXISTS playbook_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_playbook_events_pb ON playbook_events(playbook_id, ts);
+
+-- v22 (#1840): the obvious right target for an ad-hoc query over tasks.
+--
+-- ARCHIVING SETS ``archived_at`` AND DELIBERATELY LEAVES ``status`` ALONE — the status
+-- records what the task WAS when it was archived, and ``archived_at`` is the authority
+-- for whether it still counts. The board loader already filters on it, so every UI path
+-- is correct; raw SQL was the exposed surface and had no obvious correct form.
+--
+-- THE INCIDENT THIS EXISTS FOR: a direct ``status='assigned'`` query returned 22 rows and
+-- was reported as a congested board. 15 of them were archived; the board was showing 7.
+-- The failure mode is a CONFIDENT WRONG COUNT, not an error, which is why an affordance
+-- beats a convention here.
+--
+-- NOT EVERY UNFILTERED QUERY IS A BUG — see ``TaskStore.existing_jira_keys``, which must
+-- see archived rows and must NOT be swapped onto this view.
+CREATE VIEW IF NOT EXISTS live_tasks AS
+  SELECT * FROM tasks WHERE archived_at IS NULL;
 """

@@ -122,6 +122,7 @@ class SwarmDB:
             (19, self._migrate_v19_jira_exported_status),
             (20, self._migrate_v20_dispatch_requested_at),
             (21, self._migrate_v21_title_original),
+            (22, self._migrate_v22_live_tasks_view),
         ]
         for version, migrate in migrations:
             if from_version < version:
@@ -520,6 +521,26 @@ class SwarmDB:
             _log.info("v21: added tasks.title_original")
         except sqlite3.OperationalError:
             _log.debug("v21 migration: title_original column likely already exists")
+
+    def _migrate_v22_live_tasks_view(self) -> None:
+        """v22 (#1840): a ``live_tasks`` view — tasks that still count.
+
+        Archiving stamps ``archived_at`` and leaves ``status`` untouched by design (see
+        #1839), so a raw ``status='assigned'`` query counts dead rows. That is not
+        hypothetical: one returned 22 and was reported as a congested board when the board
+        was showing 7 — 15 were archived. A wrong count that looks like a right one.
+
+        A VIEW rather than a status rewrite, because ``status`` is the record of what the
+        task WAS when archived and ``archived_at`` is the authority for whether it counts.
+
+        DO NOT point ``TaskStore.existing_jira_keys`` at this view. That query is
+        deliberately unfiltered: archived rows keep their jira_key, and a dedupe that
+        cannot see them silently creates a DUPLICATE task on re-import.
+        """
+        assert self._conn is not None
+        self._conn.execute(
+            "CREATE VIEW IF NOT EXISTS live_tasks AS SELECT * FROM tasks WHERE archived_at IS NULL"
+        )
 
     def _migrate_v14_started_at(self) -> None:
         """v14 (#611 P2): add ``tasks.started_at`` (when the task last went

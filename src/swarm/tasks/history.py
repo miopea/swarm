@@ -31,6 +31,12 @@ class TaskAction(Enum):
     BLOCKED = "BLOCKED"  # #876: parked on an external/upstream dependency
     REOPENED = "REOPENED"
     REMOVED = "REMOVED"
+    # #1840: an archived task was put back on the board. Distinct from REOPENED,
+    # which moves a task between STATUSES — this one is about whether the task is
+    # on the board at all, and it is the ONLY record that a restore happened,
+    # because clearing ``archived_at`` leaves the row indistinguishable from one
+    # that was never archived.
+    RESTORED = "RESTORED"
     EDITED = "EDITED"
     # #1527: a dispatch was requested and the async call raised. Written so the
     # failure lives on the TASK, next to the ASSIGNED row that made it look

@@ -158,6 +158,12 @@ class SqliteTaskStore(BaseStore):
         ``jira_key`` it means re-importing an archived issue silently creates a
         DUPLICATE task instead of recognising it.
         """
+        # DELIBERATELY UNFILTERED — DO NOT ADD ``archived_at IS NULL``, AND DO NOT SWAP
+        # THIS ONTO THE ``live_tasks`` VIEW (v22, #1840). That view exists so ad-hoc
+        # queries stop counting archived rows; this query is the one place that MUST
+        # count them. A dedupe blind to archived rows re-imports an archived issue as a
+        # brand-new duplicate task, and nothing errors — you get two tasks for one
+        # ticket. Consistency with the view would be the bug.
         rows = self._db.fetchall(
             "SELECT jira_key FROM tasks WHERE jira_key IS NOT NULL AND jira_key != ''"
         )
@@ -174,6 +180,71 @@ class SqliteTaskStore(BaseStore):
         cur = self._db.execute(
             "UPDATE tasks SET archived_at = ? WHERE id = ? AND archived_at IS NULL",
             (time.time(), task_id),
+        )
+        self._db.commit()
+        return bool(getattr(cur, "rowcount", 0))
+
+    def get_archived(self, task_id: str) -> SwarmTask | None:
+        """Read an ARCHIVED row back as a task. Returns None if live or absent.
+
+        The board cannot supply this: ``load()`` filters archived rows out, so an
+        archived task exists nowhere in memory. Restoring one has to start from the row.
+
+        Deliberately refuses to return LIVE tasks. A caller that got a live task here
+        would "restore" something already on the board and then insert a second copy of
+        it into ``_tasks`` — silent divergence rather than a visible no-op.
+        """
+        rows = self._db.fetchall(
+            f"SELECT {', '.join(_TASK_COLUMNS)} FROM tasks "
+            "WHERE id = ? AND archived_at IS NOT NULL",
+            (task_id,),
+        )
+        if not rows:
+            return None
+        try:
+            return _row_to_task(rows[0])
+        except (KeyError, ValueError):
+            _log.warning("archived task row %s is corrupt and cannot be restored", task_id)
+            return None
+
+    def get_archived_by_number(self, number: int) -> SwarmTask | None:
+        """Same as :meth:`get_archived`, keyed by DISPLAY NUMBER.
+
+        The number is what an operator has; the id is what the write path needs, and an
+        archived task is on no board to translate between them.
+        """
+        rows = self._db.fetchall(
+            f"SELECT {', '.join(_TASK_COLUMNS)} FROM tasks "
+            "WHERE number = ? AND archived_at IS NOT NULL",
+            (number,),
+        )
+        if not rows:
+            return None
+        try:
+            return _row_to_task(rows[0])
+        except (KeyError, ValueError):
+            _log.warning("archived task row #%s is corrupt and cannot be restored", number)
+            return None
+
+    def unarchive(self, task_id: str) -> bool:
+        """The inverse of :meth:`archive` — clear the stamp, putting the row back in scope.
+
+        THERE WAS NO INVERSE UNTIL #1840. Archiving was built as a one-way door, so the
+        only way back was a raw UPDATE against swarm.db — which the daemon's in-memory
+        board never sees, leaving the row live and the board unaware of it until a
+        restart. The next ``save()`` then treats that row as removed and HARD-deletes
+        it, cascading its history away. An inverse that goes through the board is the
+        difference between restoring a task and quietly destroying it.
+
+        ``AND archived_at IS NOT NULL`` so restoring an already-live task returns False
+        rather than reporting success for a no-op — same contract as :meth:`archive`.
+
+        NOTHING RECORDS WHY A TASK WAS ARCHIVED, so nothing can record why it came back
+        either; the reason lives in the caller's history entry, not here.
+        """
+        cur = self._db.execute(
+            "UPDATE tasks SET archived_at = NULL WHERE id = ? AND archived_at IS NOT NULL",
+            (task_id,),
         )
         self._db.commit()
         return bool(getattr(cur, "rowcount", 0))
