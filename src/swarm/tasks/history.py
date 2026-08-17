@@ -40,6 +40,8 @@ class TaskAction(Enum):
     # #1527: a requested dispatch never reached ACTIVE and the invariant swept it.
     # Distinct from DISPATCH_FAILED: nothing raised, so this is the only signal.
     DISPATCH_STALLED = "DISPATCH_STALLED"
+    MIGRATED = "MIGRATED"
+    MIGRATION_REVERSED = "MIGRATION_REVERSED"
 
 
 @dataclass

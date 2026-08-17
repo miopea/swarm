@@ -34,7 +34,7 @@ from swarm.tasks.task import TaskStatus
 # --- the enumeration, derived from source and verified by reading -----------
 #
 # TERMINAL statuses legitimately need no onward exit beyond reopen/release.
-_TERMINAL = {TaskStatus.DONE, TaskStatus.FAILED}
+_TERMINAL = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.MIGRATED}
 
 # Board-level exits per status: (board verb, resulting status, falsifies?)
 _BOARD_EXITS: dict[TaskStatus, list[tuple[str, str, bool]]] = {
@@ -84,6 +84,9 @@ _BOARD_EXITS: dict[TaskStatus, list[tuple[str, str, bool]]] = {
     ],
     TaskStatus.DONE: [("reopen", "backlog", False), ("release", "unassigned", False)],
     TaskStatus.FAILED: [("reopen", "backlog", False), ("release", "unassigned", False)],
+    # Migration is finalized only while the Legacy daemon is stopped. Its bounded
+    # receipt command is deliberately outside the live board/MCP surfaces.
+    TaskStatus.MIGRATED: [("swarm migration reverse", "original status", False)],
 }
 
 

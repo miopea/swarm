@@ -71,7 +71,7 @@ def test_a_hold_task_is_refused_without_override_and_allowed_with_it():
     )
 
 
-@pytest.mark.parametrize("status", [TaskStatus.DONE, TaskStatus.FAILED])
+@pytest.mark.parametrize("status", [TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.MIGRATED])
 def test_closed_work_is_refused_and_the_reason_names_the_status(status: TaskStatus):
     refusal = assignment_refusal(_task(status))
     assert refusal is not None
@@ -94,6 +94,7 @@ def test_no_refusal_blames_the_target_worker():
     cases = [
         _task(TaskStatus.DONE),
         _task(TaskStatus.FAILED),
+        _task(TaskStatus.MIGRATED),
         _task(TaskStatus.ASSIGNED, worker="api"),
         _task(TaskStatus.ACTIVE, worker="api"),
         _task(TaskStatus.BLOCKED, worker="api"),

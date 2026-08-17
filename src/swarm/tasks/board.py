@@ -233,7 +233,11 @@ class TaskBoard(EventEmitter):
 
     def remove(self, task_id: str) -> bool:
         with self._lock:
-            if task_id in self._tasks:
+            task = self._tasks.get(task_id)
+            if task is not None and task.status is TaskStatus.MIGRATED:
+                _log.warning("cannot remove migrated task %s — Swarm Next owns it", task_id)
+                return False
+            if task is not None:
                 del self._tasks[task_id]
                 self._scrub_dependency(task_id)
                 self._persist()
@@ -257,7 +261,11 @@ class TaskBoard(EventEmitter):
         to prevent. Returns False without mutating anything if the stamp fails.
         """
         with self._lock:
-            if task_id not in self._tasks:
+            task = self._tasks.get(task_id)
+            if task is None:
+                return False
+            if task.status is TaskStatus.MIGRATED:
+                _log.warning("cannot archive migrated task %s — Swarm Next owns it", task_id)
                 return False
             archiver = getattr(self._store, "archive", None) if self._store else None
             if archiver is not None:
@@ -276,7 +284,8 @@ class TaskBoard(EventEmitter):
         removed = 0
         with self._lock:
             for tid in task_ids:
-                if tid in self._tasks:
+                task = self._tasks.get(tid)
+                if task is not None and task.status is not TaskStatus.MIGRATED:
                     del self._tasks[tid]
                     removed += 1
             if removed:
@@ -315,6 +324,9 @@ class TaskBoard(EventEmitter):
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
+                return False
+            if task.status is TaskStatus.MIGRATED:
+                _log.warning("cannot edit migrated task %s — Swarm Next owns it", task_id)
                 return False
             self._apply_core_fields(
                 task,
@@ -455,7 +467,7 @@ class TaskBoard(EventEmitter):
             task = self._tasks.get(task_id)
             if not task:
                 return False
-            if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+            if task.status in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.MIGRATED):
                 _log.warning(
                     "cannot force-complete task %s — already %s", task_id, task.status.value
                 )
@@ -471,6 +483,9 @@ class TaskBoard(EventEmitter):
         with self._lock:
             task = self._tasks.get(task_id)
             if not task:
+                return False
+            if task.status is TaskStatus.MIGRATED:
+                _log.warning("cannot fail migrated task %s — Swarm Next owns it", task_id)
                 return False
             task.fail()
             _log.info("task %s failed", task_id)
@@ -573,7 +588,7 @@ class TaskBoard(EventEmitter):
             task = self._tasks.get(task_id)
             if not task:
                 return False
-            if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+            if task.status in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.MIGRATED):
                 return False
             if not task.assigned_worker and task.status == TaskStatus.UNASSIGNED:
                 return False  # nothing to release — already ownerless
@@ -1249,7 +1264,12 @@ class TaskBoard(EventEmitter):
             task = self._tasks.get(task_id)
             if not task:
                 return False
-            if task.status in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.BACKLOG):
+            if task.status in (
+                TaskStatus.DONE,
+                TaskStatus.FAILED,
+                TaskStatus.MIGRATED,
+                TaskStatus.BACKLOG,
+            ):
                 return False
             task.demote_to_backlog()
             _log.info("task %s demoted to backlog", task_id)
@@ -1571,6 +1591,7 @@ class TaskBoard(EventEmitter):
             (TaskStatus.ASSIGNED, "queued", True),
             (TaskStatus.ACTIVE, "in progress", True),
             (TaskStatus.BLOCKED, "blocked", False),
+            (TaskStatus.MIGRATED, "moved to Next", False),
             (TaskStatus.DONE, "done", True),
             (TaskStatus.FAILED, "failed", False),
         ]

@@ -11,6 +11,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -122,6 +123,7 @@ class SwarmDB:
             (19, self._migrate_v19_jira_exported_status),
             (20, self._migrate_v20_dispatch_requested_at),
             (21, self._migrate_v21_title_original),
+            (22, self._migrate_v22_next_migration_handoffs),
         ]
         for version, migrate in migrations:
             if from_version < version:
@@ -131,6 +133,36 @@ class SwarmDB:
             (CURRENT_VERSION, time.time()),
         )
         self._conn.commit()
+
+    def _migrate_v22_next_migration_handoffs(self) -> None:
+        """v22: reversible receipts for tasks handed to Swarm Next."""
+        assert self._conn is not None
+        self._conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS next_migration_batches (
+              batch_id TEXT PRIMARY KEY,
+              bundle_digest TEXT UNIQUE NOT NULL,
+              source_installation_id TEXT NOT NULL,
+              source_snapshot_digest TEXT NOT NULL,
+              receipt_json TEXT NOT NULL,
+              backup_path TEXT NOT NULL,
+              applied_at REAL NOT NULL,
+              reversed_at REAL
+            );
+            CREATE TABLE IF NOT EXISTS next_migration_tasks (
+              batch_id TEXT NOT NULL REFERENCES next_migration_batches(batch_id),
+              task_id TEXT NOT NULL REFERENCES tasks(id),
+              original_status TEXT NOT NULL,
+              original_assigned_worker TEXT,
+              migration_task_digest TEXT NOT NULL,
+              reversed_at REAL,
+              PRIMARY KEY (batch_id, task_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_next_migration_tasks_task
+              ON next_migration_tasks(task_id);
+            """
+        )
+        _log.info("v22: added reversible Swarm Next migration receipts")
 
     def _migrate_v2_indexes(self) -> None:
         """v2: add indexes for approval_rules, proposals, and buzz_log."""
@@ -681,6 +713,20 @@ class SwarmDB:
     # ------------------------------------------------------------------
     # Maintenance
     # ------------------------------------------------------------------
+
+    @contextmanager
+    def transaction(self):
+        """Yield the connection inside one lock-protected atomic transaction."""
+        with self._lock:
+            if not self._conn:
+                raise RuntimeError("SwarmDB is not connected")
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                yield self._conn
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
 
     def checkpoint(self) -> None:
         """Run a WAL checkpoint to consolidate the WAL file."""

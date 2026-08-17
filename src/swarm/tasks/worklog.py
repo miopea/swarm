@@ -31,6 +31,7 @@ _CLOSES = frozenset(
         TaskAction.FAILED,
         TaskAction.UNASSIGNED,
         TaskAction.BLOCKED,
+        TaskAction.MIGRATED,
     }
 )
 

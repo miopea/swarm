@@ -61,7 +61,7 @@ def assignment_refusal(task: SwarmTask, *, override_hold: bool = False) -> str |
             f"dashboard, which overrides the hold"
         )
 
-    if task.status in (TaskStatus.DONE, TaskStatus.FAILED):
+    if task.status in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.MIGRATED):
         return (
             f"task is {task.status.value} — closed work cannot be reassigned; reopen it "
             f"first if it genuinely needs more work"

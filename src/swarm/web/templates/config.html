@@ -2494,7 +2494,7 @@
         html += '<table class="jira-map-table"><tbody>';
         // Every Swarm status gets a row, including ones discovery could not map:
         // leaving them out would hide exactly the case that failed silently before.
-        var order = ['backlog', 'unassigned', 'assigned', 'active', 'blocked', 'done', 'failed'];
+        var order = ['backlog', 'unassigned', 'assigned', 'active', 'blocked', 'migrated', 'done', 'failed'];
         for (var i = 0; i < order.length; i++) {
             var k = order[i];
             var chosen = map[k] || '';

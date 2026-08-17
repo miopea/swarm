@@ -71,6 +71,7 @@ class TaskStatus(Enum):
       engagement).
     * ``DONE`` — completed successfully.
     * ``FAILED`` — worker hit a wall and gave up.
+    * ``MIGRATED`` — ownership moved to Swarm Next; visible but read-only.
     """
 
     BACKLOG = "backlog"
@@ -83,6 +84,7 @@ class TaskStatus(Enum):
     # when parked on a worker-reported blocker binding. Held — not
     # auto-assignable, not "active".
     BLOCKED = "blocked"
+    MIGRATED = "migrated"
 
 
 class VerificationStatus(Enum):
@@ -390,7 +392,7 @@ class SwarmTask:
         task LESS dispatchable. Terminal statuses are refused — Done/Failed reach
         Backlog through :meth:`reopen`, which also clears the resolution.
         """
-        assert self.status not in (TaskStatus.DONE, TaskStatus.FAILED), (
+        assert self.status not in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.MIGRATED), (
             f"Cannot demote a {self.status.value} task to backlog — use reopen()"
         )
         self.status = TaskStatus.BACKLOG
@@ -457,6 +459,7 @@ STATUS_ICON = {
     TaskStatus.BLOCKED: "⊘",
     TaskStatus.DONE: "✓",
     TaskStatus.FAILED: "✗",
+    TaskStatus.MIGRATED: "→",
 }
 
 STATUS_LABEL: dict[TaskStatus, str] = {
@@ -467,6 +470,7 @@ STATUS_LABEL: dict[TaskStatus, str] = {
     TaskStatus.BLOCKED: "Blocked",
     TaskStatus.DONE: "Done",
     TaskStatus.FAILED: "Failed",
+    TaskStatus.MIGRATED: "Moved to Swarm Next",
 }
 
 DEPENDENCY_TYPE_MAP: dict[str, DependencyType] = {
