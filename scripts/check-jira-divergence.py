@@ -13,6 +13,11 @@ completed after did not. A clean split on one boundary. So this check is not loo
 logic error — it is looking for the NEXT outage of any kind between the two systems,
 whatever its cause.
 
+COUNTS ONLY LIVE TASKS (#1840). An archived task keeps the status it was archived
+with, so one archived while done would be reported here forever as a ticket someone
+needs to close — for work deliberately off the board. ``archived_at IS NULL`` is the
+board's own authority for whether a task counts, and this uses it.
+
 PRINTS ITS DENOMINATOR. A run that examined zero tasks has not found zero divergences; it
 has measured nothing, and the sweep that calls this treats a zero denominator as a FAILED
 run rather than a clean one.
@@ -45,10 +50,23 @@ def main() -> int:
     try:
         con = sqlite3.connect(f"file:{a.db}?mode=ro", uri=True)
         con.row_factory = sqlite3.Row
+        # ARCHIVED TASKS ARE NOT DIVERGENCE (#1840). Archiving stamps ``archived_at``
+        # and deliberately leaves ``status`` alone, so a task archived while done stays
+        # `done` in this query forever — and gets reported as a Jira ticket somebody
+        # needs to go close, for work that has left the board on purpose.
+        #
+        # THIS FILTER CHANGES NOTHING TODAY, AND THAT IS THE POINT. Measured on the live
+        # board at the moment of the fix: 70 examined / 12 diverged both before and
+        # after, because all 21 archived rows are non-terminal (8 assigned + 1
+        # unassigned carry a jira_key; none are done or failed). The checker was correct
+        # by accident of what happened to be archived, not by design — and
+        # ``queen_archive_task`` explicitly archives ANY task including a finished one,
+        # so the first done-and-archived task would have produced a false divergence.
         rows = list(
             con.execute(
                 "SELECT number, jira_key, status, jira_exported_status "
                 "FROM tasks WHERE jira_key IS NOT NULL AND jira_key <> '' "
+                "AND archived_at IS NULL "
                 "AND status IN (?, ?)",
                 _TERMINAL,
             )
@@ -86,6 +104,7 @@ def main() -> int:
             )
         print("  NOTE: reads swarm's OWN record of what it exported, not Jira itself.")
         print("        A ticket transitioned by hand still shows as diverged here.")
+        print("        Archived tasks are excluded — off the board is not divergence.")
 
     return 1 if diverged else 0
 
