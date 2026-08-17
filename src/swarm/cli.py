@@ -354,6 +354,12 @@ def _read_db_state() -> dict[str, Any] | None:
             "  (SELECT COUNT(*) FROM groups) AS g,"
             "  (SELECT COUNT(*) FROM approval_rules WHERE owner_type='global') AS gr,"
             "  (SELECT COUNT(*) FROM approval_rules WHERE owner_type='worker') AS wr,"
+            # COUNTS ARCHIVED TASKS TOO, DELIBERATELY — do not swap this onto the
+            # ``live_tasks`` view (#1840). This is an "is there data here that init
+            # must not clobber" inventory, not a board size: ``_db_has_data`` reads
+            # it to choose between "active" and "empty". A DB holding only archived
+            # tasks would report EMPTY on the live view, which is the dangerous
+            # direction to be wrong in.
             "  (SELECT COUNT(*) FROM tasks) AS t"
         )
         db.close()
