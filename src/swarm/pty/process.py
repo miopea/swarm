@@ -116,6 +116,11 @@ class WorkerProcess:
         # #1451: automated writes held because a selection prompt was open.
         # Held, NOT dropped — flushed by _flush_deferred_keys on the next write.
         self._deferred_keys: list[tuple[str, bool]] = []
+        # #1865: re-entrancy guard for the flush. The original protected against a
+        # concurrent double-send by swapping the whole queue out before its first
+        # await — which is exactly what made a mid-flush raise DISCARD the remainder.
+        # A flag gives the same protection without the queue ever leaving the object.
+        self._flushing = False
         self._last_user_input: float = 0.0
 
     def bind_send_cmd(self, send_cmd: _SendCmd) -> None:
@@ -517,21 +522,46 @@ class WorkerProcess:
         the operator's keystroke lands. Deferring is only safe if releasing is
         conditional too.
         """
-        if not self._deferred_keys:
+        if not self._deferred_keys or self._flushing:
             return
         try:
             if has_open_selection_prompt(self.buffer.get_lines(_PROMPT_SCAN_LINES)):
                 return
         except Exception:
             pass
-        # Swap the list out before awaiting so a concurrent flush cannot double-send.
-        queued, self._deferred_keys = self._deferred_keys, []
-        _log.info("flushing %d deferred write(s) to %s", len(queued), self.name)
-        for qtext, qenter in queued:
-            await self._write(qtext.encode("utf-8"), actor="deferred-flush")
-            if qenter:
-                await asyncio.sleep(_INPUT_DRAIN_DELAY)
-                await self._write(b"\r", actor="deferred-flush")
+        # #1865: THE QUEUE IS NEVER SWAPPED OUT. The previous version did
+        # ``queued, self._deferred_keys = self._deferred_keys, []`` before its first
+        # await, so a raise part-way through discarded every message that had not been
+        # attempted yet — silently. Nothing was left in the input line to detect and
+        # nothing was left in the queue to retry, while the sender had already been told
+        # the write was accepted. Message LOSS, not delay, and #1858's detector cannot
+        # see it because there is nothing to see.
+        #
+        # It matters here more than anywhere else: the #1451 guard defers automated
+        # writes while a picker is open, so this queue is precisely where Queen prompts
+        # and drone nudges accumulate for a worker who is mid-decision.
+        #
+        # Items now leave the queue ONE AT A TIME, and only once they can no longer be
+        # replayed. The re-entrancy the swap was protecting against is handled by
+        # ``_flushing`` instead.
+        self._flushing = True
+        try:
+            _log.info("flushing %d deferred write(s) to %s", len(self._deferred_keys), self.name)
+            while self._deferred_keys:
+                qtext, qenter = self._deferred_keys[0]
+                # A raise HERE means nothing reached the worker, so the item is still
+                # intact — leave it at the FRONT of the queue and let the exception out.
+                await self._write(qtext.encode("utf-8"), actor="deferred-flush")
+                # Past this point the text is in the worker's input line. Replaying the
+                # item would DUPLICATE it, so it leaves the queue whatever the Enter
+                # does. If the Enter raises, this one message is stranded — which is
+                # visible via #1858's unsent_input — and the REMAINDER stays queued.
+                self._deferred_keys.pop(0)
+                if qenter:
+                    await asyncio.sleep(_INPUT_DRAIN_DELAY)
+                    await self._write(b"\r", actor="deferred-flush")
+        finally:
+            self._flushing = False
 
     async def send_enter(self, *, actor: str = "unknown") -> None:
         """Send Enter (carriage return) to the worker."""
