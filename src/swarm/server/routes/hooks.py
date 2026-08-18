@@ -344,6 +344,13 @@ def _evaluate_rules(
     # #1698: computed once, recorded on every decision below, ACTED ON BY NOTHING. The
     # rate is the deliverable — a guard cannot be designed against a number nobody has.
     oop = out_of_path(worker, str(body.get("cwd") or ""))
+    # #1698: WHICH REPO did this call touch? Derived from the command's TARGETS, because
+    # the process cwd is the wrong observable — project-root's never left home while it
+    # deployed inside another repo. Stored as a bounded enumeration of configured worker
+    # names plus "outside-known-repos"; the command text and the paths are read here and
+    # DISCARDED. Recorded, ACTED ON BY NOTHING — the corpus is the deliverable, and AC3
+    # cannot be answered retrospectively because none of this was ever captured.
+    repos = _repos_touched(d, tool_name, body)
 
     # BEFORE any rule evaluation — see _NEVER_AUTO_APPROVE. Checked here rather than in
     # the branches below because there are three separate ways to reach "approve" (rule
@@ -352,7 +359,9 @@ def _evaluate_rules(
     # no-rules branch already consulted _ALWAYS_ESCALATE_TOOLS while the rule-matched
     # branch did not.
     if tool_name in _NEVER_AUTO_APPROVE:
-        _log_hook_decision(d, tool_name, "passthrough", "never auto-approved", worker_name, oop)
+        _log_hook_decision(
+            d, tool_name, "passthrough", "never auto-approved", worker_name, oop, repos
+        )
         return web.json_response(
             {
                 "decision": "passthrough",
@@ -369,7 +378,7 @@ def _evaluate_rules(
     all_rules = worker_rules + list(drone_config.approval_rules)
 
     if not all_rules and tool_name not in _ALWAYS_ESCALATE_TOOLS:
-        _log_hook_decision(d, tool_name, "approve", "no rules configured", worker_name, oop)
+        _log_hook_decision(d, tool_name, "approve", "no rules configured", worker_name, oop, repos)
         return web.json_response({"decision": "approve", "reason": "no approval rules configured"})
 
     results = dry_run_rules(
@@ -381,7 +390,7 @@ def _evaluate_rules(
     result = results[0]
     if result.decision == "approve":
         _log_hook_decision(
-            d, tool_name, "approve", f"rule matched: {result.source}", worker_name, oop
+            d, tool_name, "approve", f"rule matched: {result.source}", worker_name, oop, repos
         )
         return web.json_response(
             {
@@ -416,7 +425,7 @@ def _evaluate_rules(
     # the moment a string comparison let them through here.
     if result.gate is not None:
         _log_hook_decision(
-            d, tool_name, "block", f"denied: {result.rule_pattern}", worker_name, oop
+            d, tool_name, "block", f"denied: {result.rule_pattern}", worker_name, oop, repos
         )
         return web.json_response(
             {
@@ -451,7 +460,9 @@ def _evaluate_rules(
     # The ruling was to delete it rather than invent a consultation mechanism, because
     # the correct behaviour was already in the tree: Bash was the one tool excluded from
     # the branch, it has always taken this path, and nothing was ever stuck on it.
-    _log_hook_decision(d, tool_name, "passthrough", f"escalated: {result.source}", worker_name, oop)
+    _log_hook_decision(
+        d, tool_name, "passthrough", f"escalated: {result.source}", worker_name, oop, repos
+    )
     return web.json_response(
         {
             "decision": "passthrough",
@@ -666,6 +677,24 @@ def _identify_worker(d: SwarmDaemon, body: dict[str, Any]) -> Worker | None:
     return None
 
 
+def _repos_touched(d: SwarmDaemon, tool_name: str, body: dict[str, Any]) -> list[str]:
+    """Bounded repo identities this tool call targeted (#1698). [] means NOT MEASURED.
+
+    Best-effort by construction: a roster that cannot be read, or any raised exception,
+    yields [] — which callers must read as "no measurement", never as "touched nothing".
+    That distinction is the whole reason the empty case is not the same value as
+    ``outside-known-repos``.
+    """
+    from swarm.drones.repo_scope import repo_roots_from_workers, repos_touched
+
+    try:
+        roots = repo_roots_from_workers(getattr(getattr(d, "config", None), "workers", None))
+        return repos_touched(tool_name, body.get("tool_input"), str(body.get("cwd") or ""), roots)
+    except Exception:
+        _log.warning("repo-scope capture failed", exc_info=True)
+        return []
+
+
 def out_of_path(worker: Worker | None, cwd: str) -> bool | None:
     """Is *worker* operating outside its own configured path?
 
@@ -704,6 +733,7 @@ def _log_hook_decision(
     reason: str,
     worker_name: str = "unknown",
     oop: bool | None = None,
+    repos: list[str] | None = None,
 ) -> None:
     """Log a hook-based approval decision to the drone log."""
     if d.drone_log is not None:
@@ -718,6 +748,9 @@ def _log_hook_decision(
                 # kept distinct from False so a rate can be computed with an honest
                 # denominator rather than one padded with unknowns.
                 "out_of_path": oop,
+                # #1698: bounded enumeration — configured worker names plus
+                # "outside-known-repos". Never command text, never raw paths.
+                "repos_touched": repos or [],
             },
             category=LogCategory.DRONE,
         )
