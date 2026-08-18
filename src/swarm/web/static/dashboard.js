@@ -13162,6 +13162,57 @@
         }).catch(function () {});
     }
 
+    // Free-text composer for the Queen (operator request 2026-08-18).
+    //
+    // WHY IT EXISTS: typing into her embedded PTY leaves a half-written line sitting in
+    // the input buffer, where an automated write — a relay, a nudge, a dispatch — lands
+    // in the SAME buffer and is submitted together with it. The draft lives in the
+    // browser instead and the whole message goes in ONE server-side send, so there is no
+    // window in which a partial line is exposed.
+    //
+    // Posts to the same /api/workers/queen/send that the preset buttons use, which sends
+    // with automated=False — the operator's own path, deliberately NOT deferred by the
+    // #1451 selection-prompt guard, because the operator is the human a picker is
+    // waiting for.
+    function ccQueenCompose() {
+        var ta = document.getElementById('cc-queen-compose-input');
+        if (!ta) return;
+        var msg = ta.value.trim();
+        if (!msg) return;
+        // Cleared OPTIMISTICALLY and restored on failure: leaving the text in place on a
+        // successful send is how the same message gets sent twice, and re-sending a
+        // Queen instruction is worse than retyping one.
+        ta.value = '';
+        ta.style.height = '';
+        ccPost('/api/workers/queen/send', { message: msg }).then(function (r) {
+            if (!r.ok) {
+                ta.value = msg;
+                if (window.showToast) window.showToast('Queen send failed (' + r.status + ') — your text is back in the box', true);
+            }
+        }).catch(function () {
+            ta.value = msg;
+            if (window.showToast) window.showToast('Queen send failed — your text is back in the box', true);
+        });
+    }
+
+    // Enter sends, Shift+Enter makes a newline — same contract as the worker composer.
+    function setupQueenComposer() {
+        var ta = document.getElementById('cc-queen-compose-input');
+        if (!ta || ta._composerWired) return;
+        ta._composerWired = true;
+        var autogrow = function() {
+            ta.style.height = 'auto';
+            ta.style.height = Math.min(ta.scrollHeight, 136) + 'px';  // 136px ≈ max-height 8.5rem
+        };
+        ta.addEventListener('input', autogrow);
+        ta.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                ccQueenCompose();
+            }
+        });
+    }
+
     function ccQueenVerb(target) {
         var verb = target && target.dataset && target.dataset.qverb;
         if (!verb) return;
@@ -13218,6 +13269,12 @@
     // command-center flips a body class that the CSS keys off of. We
     // remember the choice in localStorage so re-render doesn't reset it.
     var _CC_FOCUS_KEY = 'swarm.cc.mobileFocus';
+    // The ONE definition of "mobile" for Command Center, kept in sync with the
+    // `@media (max-width: 600px)` block in base.html that hides Attention and the focus
+    // switcher. Changing one without the other is how the layout and the behaviour drift
+    // apart on exactly the viewports nobody tests.
+    var CC_MOBILE_QUERY = '(max-width: 600px)';
+
     function ccMobileFocus(target) {
         // 'attention' | 'queen'; anything else defaults to attention since
         // that's where new escalations / messages land — the more time-
@@ -13242,8 +13299,18 @@
     // matters even on desktop so a phone-rotate or window-resize down
     // honors the stored preference instead of randomly defaulting.
     try {
-        var _ccStored = (localStorage.getItem(_CC_FOCUS_KEY) || 'attention');
-        ccMobileFocus(_ccStored);
+        // #operator-2026-08-18: on a phone the Attention panel is hidden outright, so a
+        // stored 'attention' focus would leave Command Center showing nothing. Narrow
+        // viewports default to the Queen; desktop keeps the old default and the stored
+        // choice.
+        //
+        // MUST BE THE SAME QUERY THE CSS USES. The Command Center's mobile rules live in
+        // `@media (max-width: 600px)`, not `(pointer: coarse)` — those two disagree on a
+        // narrow desktop window (Attention hidden by CSS, focus still 'attention') and on
+        // a large tablet (Queen landing, Attention still shown). One query, one story.
+        var _ccCoarse = window.matchMedia && window.matchMedia(CC_MOBILE_QUERY).matches;
+        var _ccStored = (localStorage.getItem(_CC_FOCUS_KEY) || (_ccCoarse ? 'queen' : 'attention'));
+        ccMobileFocus(_ccCoarse ? 'queen' : _ccStored);
     } catch (_) { ccMobileFocus('attention'); }
 
     var CC_HANDLERS = {
@@ -13261,6 +13328,7 @@
         ccToggleHandled: ccToggleHandled,
         ccGotoResources: ccGotoResources,
         ccQueenSend: ccQueenSend,
+        ccQueenCompose: ccQueenCompose,
         ccQueenVerb: ccQueenVerb,
         ccQueenRefresh: ccQueenRefresh,
         ccQueenExport: ccQueenExport,
@@ -13314,6 +13382,9 @@
         // below (body.cc-active, the CC column splitter, the attention/digest
         // pollers) is unreachable if this line throws.
         try { if (window.setupMobileComposer) window.setupMobileComposer(); } catch (_) {}
+        // Same guarded call: setupQueenComposer is in THIS scope, but wrapping it keeps
+        // a future move across the IIFE boundary from taking init() down with it.
+        try { setupQueenComposer(); } catch (_) {}
         // If sessionStorage has a worker that the existing dashboard's
         // restoreWorker (line 7830) will mount into detail-body, START
         // in worker mode — otherwise show() would hide detail-body and
@@ -13336,6 +13407,20 @@
             // Start in worker view; user explicitly clicks Queen Dashboard
             // when they want the CC.
             hide();
+        } else if (window.matchMedia && window.matchMedia(CC_MOBILE_QUERY).matches) {
+            // TOUCH LANDS ON THE QUEEN, FULL SCREEN (operator request 2026-08-18).
+            // ccQueenFullscreen() is the ⛶ button's own path — leave Command Center and
+            // select the Queen as the main terminal — so this is the same route the
+            // operator would take by hand, not a second way of arriving there.
+            //
+            // ONLY when nothing was restored: the branch above already returned for a
+            // stored worker, so a deliberate navigation still wins. Her sidebar card is
+            // the way back to Command Center, exactly as before.
+            try {
+                ccQueenFullscreen();
+            } catch (_) {
+                show();  // never leave the operator on a blank landing
+            }
         } else {
             // Command Center is the landing. show() adds body.cc-active, which
             // the CSS keys off to reveal #command-center and hide #detail-body

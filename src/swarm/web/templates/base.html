@@ -3419,6 +3419,30 @@
         .cc-ask-queen-body { display: flex; flex-direction: column; min-height: 0; height: 100%; }
         /* Her live PTY mounts here (reuses .inline-terminal-container). */
         .cc-queen-term-holder { flex: 1 1 auto; min-height: 60px; min-width: 0; display: flex; }
+        /* Queen composer — the default input on desktop AND touch, deliberately not
+           gated on pointer type the way .mobile-send-bar is. Typing into her PTY is
+           what exposes a half-written line to an injection; this is the safe path, so
+           it must be the one that is always there.
+
+           THEME TOKENS, NOT WHITE-ALPHA. The first version used rgba(255,255,255,0.06)
+           for the field — dark-theme values that are INVISIBLE on this fleet's light
+           theme (--surface #FFFFFF, --border-default #C1B8AA), so the box rendered as
+           bare text floating on the panel. Every colour here comes from the same tokens
+           .modal-input uses, which is what makes it correct in both themes rather than
+           in the one I happened to be looking at. */
+        .cc-queen-compose { flex: 0 0 auto; display: flex; gap: 0.4rem; align-items: flex-end;
+            padding-top: 0.5rem; margin-top: 0.4rem; border-top: 1px solid var(--border); }
+        .cc-queen-compose textarea { flex: 1 1 auto; min-width: 0; resize: none; overflow-y: auto;
+            max-height: 8.5rem; padding: 0.45rem 0.6rem; border-radius: 6px;
+            font-family: inherit; font-size: 0.85rem; line-height: 1.4;
+            background: var(--bg); color: var(--text);
+            border: 1px solid var(--border); }
+        .cc-queen-compose textarea:focus { outline: none; border-color: var(--lavender); }
+        .cc-queen-compose textarea::placeholder { color: var(--text-muted); opacity: 1; }
+        /* Matches the action row directly beneath it — same .btn-secondary the Refresh /
+           Continue / Mode buttons use, so the composer reads as part of the panel rather
+           than as a control borrowed from somewhere else. */
+        .cc-queen-compose .btn { flex: 0 0 auto; align-self: stretch; }
         .cc-queen-actions { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 0.3rem; padding-top: 0.4rem; margin-top: 0.4rem; border-top: 1px solid rgba(255,255,255,0.08); }
         @media (max-width: 900px) {
             .command-center-grid {
@@ -3445,9 +3469,17 @@
             background: var(--lavender); color: var(--hive-bg); border-color: var(--lavender);
         }
         @media (max-width: 600px) {
-            .cc-mobile-focus { display: flex; justify-content: flex-start; }
-            /* body.cc-focus-attention shows ONLY the Attention panel; symmetric for Queen */
-            body.cc-focus-attention .cc-ask-queen { display: none; }
+            /* ATTENTION IS HIDDEN ON MOBILE (operator request 2026-08-18). The focus
+               tablist went with it: a two-tab switcher with one tab left is noise, and
+               leaving the Queen tab alone would imply somewhere else to go. Attention is
+               still there on desktop, and on mobile the Attention TAB of the main nav
+               still reaches escalations — this hides the Command Center split, not the
+               queue itself. */
+            .cc-mobile-focus { display: none; }
+            .cc-attention { display: none; }
+            /* Kept so the desktop rule below is not the only definition and a stored
+               'attention' focus cannot resurrect the panel on a phone. */
+            body.cc-focus-attention .cc-ask-queen { display: flex; }
             body.cc-focus-queen .cc-attention { display: none; }
             /* Focus toggle buttons (Attention/Queen) — content-sized rather
                than each claiming 50% of the row. Operator (2026-05-21):

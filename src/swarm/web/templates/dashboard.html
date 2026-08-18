@@ -172,6 +172,24 @@
                         </div>
                         <div class="cc-panel-body cc-ask-queen-body">
                             <div id="cc-queen-term-holder" class="cc-queen-term-holder"></div>
+                            {# COMPOSE HERE RATHER THAN IN HER PTY. Typing straight into the
+                               embedded terminal leaves half-finished text sitting on the input
+                               line, where an automated write — a relay, a nudge, a dispatch —
+                               lands in the same buffer and gets submitted together with it.
+                               This box holds the draft in the browser and posts the whole
+                               message in one server-side send, so there is no window in which
+                               a partial line is exposed to an injection.
+
+                               NO hide-mobile / hide-desktop: this is the default input on both,
+                               which is the point of it. #}
+                            <div class="cc-queen-compose">
+                                <textarea id="cc-queen-compose-input" rows="1"
+                                          placeholder="Message the Queen — Enter to send, Shift+Enter for a new line"
+                                          enterkeyhint="send" autocapitalize="sentences" autocorrect="on"
+                                          spellcheck="true" aria-label="Compose a message to the Queen"></textarea>
+                                <button type="button" class="btn btn-secondary"
+                                        data-action="ccQueenCompose" aria-label="Send to the Queen">Send</button>
+                            </div>
                             <div class="cc-queen-actions">
                                 {# The Queen reuses the SAME worker action_buttons config (advanced
                                    config tab) so she matches the workers. Worker actions key off the
