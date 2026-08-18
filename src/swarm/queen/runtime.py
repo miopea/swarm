@@ -372,13 +372,20 @@ def reconcile_queen_claude_md(
     Decision matrix:
 
     =================================  ================  =========================
-    shipped_latest vs shipped_at_last  on_disk vs last   action
+    shipped_latest vs shipped_at_last  on_disk vs ...    action
     =================================  ================  =========================
     equal                              any               no-op
-    changed                            equal             auto-update on-disk
-    changed                            diverged          write side-by-side drift
+    changed                            == shipped_latest no-op, resync marker (#1910)
+    changed                            == last           auto-update on-disk
+    changed                            neither           write side-by-side drift
                                                          files, preserve on-disk
     =================================  ================  =========================
+
+    THE SECOND ROW WAS MISSING UNTIL #1910 and its absence produced a warning that was
+    simply false. Comparing on-disk only against the MARKER means a file already updated
+    to the newest ship reads as locally edited, because the marker still holds the older
+    one. The question that settles it is ``on_disk == shipped_latest``, and nothing asked
+    it.
 
     On a first-run against an existing install (CLAUDE.md present but
     marker missing), seed the marker from the current on-disk content
@@ -417,6 +424,26 @@ def reconcile_queen_claude_md(
 
     if shipped_latest == shipped_at_last_sync:
         return ClaudeMdReconcileResult(ReconcileAction.NO_OP, "shipped version unchanged")
+
+    # #1910: ALREADY RECONCILED. The on-disk file IS the newest shipped prompt, so there
+    # is nothing to reconcile whatever the marker says — the marker is merely stale.
+    #
+    # THE MISSING ROW IN THE MATRIX ABOVE. It asked two questions, `shipped_latest vs
+    # marker` and `on_disk vs marker`, and never `on_disk vs shipped_latest`. A file
+    # updated to the new ship without the marker being written therefore read as "local
+    # edits" — and the warning's own remedies (--accept-shipped, --keep-local) both
+    # presuppose something to reconcile when there is nothing.
+    #
+    # MEASURED ON THE LIVE QUEEN WORKDIR: CLAUDE.md and CLAUDE.md.shipped-latest both
+    # 11,708 bytes and byte-identical; marker 10,461. The warning fired four times in one
+    # night against a file with no local edits at all.
+    if on_disk == shipped_latest:
+        marker.write_text(shipped_latest)
+        _log.info("queen CLAUDE.md already matches the shipped prompt; marker resynced")
+        return ClaudeMdReconcileResult(
+            ReconcileAction.NO_OP,
+            "on-disk already matches the shipped prompt; stale marker resynced",
+        )
 
     # Shipped has changed.  Decide based on whether on-disk drifted.
     if on_disk == shipped_at_last_sync:

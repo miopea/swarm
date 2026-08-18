@@ -59,6 +59,7 @@ Exit status: 0 if every branch examined is CONTAINED, 1 otherwise.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 
@@ -207,24 +208,57 @@ def check(repo: str, base: str, branch: str) -> tuple[bool, list[str], int]:
 
 def report_branch(args: argparse.Namespace, branch: str) -> tuple[bool, int]:
     """Print one branch's verdict. Returns (is_contained, failure_count)."""
+    # #1910: NAME THE REPO IN EVERY FINDING. The sweep has always known it — it is
+    # `--repo` — and never printed it, so a finding reached the Queen as
+    # "CONTAINED origin/fix-service-worker-reregister-loop" with a remedy that assumed
+    # the reader was already standing in the right repo. The Queen is not in any repo.
+    # It was reported four times and fixed zero: unactionable by construction.
+    repo_label = _repo_label(args.repo)
     try:
         contained, unaccounted, total = check(args.repo, args.base, branch)
     except Unmeasurable as exc:
         # Unmeasurable always fails, under EITHER polarity: a result we could not
         # take must never read as "safe to delete" nor as "all clean".
-        print(f"UNMEASURABLE   {branch}  ({exc}) — DO NOT DELETE")
+        print(f"UNMEASURABLE   [{repo_label}] {branch}  ({exc}) — DO NOT DELETE")
         return False, 1
 
     if contained:
-        print(f"CONTAINED      {branch}  ({total} added lines all present in {args.base})")
+        print(
+            f"CONTAINED      [{repo_label}] {branch}  "
+            f"({total} added lines all present in {args.base})"
+        )
         return True, 1 if args.fail_on == "stale" else 0
 
-    print(f"NOT CONTAINED  {branch}  ({len(unaccounted)} of {total} added lines unaccounted)")
+    print(
+        f"NOT CONTAINED  [{repo_label}] {branch}  "
+        f"({len(unaccounted)} of {total} added lines unaccounted)"
+    )
     for line in unaccounted[: args.show]:
         print(f"                 | {line[:100]}")
     if len(unaccounted) > args.show:
         print(f"                 | … {len(unaccounted) - args.show} more")
     return False, 1 if args.fail_on == "unaccounted" else 0
+
+
+def _repo_path(repo: str) -> str:
+    """Absolute path for a repo argument, so a remedy is runnable from anywhere."""
+    try:
+        return os.path.realpath(os.path.expanduser(repo))
+    except (OSError, ValueError):
+        return repo
+
+
+def _repo_label(repo: str) -> str:
+    """Short, routable name for a repo path — its directory name.
+
+    A basename is what routes to a worker ("bfg-ops-console"), which is the decision the
+    reader of this report has to make. The remedy command carries the full path so it is
+    runnable; the finding carries the name so it is routable.
+    """
+    try:
+        return os.path.basename(os.path.realpath(os.path.expanduser(repo))) or repo
+    except (OSError, ValueError):
+        return repo
 
 
 def main() -> int:
@@ -294,11 +328,16 @@ def main() -> int:
         print(f"{len(stale)} stale branch(es) — every added line is already on {args.base}.")
         print("Delete them by hand; this reports, it does not delete, because deleting a")
         print("branch a dependent PR points at closes that PR irrecoverably.")
+        # RESOLVED, not as given: the sweep is invoked with `--repo .` from a working
+        # directory the reader does not share, and `git -C .` routes nowhere.
+        repo_path = _repo_path(args.repo)
         for branch in stale:
+            # `git -C <repo>` so the command is runnable by a reader who is NOT standing
+            # in the repo — which is every reader this report actually has.
             print(
-                f"    git push origin --delete {branch.split('/', 1)[-1]}"
+                f"    git -C {repo_path} push origin --delete {branch.split('/', 1)[-1]}"
                 if branch.startswith("origin/")
-                else f"    git branch -D {branch}"
+                else f"    git -C {repo_path} branch -D {branch}"
             )
     return 1 if failures else 0
 
