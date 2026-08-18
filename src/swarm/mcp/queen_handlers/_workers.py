@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from swarm.drones.idle_watcher import _format_duration
 from swarm.drones.log import truncate_for_log
 from swarm.logging import get_logger
 from swarm.mcp._arg_types import QueenInterruptWorkerArgs, QueenPromptWorkerArgs
@@ -619,7 +620,70 @@ def _handle_prompt_worker(
     return [{"type": "text", "text": "\n".join(lines)}]
 
 
+QUEEN_STRANDED_INPUT_TOOL: dict[str, Any] = {
+    "name": "queen_view_stranded_input",
+    "description": (
+        "Who is holding UNSENT text on their input line RIGHT NOW, longest-held first. "
+        "A LIVE READ of every worker's PTY — not a summary of what has been reported, "
+        "which is a different question and the one that misled twice (#1910b). Use it "
+        "when you want to know whether anyone is stranded at this moment; the buzz log's "
+        "UNSENT_INPUT_DETECTED rows tell you when a stranding was FOUND, and an ongoing "
+        "one only re-reports hourly, so a quiet log does NOT mean a clear fleet. "
+        "It NEVER submits anything: two of the original three strandings were production "
+        "deploy approvals, and nothing can distinguish 'typed it and meant it' from "
+        "'typed it and thought better of it'."
+    ),
+    "inputSchema": {"type": "object", "properties": {}, "examples": [{}]},
+}
+
+
+def _handle_view_stranded_input(
+    d: SwarmDaemon, worker_name: str, args: dict[str, Any]
+) -> list[TextContent]:
+    err = _assert_queen(worker_name)
+    if err:
+        return err
+    watcher = getattr(getattr(d, "pilot", None), "idle_watcher", None)
+    if watcher is None or not hasattr(watcher, "stranded_now"):
+        # NOT "nobody is stranded" — the check is unavailable, and saying otherwise is
+        # the exact defect this tool exists downstream of.
+        return [
+            {
+                "type": "text",
+                "text": "Cannot tell — the idle watcher is unavailable on this daemon.",
+            }
+        ]
+    try:
+        rows = watcher.stranded_now(list(getattr(d, "workers", []) or []))
+    except Exception:
+        _log.warning("stranded-input read failed", exc_info=True)
+        return [{"type": "text", "text": "Cannot tell — the live read failed. See the log."}]
+
+    if not rows:
+        return [
+            {
+                "type": "text",
+                "text": (
+                    "No worker is holding unsent input right now. This is a LIVE read of "
+                    "every worker's PTY, not an absence of log rows."
+                ),
+            }
+        ]
+    lines = [f"{len(rows)} worker(s) holding UNSENT input right now, longest-held first:"]
+    for name, text, held in rows:
+        age = _format_duration(held) if held else "just found"
+        lines.append(f"  {name} — held {age}: {text[:120]}")
+    lines.append(
+        "Nothing here has been submitted and nothing will be. Answer or clear it yourself, "
+        "or ask the operator to."
+    )
+    return [{"type": "text", "text": "\n".join(lines)}]
+
+
+TOOLS.append(QUEEN_STRANDED_INPUT_TOOL)
+
 HANDLERS = {
+    "queen_view_stranded_input": _handle_view_stranded_input,
     "queen_answer_prompt": _handle_answer_prompt,
     "queen_dismiss_prompt": _handle_dismiss_prompt,
     "queen_interrupt_worker": _handle_interrupt_worker,

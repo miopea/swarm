@@ -55,6 +55,25 @@ _MCP_FOLLOWUP_DELAY_SECONDS = 5.0
 # STUNG means the worker process has exited; revive is a separate concern.
 _IDLE_STATES: frozenset[WorkerState] = frozenset({WorkerState.RESTING, WorkerState.SLEEPING})
 
+# #1910b: how often an UNCHANGED stranding re-reports. Hourly, on the Queen's ruling.
+# The number is a compromise between two real failure modes: every sweep mutes the signal
+# (which is why the original debounced at all), and never re-emitting makes a recent-window
+# check read as "not firing" (which is what actually happened, twice).
+_UNSENT_REEMIT_SECONDS = 3600.0
+
+
+def _format_duration(seconds: float) -> str:
+    """Human duration for a stranding — "12.9h" carries what "stranded" does not.
+
+    Duration is the field that tells a reader at a glance whether a finding is old or new,
+    and it is free: the debounce already holds first_seen.
+    """
+    if seconds < 90:
+        return f"{int(seconds)}s"
+    if seconds < 5400:
+        return f"{seconds / 60:.0f}m"
+    return f"{seconds / 3600:.1f}h"
+
 
 def _nudge_message(task_numbers: list[int], *, all_active: bool = False) -> str:
     """Build the PTY message sent to an idle worker.
@@ -289,7 +308,13 @@ class IdleWatcher:
         # Debounce per worker on the TEXT, not the worker: re-reporting the same
         # stranded line every sweep is how a real signal gets muted, but a worker
         # that strands a SECOND, different instruction is a new finding.
-        self._last_unsent_seen: dict[str, str] = {}
+        # #1910b: (text, first_seen, last_reported) per worker. The first version stored
+        # only the TEXT, which made a stranding a POINT EVENT: reported once, then silent
+        # while the condition continued. A reader samples WINDOWS, not edges, so "already
+        # reported, still stranded" and "nothing to report" produced identical output —
+        # and the Queen concluded the detector was broken twice, reading the log
+        # correctly both times. first_seen is what makes a duration possible.
+        self._last_unsent_seen: dict[str, tuple[str, float, float]] = {}
         self._nudge_guard = RepeatNudgeGuard()
 
     @property
@@ -464,6 +489,16 @@ class IdleWatcher:
         DETECTION BEATS PREVENTION HERE: whatever writes the text, the resulting state is
         trivially observable and was observed by nobody. This makes it a buzz-log line
         the Queen already reads, instead of a raw PTY tail she has to go and read.
+
+        REPORTS ON A HEARTBEAT, NOT ONLY ON THE EDGE (#1910b). The original debounced on
+        the TEXT alone, which was right about noise and wrong about state: re-reporting
+        every sweep really would mute a real signal, but suppressing forever made the
+        condition unobservable between edges. A 12.9-hour stranding left one row 2.6 hours
+        old and silence since, so a recent-window check read as "not firing".
+
+        The correct half of that mechanism is kept: NEW text on the same worker is a new
+        finding and fires immediately. Only the unchanged case re-emits, hourly, carrying
+        how long — duration is the field that distinguishes old from new at a glance.
         """
         if self._unsent_input_check is None:
             return
@@ -474,20 +509,66 @@ class IdleWatcher:
                 "idle_watcher: unsent-input check raised for %s", worker.name, exc_info=True
             )
             return
+        now = time.time()
         if not text:
             # Cleared: forget it, so the SAME text stranded again later reports again.
             self._last_unsent_seen.pop(worker.name, None)
             return
-        if self._last_unsent_seen.get(worker.name) == text:
-            return
-        self._last_unsent_seen[worker.name] = text
+
+        prior = self._last_unsent_seen.get(worker.name)
+        if prior is not None and prior[0] == text:
+            first_seen, last_reported = prior[1], prior[2]
+            if (now - last_reported) < _UNSENT_REEMIT_SECONDS:
+                return  # same text, reported recently — stay quiet
+            held = _format_duration(now - first_seen)
+            detail = (
+                f"STILL idle with the same UNSENT text after {held} "
+                f"(not submitted, not auto-submitted): {text[:160]}"
+            )
+        else:
+            first_seen = now
+            detail = (
+                f"idle with UNSENT text on the input line "
+                f"(not submitted, not auto-submitted): {text[:160]}"
+            )
+        self._last_unsent_seen[worker.name] = (text, first_seen, now)
         self._drone_log.add(
             DroneAction.UNSENT_INPUT_DETECTED,
             worker.name,
-            f"idle with UNSENT text on the input line "
-            f"(not submitted, not auto-submitted): {text[:160]}",
+            detail,
             category=LogCategory.DRONE,
         )
+
+    def stranded_now(self, workers: list[Worker]) -> list[tuple[str, str, float]]:
+        """Who is holding unsent input RIGHT NOW — a live read, not a report of reports.
+
+        #1910b half (a), and the thing the Queen actually needed both times she asked.
+        Deliberately re-runs the detector against every worker rather than returning
+        ``_last_unsent_seen``: that dict records what has been REPORTED, which is a
+        different question and is exactly the confusion this whole ticket is about. A
+        cached answer would drift from the truth and look authoritative doing it.
+
+        Duration comes from the debounce's first_seen where we have one, and is 0.0 for a
+        stranding this read is the first to see — 0.0 means "just found", never "no data".
+        """
+        out: list[tuple[str, str, float]] = []
+        if self._unsent_input_check is None:
+            return out
+        now = time.time()
+        for worker in workers:
+            try:
+                text = self._unsent_input_check(worker)
+            except Exception:
+                _log.warning(
+                    "stranded_now: check raised for %s", getattr(worker, "name", "?"), exc_info=True
+                )
+                continue
+            if not text:
+                continue
+            prior = self._last_unsent_seen.get(worker.name)
+            held = now - prior[1] if prior is not None and prior[0] == text else 0.0
+            out.append((worker.name, text, held))
+        return sorted(out, key=lambda row: row[2], reverse=True)
 
     def _escalate(self, worker_name: str, numbers: list[int]) -> None:
         """Stop nudging ``worker_name`` and surface one operator attention
