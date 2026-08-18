@@ -209,6 +209,7 @@ class IdleWatcher:
         worker_busy_check: Callable[[Worker], bool] | None = None,
         loop_armed_check: Callable[[str], float | None] | None = None,
         commit_activity_check: Callable[[Worker], float | None] | None = None,
+        unsent_input_check: Callable[[Worker], str] | None = None,
     ) -> None:
         self._config = drone_config
         self._task_board = task_board
@@ -282,6 +283,13 @@ class IdleWatcher:
         # re-reads the live PTY for a mid-turn signal so such a worker is not
         # nudged. None disables the check (tests / non-Claude providers).
         self._worker_busy_check = worker_busy_check
+        # #1858: reads the live input line. None disables the check entirely, so a
+        # deployment without it reports nothing rather than reporting everything clean.
+        self._unsent_input_check = unsent_input_check
+        # Debounce per worker on the TEXT, not the worker: re-reporting the same
+        # stranded line every sweep is how a real signal gets muted, but a worker
+        # that strands a SECOND, different instruction is a new finding.
+        self._last_unsent_seen: dict[str, str] = {}
         self._nudge_guard = RepeatNudgeGuard()
 
     @property
@@ -326,6 +334,11 @@ class IdleWatcher:
         sent = 0
         tasks_by_worker = self._bucket_active_tasks_by_worker()
         for worker in workers:
+            # #1858 — RUNS FOR EVERY WORKER, BEFORE the nudge filters. Deliberately not
+            # gated on having an active task: platform-data sat 8.6 HOURS holding "add
+            # the same hook to nexus's package.json", and a check that only looked at
+            # task-carrying workers is a check that would have missed it.
+            self._check_unsent_input(worker)
             if not self._should_nudge(worker, now=now):
                 continue
             active = tasks_by_worker.get(worker.name, [])
@@ -437,6 +450,44 @@ class IdleWatcher:
             category=LogCategory.DRONE,
         )
         return True
+
+    def _check_unsent_input(self, worker: Worker) -> None:
+        """Report a worker sitting on unsubmitted text. NEVER submits it (#1858).
+
+        AUTO-SUBMIT IS RULED OUT, NOT MERELY UNIMPLEMENTED. Two of the three observed
+        instances were production deploy approvals — "ship it" and "merge it, deploys
+        straight to production". Firing a buffered instruction would execute a deploy
+        nobody confirmed, and nothing here can tell "typed it and meant it" from "typed
+        it and thought better of it". That ambiguity is why the Queen declined to submit
+        them by hand three times in one night, and it does not get easier for a drone.
+
+        DETECTION BEATS PREVENTION HERE: whatever writes the text, the resulting state is
+        trivially observable and was observed by nobody. This makes it a buzz-log line
+        the Queen already reads, instead of a raw PTY tail she has to go and read.
+        """
+        if self._unsent_input_check is None:
+            return
+        try:
+            text = self._unsent_input_check(worker)
+        except Exception:
+            _log.warning(
+                "idle_watcher: unsent-input check raised for %s", worker.name, exc_info=True
+            )
+            return
+        if not text:
+            # Cleared: forget it, so the SAME text stranded again later reports again.
+            self._last_unsent_seen.pop(worker.name, None)
+            return
+        if self._last_unsent_seen.get(worker.name) == text:
+            return
+        self._last_unsent_seen[worker.name] = text
+        self._drone_log.add(
+            DroneAction.UNSENT_INPUT_DETECTED,
+            worker.name,
+            f"idle with UNSENT text on the input line "
+            f"(not submitted, not auto-submitted): {text[:160]}",
+            category=LogCategory.DRONE,
+        )
 
     def _escalate(self, worker_name: str, numbers: list[int]) -> None:
         """Stop nudging ``worker_name`` and surface one operator attention

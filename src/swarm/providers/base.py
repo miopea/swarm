@@ -207,6 +207,31 @@ class LLMProvider(ABC):
         """Check if output shows an empty input prompt ready for continuation."""
         return False
 
+    def unsent_input(self, content: str) -> str:
+        """Text sitting in the input line, typed but NOT submitted. '' when clean.
+
+        #1858. Three workers were stranded in one night holding fully-formed
+        instructions one keystroke from executing — 8.6h, 2h and ~48min — and the only
+        way anyone found out was the Queen reading the raw PTY tail by hand.
+
+        THE INFORMATION WAS NEVER MISSING. ``has_idle_prompt`` matches ``^ *[>❯]``,
+        which is true whether the line reads ``❯`` or ``❯ ship it and merge``. So a
+        worker holding an unsent instruction is classified IDLE by the same regex that
+        classifies an empty prompt as idle, and ``has_empty_prompt`` — the check that
+        CAN tell them apart — was never consulted on that path. This method is the
+        distinction, promoted to something callers can act on.
+
+        RETURNS THE TEXT, NOT A BOOL, on purpose: a detector that only says "something
+        is there" cannot be triaged without going back to the raw tail, which is the
+        manual step this exists to remove. The text is what makes a buzz-log line or a
+        Queen report actionable.
+
+        Base returns '' — a provider that cannot read its own input line must report
+        NOTHING FOUND, never a guess. Callers treat '' as "no finding", so a provider
+        without an implementation simply contributes no false positives.
+        """
+        return ""
+
     def has_open_selection_prompt(self, content: str) -> bool:
         """Whether the screen is showing a prompt that a stray Enter would ANSWER.
 

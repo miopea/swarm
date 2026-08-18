@@ -127,6 +127,9 @@ class TunedProvider(LLMProvider):
     def has_empty_prompt(self, content: str) -> bool:
         return self._inner.has_empty_prompt(content)
 
+    def unsent_input(self, content: str) -> str:
+        return self._inner.unsent_input(content)
+
     def is_long_running_tool_active(self, content: str) -> bool:
         # Must delegate: the base default is False, so without this a tuned
         # Claude loses dynamic-workflow detection and gets false nudges

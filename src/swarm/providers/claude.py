@@ -488,6 +488,29 @@ class ClaudeProvider(LLMProvider):
             return False
         return bool(_RE_EMPTY_PROMPT.match(tail.strip()))
 
+    def unsent_input(self, content: str) -> str:
+        """#1858 — the text on the input line, or '' if the line is empty/absent.
+
+        DELIBERATELY NARROW. It reads the LAST non-blank line only, and only when that
+        line starts with the prompt character. Everything else returns '' — a detector
+        that reaches further up the tail starts reporting the worker's own transcript
+        as unsent input, and a nudge that cries wolf gets muted, which costs more than
+        the 8.6 hours this is meant to save.
+
+        REFUSES TO REPORT AN OPTION LINE. A cursored ``❯ 1. Ship it`` is a SELECTION
+        PROMPT, not typed text — the #1451 guard already owns that state, and reporting
+        it here would double-report every open picker in the fleet as stranded input.
+        """
+        tail = self._get_tail(content, TAIL_LAST_LINE)
+        if not tail:
+            return ""
+        line = tail.strip()
+        if not line or not _RE_PROMPT.match(line):
+            return ""
+        if _RE_CURSOR_OPTION.match(line):
+            return ""
+        return line.lstrip("> ❯").strip()
+
     def plan_mode_preamble(self) -> str | None:
         return CLAUDE_PLAN_PREAMBLE
 

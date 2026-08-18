@@ -469,6 +469,17 @@ class DronePilot(EventEmitter):
             return False
         return tracker.worker_has_active_turn(worker)
 
+    def _worker_unsent_input(self, worker: Worker) -> str:
+        """#1858 — live input-line text for the idle-watcher's stranded-input check.
+
+        Same defensive shape as :meth:`_worker_busy`: no tracker yet ⇒ nothing found,
+        never a false all-clear dressed up as a clean read.
+        """
+        tracker = getattr(self, "_state_tracker", None)
+        if tracker is None:
+            return ""
+        return tracker.worker_unsent_input(worker)
+
     def _loop_armed_remaining(self, name: str) -> float | None:
         """Seconds a worker is parked between native ``/loop`` fires, or None.
 
@@ -623,6 +634,7 @@ class DronePilot(EventEmitter):
             daemon_start_time=daemon_start_time,
             escalate_to_operator=escalate_to_operator,
             worker_busy_check=self._worker_busy,
+            unsent_input_check=self._worker_unsent_input,
             loop_armed_check=self._loop_armed_remaining,
             # #1664: commits are activity the state machine cannot see.
             commit_activity_check=commit_age_seconds,

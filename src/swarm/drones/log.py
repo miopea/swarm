@@ -76,6 +76,10 @@ class DroneAction(Enum):
     AUTO_NUDGE = "AUTO_NUDGE"
     AUTO_NUDGE_MESSAGE = "AUTO_NUDGE_MESSAGE"
     AUTO_NUDGE_MESSAGE_SKIPPED = "AUTO_NUDGE_MESSAGE_SKIPPED"
+    # #1858: a worker is idle with unsubmitted text on its input line. NOT a nudge
+    # and never an auto-submit — two of the three observed instances were production
+    # deploy approvals, so this reports and stops.
+    UNSENT_INPUT_DETECTED = "UNSENT_INPUT_DETECTED"
     AUTO_HANDOFF_TASK = "AUTO_HANDOFF_TASK"
     PARK_PROPOSED = "PARK_PROPOSED"
     PROPOSED_ASSIGNMENT = "PROPOSED_ASSIGNMENT"
@@ -97,6 +101,7 @@ class SystemAction(Enum):
     AUTO_NUDGE = DroneAction.AUTO_NUDGE.value
     AUTO_NUDGE_MESSAGE = DroneAction.AUTO_NUDGE_MESSAGE.value
     AUTO_NUDGE_MESSAGE_SKIPPED = DroneAction.AUTO_NUDGE_MESSAGE_SKIPPED.value
+    UNSENT_INPUT_DETECTED = DroneAction.UNSENT_INPUT_DETECTED.value
     AUTO_HANDOFF_TASK = DroneAction.AUTO_HANDOFF_TASK.value
     PARK_PROPOSED = DroneAction.PARK_PROPOSED.value
     INBOX_AUTO_RELAY = "INBOX_AUTO_RELAY"

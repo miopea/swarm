@@ -598,6 +598,34 @@ class WorkerStateTracker:
             return False
         return self._has_active_turn_signal(content, worker)
 
+    def worker_unsent_input(self, worker: Worker) -> str:
+        """#1858 — text sitting on this worker's input line, unsubmitted. '' if clean.
+
+        Re-reads the LIVE PTY, exactly as :meth:`worker_has_active_turn` does and for the
+        same reason: the cached ``display_state`` cannot carry this, because the state
+        machine never distinguished it. ``has_idle_prompt`` matches ``^ *[>❯]`` whether
+        the line reads ``❯`` or ``❯ ship it and merge``, so all three stranded workers
+        were classified IDLE — correctly, by that regex — and nothing looked further.
+
+        Defensive in the same shape as its sibling: a dead process or any read error
+        resolves to '' (NO FINDING), never to a guess. A detector that reported strandings
+        it could not see would be worse than none.
+        """
+        proc = getattr(worker, "process", None)
+        if proc is None or not getattr(proc, "is_alive", False):
+            return ""
+        try:
+            content = proc.get_content(_STATE_DETECT_LINES)
+        except Exception:
+            return ""
+        try:
+            return self._get_provider(worker).unsent_input(content)
+        except Exception:
+            _log.warning(
+                "unsent-input check failed for %s", getattr(worker, "name", "?"), exc_info=True
+            )
+            return ""
+
     def _has_active_turn_signal(self, content: str, worker: Worker | None = None) -> bool:
         """Does the PTY tail prove the worker is mid-turn? Delegates to the
         worker's provider.
