@@ -595,16 +595,49 @@ async def get_source_tree_state() -> SourceTreeState:
     )
 
 
+# Extensions that make up a build fingerprint. `.py` alone was the original set and it
+# had a hole big enough to break a shipped feature: `build_sha()` is the cache-buster on
+# `/static/dashboard.js?v=...`, so a change to dashboard.js, base.html or the CSS produced
+# a BYTE-IDENTICAL `?v=` and the browser kept serving its cached copy. A cache-buster
+# keyed on a different asset class than the asset it busts.
+#
+# HOW IT PRESENTED (2026-08-18): a new Queen composer rendered correctly — templates are
+# read per request — while neither Enter nor its Send button did anything, because the JS
+# that wires them was never re-fetched. Nothing was broken in the feature; the browser was
+# running last build's script against this build's markup. A daemon restart does NOT fix
+# it either: the hash is identical, so the URL is identical.
+_BUILD_HASH_SUFFIXES = (".py", ".js", ".css", ".html")
+
+
 def _hash_source_tree() -> str:
-    """Hash all .py file contents under the swarm package dir. 8-char hex."""
+    """Hash the file contents that define a build, under the swarm package dir. 8-char hex.
+
+    Covers Python AND the web assets — see ``_BUILD_HASH_SUFFIXES`` for why the latter is
+    not optional.
+
+    COSTS 62ms AGAINST THE OLD 16ms, AND THAT IS AFFORDABLE ONLY BECAUSE ``build_sha()``
+    CACHES. Every caller goes through it, and it memoises into ``_BUILD_SHA``, so this
+    runs once per process — two page routes call ``build_sha()`` per REQUEST and hit the
+    cache. Drop that memo and this becomes a 62ms filesystem walk on every dashboard load.
+
+    CONSEQUENCE OF THE SAME CACHE, worth knowing rather than rediscovering: a front-end
+    edit in a dev/editable install still does not change the served ``?v=`` until the
+    daemon restarts. That is an improvement on what it replaced — before, a restart did
+    not change it either, because no ``.py`` had moved — but it does mean "restart", not
+    "refresh", is what publishes a CSS or JS change.
+    """
     import hashlib
 
     import swarm
 
     src_root = Path(swarm.__file__).resolve().parent
     h = hashlib.sha256()
-    for py_file in sorted(src_root.rglob("*.py")):
-        h.update(py_file.read_bytes())
+    for path in sorted(src_root.rglob("*")):
+        if path.suffix in _BUILD_HASH_SUFFIXES and path.is_file():
+            # The NAME goes in too: a rename with identical contents changes what the
+            # browser must fetch, and a content-only hash would call that the same build.
+            h.update(str(path.relative_to(src_root)).encode())
+            h.update(path.read_bytes())
     return h.hexdigest()[:8]
 
 
