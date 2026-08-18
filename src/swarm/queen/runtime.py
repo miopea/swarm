@@ -395,6 +395,14 @@ def reconcile_queen_claude_md(
     Returns a :class:`ClaudeMdReconcileResult` describing what happened.
     Never raises on normal filesystem operations; callers get the
     diagnostic string via ``result.details``.
+
+    IF YOU ADD A SECOND WRITER OF ``CLAUDE.md``, WRITE THE MARKER TOO. This function is
+    currently the only thing that keeps ``.claude_md_shipped`` in step with the live file.
+    Anything else that updates CLAUDE.md and skips the marker recreates #1910 exactly: the
+    marker goes stale, ``on_disk != shipped_at_last_sync`` becomes true for a file with no
+    local edits, and the operator gets a drift warning whose two offered remedies both
+    presuppose something to reconcile. Not observed — noted here rather than guarded
+    against, because the guard would be a second copy of the same coupling.
     """
     target = workdir / CLAUDE_MD_FILENAME
     marker = workdir / SHIPPED_MARKER_FILENAME
