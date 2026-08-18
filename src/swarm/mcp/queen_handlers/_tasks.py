@@ -845,8 +845,10 @@ QUEEN_UNARCHIVE_TOOL: dict[str, Any] = {
         "overwrote it. TWO THINGS DO NOT COME BACK: blocker rows cleared on archive, "
         "and depends_on references scrubbed on archive — neither is recorded anywhere, "
         "so a restored task starts unblocked and you may need to re-state its "
-        "dependencies. NOTHING RECORDS WHY A TASK WAS ARCHIVED either, so do not expect "
-        "the original reason to be recoverable; say why you are restoring it instead."
+        "dependencies. THE ARCHIVE REASON IS READ BACK TO YOU when one was recorded — "
+        "read it before deciding, because it may say the task was archived as a duplicate "
+        "whose criteria live somewhere else. When none was recorded, this says so as a "
+        "CHECKED absence rather than an assumed one."
     ),
     "inputSchema": {
         "type": "object",
@@ -861,6 +863,61 @@ QUEEN_UNARCHIVE_TOOL: dict[str, Any] = {
         "examples": [{"number": 1672, "reason": "operator ruling: the problem is still live"}],
     },
 }
+
+
+def _archive_reason(d: SwarmDaemon, task_id: str) -> str:
+    """The detail on this task's most recent REMOVED history entry, or ''.
+
+    #1840 FOLLOWUP, AND IT EXISTS BECAUSE I GOT THIS WRONG IN THE OBVIOUS WAY. This tool's
+    own description used to state "NOTHING RECORDS WHY A TASK WAS ARCHIVED". I wrote that
+    after checking that the ``tasks`` row has no reason column and that no unarchive
+    inverse existed, then generalised to "nothing anywhere" WITHOUT QUERYING task_history
+    — the one table designed to hold it. ``TaskManager.archive_task`` has always written
+    the reason there as ``TaskAction.REMOVED``.
+
+    The cost was not the wrong sentence. #1672 was archived as "DUPLICATE OF #1671, and
+    the duplicate is mine", naming which ticket carried its criteria forward, and was
+    restored on a ruling made in the belief that no reason existed — a belief this tool
+    asserted. The false claim then went into the restore reason, which is now permanently
+    in task_history: the table that held the refutation.
+
+    Best-effort: a history read that fails must never break a restore that succeeded.
+    """
+    history = getattr(d, "task_history", None)
+    get_events = getattr(history, "get_events", None)
+    if get_events is None:
+        return ""
+    try:
+        events = list(get_events(task_id, limit=50))
+    except Exception:
+        _log.warning("could not read archive reason for %s", task_id, exc_info=True)
+        return ""
+    for event in reversed(events):
+        if getattr(getattr(event, "action", None), "value", "") == "REMOVED":
+            return str(getattr(event, "detail", "") or "").strip()
+    return ""
+
+
+def _restore_report(d: SwarmDaemon, task: Any, number: int, reason: str) -> list[str]:
+    """What the caller is told after a restore, including WHY it was archived."""
+    lines = [
+        f"Task #{number} restored to the board with status {task.status.value} "
+        f"(the status it carried when archived — archiving never changed it).",
+        "Blocker rows and depends_on references cleared on archive were NOT restored; "
+        "re-state them if it needs them.",
+        f"Reason recorded for the restore: {reason}",
+    ]
+    was = _archive_reason(d, task.id)
+    if was:
+        lines.append(f"WHY IT WAS ARCHIVED: {was}")
+    else:
+        # "No reason was recorded" and "I did not look" are different claims. Only one of
+        # them is honest, and saying which is the entire point of this followup.
+        lines.append(
+            "No archive reason was recorded — its REMOVED history entry carries no "
+            "detail. This is a CHECKED absence, not an assumed one."
+        )
+    return lines
 
 
 def _handle_queen_unarchive_task(
@@ -925,12 +982,7 @@ def _handle_queen_unarchive_task(
     return [
         {
             "type": "text",
-            "text": (
-                f"Task #{number} restored to the board with status {task.status.value} "
-                f"(the status it carried when archived — archiving never changed it). "
-                f"Blocker rows and depends_on references cleared on archive were NOT "
-                f"restored; re-state them if it needs them. Reason recorded: {reason}"
-            ),
+            "text": "\n".join(_restore_report(d, task, number, reason)),
         }
     ]
 
