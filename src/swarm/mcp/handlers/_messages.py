@@ -341,6 +341,44 @@ def _handle_broadcast(
     ]
 
 
+def _liveness_notice(d: SwarmDaemon, recipient: str) -> str:
+    """Warn the sender when the recipient has no running process (#1875). '' otherwise.
+
+    WHY THIS IS SEPARATE FROM THE TYPE WARNING. #1843 tells a sender that an
+    informational type will not WAKE the recipient. This tells them there is nobody there
+    to wake. Both can be true at once and they are different problems: one is fixed by
+    resending as `dependency`, the other is not fixed by anything the sender can type.
+
+    MEASURED: 429 of 551 unread messages fleet-wide (78%) belong to nine workers, seven of
+    which are CONFIGURED and therefore pass recipient validation — that guard deliberately
+    accepts an offline-but-configured worker (#873), so every send "succeeds" into an
+    inbox nobody opens. Oldest 53 days. admin filed 20 of their own believing they were
+    mis-targeted; they were not.
+
+    DELIBERATELY NOT A REFUSAL. A worker can be legitimately restarting, and a guard that
+    blocked sends to a momentarily-down worker would be switched off within a day — this
+    codebase's most reliably observed failure mode. It reports and lets the sender decide.
+
+    Says nothing when it CANNOT TELL. No daemon lookup, no process attribute, any raised
+    exception ⇒ silence, never a cheerful "recipient is fine" that was never checked.
+    """
+    try:
+        worker = d.get_worker(recipient)
+    except Exception:
+        return ""
+    if worker is None:
+        return ""
+    process = getattr(worker, "process", None)
+    if process is None or not getattr(process, "is_alive", False):
+        return (
+            f"\nNOBODY IS RUNNING AS {recipient}: it is a configured worker with no live "
+            f"process, so this row will sit unread until someone starts it. Resending as a "
+            f"different type will NOT help — there is no session to wake. Route it to a "
+            f"running worker, or ask the operator to start {recipient}."
+        )
+    return ""
+
+
 def _delivery_notice(recipient: str, msg_type: str) -> str:
     """What actually happened, for a worker→worker send (#1843).
 
@@ -474,7 +512,12 @@ def _handle_send_message(
         if recipient == QUEEN_WORKER_NAME and worker_name != QUEEN_WORKER_NAME:
             _auto_relay_to_queen(d, worker_name, msg_type, content, message_id=msg_id)
             return [{"type": "text", "text": f"Message sent to {recipient}."}]
-        return [{"type": "text", "text": _delivery_notice(recipient, msg_type)}]
+        return [
+            {
+                "type": "text",
+                "text": _delivery_notice(recipient, msg_type) + _liveness_notice(d, recipient),
+            }
+        ]
     return [{"type": "text", "text": "Failed to send message."}]
 
 
