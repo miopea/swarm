@@ -448,7 +448,13 @@ class WorkerProcess:
         return self.get_foreground_command()
 
     async def send_keys(
-        self, text: str, enter: bool = True, *, automated: bool = False, actor: str | None = None
+        self,
+        text: str,
+        enter: bool = True,
+        *,
+        automated: bool = False,
+        actor: str | None = None,
+        expect_prompt_fingerprint: str | None = None,
     ) -> bool:
         """Send text to the worker's PTY.
 
@@ -469,6 +475,43 @@ class WorkerProcess:
         dashboard send. The operator is precisely the human the prompt is waiting
         for — a guard that blocked them would make an open question unanswerable.
         """
+        if automated and expect_prompt_fingerprint is not None:
+            # #1866 — FINGERPRINT-MATCHED DELIVERY. An approval is an ANSWER TO A SPECIFIC
+            # QUESTION, so the only safe test is whether the question still on screen is
+            # the one it was decided against.
+            #
+            # DELIVER ON A MATCH, DISCARD OTHERWISE — never queue. A queued approval is
+            # stale by definition: there is no later moment at which it becomes correct
+            # again, and releasing it may answer a DIFFERENT picker, selecting whatever
+            # option happens to be cursored then.
+            #
+            # IT HAS FIRED: my-rcg took 1,302 bare Enters in 0.4s on 08-16 23:27:08 —
+            # deferred approvals all released after their pickers had cleared. Under this
+            # rule every one is discarded, because nothing they were decided against was
+            # still open.
+            #
+            # NO OPEN PICKER IS A MISMATCH, NOT A FREE PASS. That is exactly the my-rcg
+            # shape, and delivering a bare "\r" into an empty input line submits it.
+            live = self.current_prompt_fingerprint()
+            if live != expect_prompt_fingerprint:
+                _log.warning(
+                    "DISCARDED an approval for %s — it was decided against prompt %s but "
+                    "the screen now shows %s; a stale approval is not queued because it "
+                    "could answer a different picker",
+                    self.name,
+                    expect_prompt_fingerprint,
+                    live or "no open prompt",
+                )
+                return False
+            # Matched: this IS the picker the decision was made against. It bypasses the
+            # #1451 defer deliberately — that guard exists to stop automated writes
+            # landing in a question they were not meant for, which is the one thing a
+            # fingerprint match rules out.
+            await self._write(text.encode("utf-8"), actor=actor or "approval-matched")
+            if enter:
+                await asyncio.sleep(_INPUT_DRAIN_DELAY)
+                await self._write(b"\r", actor=actor or "approval-matched")
+            return True
         if automated and self._defer_if_prompt_open(text, enter):
             # #1608: report the hold. Returning None made a HELD message and a
             # DELIVERED one indistinguishable to every caller, so the Queen was told
@@ -494,11 +537,7 @@ class WorkerProcess:
         detectors: a 3-question set with 4 options each is taller than both
         TAIL_MEDIUM (15) and TAIL_WIDE (30).
         """
-        try:
-            content = self.buffer.get_lines(_PROMPT_SCAN_LINES)
-        except Exception:
-            return False
-        if not has_open_selection_prompt(content):
+        if not self._selection_prompt_open():
             return False
         self._deferred_keys.append((text, enter))
         _log.info(
@@ -507,6 +546,40 @@ class WorkerProcess:
             len(self._deferred_keys),
         )
         return True
+
+    def current_prompt_fingerprint(self) -> str | None:
+        """Fingerprint of the selection prompt on screen right now, or None (#1866).
+
+        Reuses the identity ``queen_answer_prompt`` has used since #1608 — a 12-hex
+        digest over the option labels (``pty/prompt_options.py``) — rather than inventing
+        a second one. Two notions of "which prompt is this" would eventually disagree,
+        and the case where they disagree is an approval delivered to the wrong question.
+
+        None means NO PROMPT PARSES, which callers must treat as a mismatch rather than
+        as permission: an approval with nothing to answer is the my-rcg shape.
+        """
+        from swarm.pty.prompt_options import parse_open_prompt
+
+        try:
+            prompt = parse_open_prompt(self.buffer.get_lines(_PROMPT_SCAN_LINES))
+        except Exception:
+            return None
+        return prompt.fingerprint if prompt is not None else None
+
+    def _selection_prompt_open(self) -> bool:
+        """Is a selection prompt on screen right now? False when it cannot be read.
+
+        Extracted in #1866 so the DEFER path and the DISCARD path ask the same question
+        of the same buffer slice. Two readers would eventually disagree, and the pair
+        where they disagree is "queued something that should have been dropped".
+
+        FAILS OPEN, as it always has: an unreadable buffer means the write proceeds
+        normally rather than being held or dropped on a guess.
+        """
+        try:
+            return has_open_selection_prompt(self.buffer.get_lines(_PROMPT_SCAN_LINES))
+        except Exception:
+            return False
 
     async def _flush_deferred_keys(self) -> None:
         """Deliver writes held during a prompt, in order, before the current one.

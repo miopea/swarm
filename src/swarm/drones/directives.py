@@ -203,11 +203,32 @@ class DirectiveExecutor:
         reason = directive.get("reason", "")
         conf = directive.get("_confidence", 0.0)
         provider = self._get_provider(worker)
+        # #1866: capture WHICH picker this continue is answering, here — every gate above
+        # has already run against this screen, so this is the decision moment for this
+        # path. Read once and compare later; re-reading at write time would compare the
+        # screen against itself and match unconditionally.
+        from swarm.drones.decision_executor import _prompt_fingerprint
+
+        try:
+            decided_against = _prompt_fingerprint(worker.process.get_content(120))
+        except Exception:
+            decided_against = None
         return await self._safe_worker_action(
             worker,
-            worker.process.send_keys(provider.approval_response(True), enter=False, automated=True),
+            worker.process.send_keys(
+                provider.approval_response(True),
+                enter=False,
+                automated=True,
+                expect_prompt_fingerprint=decided_against,
+            ),
             DroneAction.QUEEN_CONTINUED,
             reason=f"Queen ({conf:.0%}): {reason}",
+            undelivered_action=DroneAction.APPROVAL_DISCARDED,
+            undelivered_reason=(
+                f"the picker this Queen approval was decided against "
+                f"({decided_against or 'none'}) is no longer the one on screen — "
+                f"DISCARDED rather than queued (#1866)"
+            ),
         )
 
     async def _handle_restart(self, directive: dict[str, Any], worker: Worker) -> bool:

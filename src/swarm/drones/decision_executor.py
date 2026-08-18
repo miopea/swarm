@@ -25,6 +25,21 @@ if TYPE_CHECKING:
 _log = get_logger("drones.decision_executor")
 
 
+def _prompt_fingerprint(content: str) -> str | None:
+    """Identity of the selection prompt in *content*, or None if there is not one.
+
+    Thin wrapper so both approval paths derive the fingerprint the same way, from the
+    same parser the Queen's own ``queen_answer_prompt`` uses (#1608).
+    """
+    from swarm.pty.prompt_options import parse_open_prompt
+
+    try:
+        prompt = parse_open_prompt(content or "")
+    except Exception:
+        return None
+    return prompt.fingerprint if prompt is not None else None
+
+
 class DecisionExecutor:
     """Evaluates drone decisions and executes deferred actions.
 
@@ -305,13 +320,29 @@ class DecisionExecutor:
             )
             return
         provider = self._get_provider(worker)
+        # #1866: the fingerprint comes from the DECISION-TIME content, not from a fresh
+        # read at write time. A write-time read would compare the screen against itself
+        # and always match — the check has to carry the identity of the question the
+        # drone actually judged, or it is not a staleness check at all.
+        decided_against = _prompt_fingerprint(content)
         if await self._safe_worker_action(
             worker,
-            target_proc.send_keys(provider.approval_response(True), enter=False, automated=True),
+            target_proc.send_keys(
+                provider.approval_response(True),
+                enter=False,
+                automated=True,
+                expect_prompt_fingerprint=decided_against,
+            ),
             DroneAction.CONTINUED,
             decision,
             include_rule_pattern=True,
             prompt_snippet=extract_prompt_snippet(content),
+            undelivered_action=DroneAction.APPROVAL_DISCARDED,
+            undelivered_reason=(
+                f"the picker this approval was decided against ({decided_against or 'none'}) "
+                f"is no longer the one on screen — DISCARDED rather than queued, because a "
+                f"stale approval released later could answer a different picker (#1866)"
+            ),
         ):
             self._drone_continued_callback(worker.name)
 
@@ -384,16 +415,35 @@ class DecisionExecutor:
         include_rule_pattern: bool = False,
         reason: str | None = None,
         prompt_snippet: str = "",
+        undelivered_action: DroneAction | None = None,
+        undelivered_reason: str = "",
     ) -> bool:
         """Execute *coro* for *worker*, log on success, warn on failure.
 
         Returns ``True`` on success.  Sets ``_had_substantive_action`` so
         the adaptive backoff resets correctly.
+
+        #1866: THE RESULT OF *coro* IS NOW READ. It was awaited and thrown away, so
+        ``send_keys`` returning False — which #1608 added precisely so a caller could
+        tell a HELD write from a delivered one — was invisible here, and a write that
+        never reached the worker was logged as though it had. That is the
+        reports-the-send-not-the-delivery defect (#1843) inside the drone path.
+
+        A coro that returns exactly ``False`` did not deliver. ``undelivered_action``
+        names what to record when that happens; without one it is still a WARNING and a
+        False return, never a success entry.
         """
         try:
-            await coro
+            result = await coro
         except (ProcessError, OSError):
             _log.warning("failed %s for %s", action.value, worker.name, exc_info=True)
+            return False
+        if result is False:
+            # NOT an exception and NOT a success: the write was refused before it left.
+            detail = undelivered_reason or "write was not delivered to the worker"
+            if undelivered_action is not None:
+                self.log.add(undelivered_action, worker.name, detail)
+            _log.warning("%s NOT delivered for %s — %s", action.value, worker.name, detail)
             return False
         metadata: dict[str, str] = {}
         if decision is not None:

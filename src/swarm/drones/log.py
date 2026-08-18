@@ -80,6 +80,12 @@ class DroneAction(Enum):
     # and never an auto-submit — two of the three observed instances were production
     # deploy approvals, so this reports and stops.
     UNSENT_INPUT_DETECTED = "UNSENT_INPUT_DETECTED"
+    # #1866: a drone approval could not be delivered while its picker was open, so it
+    # was DISCARDED rather than queued. An approval is an answer to a SPECIFIC
+    # question; if it cannot land while that question is open it is stale by
+    # definition, and queuing it means it may answer a DIFFERENT picker later and
+    # select whatever option happens to be cursored.
+    APPROVAL_DISCARDED = "APPROVAL_DISCARDED"
     AUTO_HANDOFF_TASK = "AUTO_HANDOFF_TASK"
     PARK_PROPOSED = "PARK_PROPOSED"
     PROPOSED_ASSIGNMENT = "PROPOSED_ASSIGNMENT"
@@ -102,6 +108,7 @@ class SystemAction(Enum):
     AUTO_NUDGE_MESSAGE = DroneAction.AUTO_NUDGE_MESSAGE.value
     AUTO_NUDGE_MESSAGE_SKIPPED = DroneAction.AUTO_NUDGE_MESSAGE_SKIPPED.value
     UNSENT_INPUT_DETECTED = DroneAction.UNSENT_INPUT_DETECTED.value
+    APPROVAL_DISCARDED = DroneAction.APPROVAL_DISCARDED.value
     AUTO_HANDOFF_TASK = DroneAction.AUTO_HANDOFF_TASK.value
     PARK_PROPOSED = DroneAction.PARK_PROPOSED.value
     INBOX_AUTO_RELAY = "INBOX_AUTO_RELAY"

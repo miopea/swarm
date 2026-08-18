@@ -36,6 +36,10 @@ class FakeWorkerProcess:
     keys_sent: list[str] = field(default_factory=list, repr=False)
     # #1451: writes held because a selection prompt was open.
     deferred_keys: list[tuple[str, bool]] = field(default_factory=list, repr=False)
+    # #1866: approvals DROPPED because a picker was open. Kept separate from
+    # deferred_keys so a test cannot mistake a discard for a hold — they are
+    # different outcomes and conflating them is what the ticket is about.
+    discarded_keys: list[tuple[str, bool]] = field(default_factory=list, repr=False)
     _killed: bool = False
     _terminal_active: bool = False
     _last_user_input: float = 0.0
@@ -68,24 +72,62 @@ class FakeWorkerProcess:
     def feed_output(self, data: bytes) -> None:
         self.buffer.write(data)
 
-    async def send_keys(self, text: str, enter: bool = True, *, automated: bool = False) -> None:
-        """Mirror WorkerProcess.send_keys, INCLUDING the #1451 hold.
+    async def send_keys(
+        self,
+        text: str,
+        enter: bool = True,
+        *,
+        automated: bool = False,
+        actor: str | None = None,
+        expect_prompt_fingerprint: str | None = None,
+    ) -> bool:
+        """Mirror WorkerProcess.send_keys, INCLUDING the #1451 hold and #1866 discard.
 
-        The fake models the guard rather than merely tolerating the keyword. A
+        The fake models the guards rather than merely tolerating the keywords. A
         fake that accepted ``automated`` and ignored it would let every existing
         test keep passing while the real guard was wired backwards — the fake
         would be asserting that the bug is absent by construction.
+
+        #1866 adds two things it must mirror or it goes on lying: the DISCARD path, and
+        the BOOL RETURN. The real method has returned False on a hold since #1608 so a
+        caller could tell a held write from a delivered one; this returned None, so any
+        test exercising ``_safe_worker_action`` saw "not False" and read every refusal
+        as a success. That is the very defect #1866 fixes, reproduced in the double.
         """
         from swarm.pty.prompt_guard import has_open_selection_prompt
 
+        if automated and expect_prompt_fingerprint is not None:
+            # #1866 fingerprint-matched delivery, modelled rather than tolerated: deliver
+            # only into the picker the decision was made against; otherwise DISCARD.
+            # Never queue — a stale approval could answer a different picker later.
+            if self.current_prompt_fingerprint() != expect_prompt_fingerprint:
+                self.discarded_keys.append((text, enter))
+                return False
+            self.keys_sent.append(text + ("\n" if enter else ""))
+            return True
         if automated and has_open_selection_prompt(self.buffer.get_lines(120)):
             self.deferred_keys.append((text, enter))
-            return
+            return False
         for qtext, qenter in self.deferred_keys:
             self.keys_sent.append(qtext + ("\n" if qenter else ""))
         self.deferred_keys.clear()
         full = text + ("\n" if enter else "")
         self.keys_sent.append(full)
+        return True
+
+    def current_prompt_fingerprint(self) -> str | None:
+        """Mirror WorkerProcess.current_prompt_fingerprint (#1866) — the REAL parser.
+
+        Using the production parser rather than a stub is the point: a fake that invented
+        its own identity scheme would let the matching pass here and disagree live.
+        """
+        from swarm.pty.prompt_options import parse_open_prompt
+
+        try:
+            prompt = parse_open_prompt(self.buffer.get_lines(120))
+        except Exception:
+            return None
+        return prompt.fingerprint if prompt is not None else None
 
     async def send_enter(self, *, actor: str = "unknown") -> None:
         # #1658: the real helper records who wrote; the fake accepts and ignores it.
