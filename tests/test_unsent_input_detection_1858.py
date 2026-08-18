@@ -291,3 +291,85 @@ def test_no_checker_reports_nothing_rather_than_all_clear():
     _watcher(None, log)._check_unsent_input(_worker())
 
     log.add.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# THE REAL SCREEN — captured live, because the synthetic fixture was wrong
+# ---------------------------------------------------------------------------
+
+# Captured from sculpt-studio's rendered buffer 2026-08-18 while it held operator text
+# that was never submitted. Verbatim, including the \xa0 after the prompt glyph.
+REAL_STRANDED_SCREEN = (
+    "  instruction.\n"
+    "\u273b Cogitated for 2m 34s\n"
+    "\u2500" * 50 + "\n"
+    "\u276f\xa0leave writeEnabled off \u2014 pick up #1885 instead\n" + "\u2500" * 50 + "\n"
+    "  \u23f5\u23f5 auto mode on (shift+tab to cycle) \u00b7 \u2190 for \u2026"
+)
+
+REAL_CLEAN_SCREEN = (
+    "  instruction.\n"
+    "\u273b Cogitated for 2m 34s\n"
+    "\u2500" * 50 + "\n"
+    "\u276f\n" + "\u2500" * 50 + "\n"
+    "  \u23f5\u23f5 auto mode on (shift+tab to cycle) \u00b7 \u2190 for \u2026"
+)
+
+
+def test_THE_LIVE_CASE_the_detector_sees_a_real_stranded_screen():
+    """THE BUG THAT MADE THIS FILE'S OTHER TESTS MEANINGLESS IN PRODUCTION.
+
+    `unsent_input` read TAIL_LAST_LINE — one line. Claude Code renders a BORDERED INPUT
+    BOX with a status footer beneath it, so the prompt sits THREE ROWS above the bottom
+    and the last line is `⏵⏵ auto mode on…`. The detector read the footer and returned ''.
+
+    It shipped as d53d0ee, the daemon reloaded, and UNSENT_INPUT_DETECTED fired ZERO times
+    in four hours across six observed strandings. Silence is what this produces when there
+    is nothing to detect AND when it cannot see — and those were indistinguishable until
+    the Queen asked which.
+
+    WHY THE ORIGINAL TESTS PASSED: they fed a bare one-line screen, where the prompt IS
+    the last line. Even the real-PTY positive control used `/bin/sh` with `PS1='❯ '`,
+    which also puts the prompt last. The control was genuinely a real PTY and still did
+    not reproduce the app being monitored."""
+    provider = ClaudeProvider()
+
+    assert provider.unsent_input(REAL_STRANDED_SCREEN) == (
+        "leave writeEnabled off \u2014 pick up #1885 instead"
+    )
+
+
+def test_the_same_real_layout_with_an_empty_prompt_reports_nothing():
+    """POSITIVE CONTROL for the test above, in the SAME layout. A detector that returned
+    the first prompt-ish line it found would pass that test and fire on every idle worker
+    in the fleet."""
+    assert ClaudeProvider().unsent_input(REAL_CLEAN_SCREEN) == ""
+
+
+def test_the_footer_is_never_mistaken_for_typed_text():
+    """The line the old version actually read."""
+    provider = ClaudeProvider()
+
+    assert provider.unsent_input("  \u23f5\u23f5 auto mode on (shift+tab to cycle)") == ""
+
+
+def test_a_picker_in_the_real_layout_is_still_refused():
+    """#1451 owns open pickers; reporting them here would double-report every one."""
+    screen = "Allow `npm test` to run?\n\u276f 1. Yes\n  2. No\n" + "\u2500" * 40
+
+    assert ClaudeProvider().unsent_input(screen) == ""
+
+
+def test_it_does_not_reach_far_enough_up_to_read_the_transcript():
+    """The window is short on purpose: a detector that scanned the whole tail would
+    report the worker's own output as unsent input, and a nudge that cries wolf gets
+    muted within a day."""
+    screen = (
+        "\u276f an old submitted command from ten lines ago\n"
+        + "\n".join(f"  transcript line {i}" for i in range(10))
+        + "\n"
+        + "\u2500" * 40
+        + "\n  \u23f5\u23f5 auto mode on"
+    )
+
+    assert ClaudeProvider().unsent_input(screen) == ""

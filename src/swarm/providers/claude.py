@@ -501,15 +501,35 @@ class ClaudeProvider(LLMProvider):
         PROMPT, not typed text — the #1451 guard already owns that state, and reporting
         it here would double-report every open picker in the fleet as stranded input.
         """
-        tail = self._get_tail(content, TAIL_LAST_LINE)
+        # THE PROMPT IS NOT THE LAST LINE, AND ASSUMING IT WAS IS WHY THIS NEVER FIRED.
+        # The first version read TAIL_LAST_LINE (1 line). Claude Code renders a BORDERED
+        # INPUT BOX with a status footer under it, so a real stranded screen looks like:
+        #
+        #     ❯ leave writeEnabled off — pick up #1885 instead
+        #     ──────────────────────────────────────────────
+        #       ⏵⏵ auto mode on (shift+tab to cycle) · ← for …
+        #
+        # The last line is the FOOTER. Captured live from sculpt-studio on 2026-08-18,
+        # holding operator text that was never submitted, while this returned ''.
+        #
+        # Scans a SHORT window and takes the LAST prompt-looking line in it. Short on
+        # purpose: reaching further up starts reporting the worker's own transcript as
+        # unsent input, and a nudge that cries wolf gets muted — which costs more than
+        # the 8.6 hours this exists to save.
+        tail = self._get_tail(content, TAIL_NARROW)
         if not tail:
             return ""
-        line = tail.strip()
-        if not line or not _RE_PROMPT.match(line):
-            return ""
-        if _RE_CURSOR_OPTION.match(line):
-            return ""
-        return line.lstrip("> ❯").strip()
+        for raw in reversed(tail.splitlines()):
+            line = raw.strip()
+            if not line or not _RE_PROMPT.match(line):
+                continue
+            if _RE_CURSOR_OPTION.match(line):
+                return ""  # a picker, not typed text — #1451 owns that state
+            # ``\xa0`` follows the prompt glyph on Claude Code's real screen; str.strip()
+            # removes it because Python counts it as whitespace, but the glyph set has to
+            # be stripped explicitly first.
+            return line.lstrip(">❯").strip()
+        return ""
 
     def plan_mode_preamble(self) -> str | None:
         return CLAUDE_PLAN_PREAMBLE
