@@ -1,6 +1,6 @@
 # Swarm — Project Guide
 
-> See `~/.claude/CLAUDE.md` for universal rules (design principles, code quality, TDD workflow, quality gates).
+> See `~/.claude/CLAUDE.md` for universal rules (code quality, verification, shipping vocabulary, secrets, swarm) and its routing map to `rcg-architecture/docs/standards/`.
 
 ## Quick Reference
 
