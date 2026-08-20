@@ -22,6 +22,15 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
   the `swarm-ai` package name, the `swarm` CLI entry point, the `swarm.service`
   unit name, `~/.swarm/swarm.db`, and every Python module and class identifier.
 
+- The systemd unit `Description=` is now corrected in place on daemon start for
+  installs that predate the rename. `perform_update()` only reinstalls the
+  package and never rewrites the unit, so an updated install would otherwise
+  have kept advertising itself as plain "Swarm" in `systemctl` output forever.
+  The existing `ensure_killmode_process()` patcher gained the transform, so only
+  the exact pre-rename string is replaced — a Description the operator
+  customised is left alone, and a hand-tuned `ExecStart` / `WorkingDirectory` is
+  never regenerated.
+
 - INV-2's absence threshold is now its own knob, `drones.inv2_absent_threshold_seconds`,
   defaulting to 3600s instead of inheriting the display-only `drones.sleeping_threshold`
   (#1571).

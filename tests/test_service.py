@@ -261,6 +261,74 @@ class TestEnsureKillmodeProcess:
         # File untouched (modulo no patching).
         assert svc._SERVICE_PATH.read_text() == unit
 
+    def test_rebrands_legacy_description(self) -> None:
+        """Regression: an install that predates the "Swarm (legacy)" rename
+        must have its unit Description corrected on the next daemon start.
+
+        ``perform_update()`` only reinstalls the package — it never rewrites
+        the unit — so without this transform an updated install would keep
+        advertising itself as plain "Swarm" in ``systemctl`` output forever.
+        """
+        from swarm import service as svc
+        from swarm.service import ensure_killmode_process
+
+        unit = (
+            "[Unit]\nDescription=Swarm Web Dashboard\n\n"
+            "[Service]\nKillMode=process\n"
+            "ExecStart=/usr/local/bin/swarm serve\n\n"
+            "[Install]\nWantedBy=default.target\n"
+        )
+        svc._SERVICE_PATH.write_text(unit)
+
+        assert ensure_killmode_process() is True
+        rewritten = svc._SERVICE_PATH.read_text()
+        assert "Description=Swarm (legacy) Web Dashboard\n" in rewritten
+        assert "Description=Swarm Web Dashboard\n" not in rewritten
+        # Nothing else may move.
+        assert "ExecStart=/usr/local/bin/swarm serve\n" in rewritten
+        assert "KillMode=process\n" in rewritten
+
+    def test_rebrand_is_idempotent(self) -> None:
+        from swarm import service as svc
+        from swarm.service import ensure_killmode_process
+
+        unit = (
+            "[Unit]\nDescription=Swarm (legacy) Web Dashboard\n\n"
+            "[Service]\nKillMode=process\n"
+            "ExecStart=/usr/local/bin/swarm serve\n\n"
+            "[Install]\nWantedBy=default.target\n"
+        )
+        svc._SERVICE_PATH.write_text(unit)
+
+        assert ensure_killmode_process() is False
+        assert svc._SERVICE_PATH.read_text() == unit
+
+    def test_rebrand_leaves_custom_description_alone(self) -> None:
+        """An operator who renamed the unit themselves keeps their name."""
+        from swarm import service as svc
+        from swarm.service import ensure_killmode_process
+
+        unit = (
+            "[Unit]\nDescription=Brad's hive\n\n"
+            "[Service]\nKillMode=process\n"
+            "ExecStart=/usr/local/bin/swarm serve\n\n"
+            "[Install]\nWantedBy=default.target\n"
+        )
+        svc._SERVICE_PATH.write_text(unit)
+
+        assert ensure_killmode_process() is False
+        assert svc._SERVICE_PATH.read_text() == unit
+
+    def test_generated_unit_matches_rebrand_target(self) -> None:
+        """A freshly generated unit and the in-place rebrand must agree.
+
+        If these two drift, a fresh install and an updated install end up
+        advertising different names for the same service.
+        """
+        from swarm import service as svc
+
+        assert svc._CURRENT_DESCRIPTION in svc._UNIT_TEMPLATE
+
     def test_downgrades_killmode_mixed(self) -> None:
         from swarm import service as svc
         from swarm.service import ensure_killmode_process

@@ -47,6 +47,11 @@ _CONFIG_FLAG_RE = re.compile(
     r"\s+(?:-c\s+\S+|-c\S+|--config(?:=|\s+)\S+)",
 )
 
+# The unit Description shipped before this project was renamed "Swarm
+# (legacy)".  Matched exactly so a customised Description survives.
+_LEGACY_DESCRIPTION = "Description=Swarm Web Dashboard"
+_CURRENT_DESCRIPTION = "Description=Swarm (legacy) Web Dashboard"
+
 
 def ensure_killmode_process() -> bool:
     """Auto-patch the installed systemd unit to match current architecture.
@@ -69,6 +74,17 @@ def ensure_killmode_process() -> bool:
        restart, overwriting dashboard-edited state with whatever stale
        value the YAML happened to have.  Reported by Amanda 2026-05-05.
        Strip it so future starts read from the DB unambiguously.
+
+    3. **Rebrand the unit Description**.  This project became "Swarm
+       (legacy)" when Swarm Next superseded it, but ``perform_update()``
+       only reinstalls the package -- it never rewrites the unit, so an
+       updated install would keep advertising itself as plain "Swarm" in
+       ``systemctl`` output forever.  Only the exact pre-rename string is
+       replaced, so an operator-customised Description is left alone.
+       Regenerating the whole unit would be the obvious alternative and is
+       deliberately NOT done: it would clobber a hand-tuned ExecStart or
+       WorkingDirectory, which is the failure mode transform 2 exists to
+       clean up after.
 
     Runs ``systemctl --user daemon-reload`` after patching so systemd
     picks up the change immediately.  Returns True if the unit was
@@ -96,6 +112,11 @@ def ensure_killmode_process() -> bool:
         else:
             new_lines.append(line)
     content = "".join(new_lines)
+    # Rebrand to "Swarm (legacy)".  Exact-match only -- a Description the
+    # operator has customised is not ours to rewrite.
+    if _LEGACY_DESCRIPTION in content:
+        content = content.replace(_LEGACY_DESCRIPTION, _CURRENT_DESCRIPTION, 1)
+        changed = True
     if not changed:
         return False
     _SERVICE_PATH.write_text(content)
