@@ -1,5 +1,11 @@
 # Claude Code Improvements Catalog — Derived from Source Analysis
 
+> [!IMPORTANT]
+> **Swarm (legacy) is maintenance-only.** Active development moved to
+> [Swarm Next](https://github.com/miopea/swarm-next). Everything proposed below
+> is a record of what *was* planned here, not a commitment — treat unshipped
+> items as candidate input for Swarm Next rather than upcoming work in this repo.
+
 > Catalog of improvements derived from reverse-engineering Claude Code v2.1.88 source (512K lines, 1,900 files). Each item is rated by **impact** (how much it improves Swarm) and **effort** (implementation cost). Rating scale: S (game-changing), A (high-value), B (solid win), C (nice-to-have).
 >
 > Many items have since shipped — see the "Already Implemented" table at the bottom and per-item status in [`claude-code-roadmap.md`](claude-code-roadmap.md) before treating any entry as actionable.

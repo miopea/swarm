@@ -14,9 +14,21 @@ access paths, and decisions whose reasoning is not in the source.
 
 ## 1. What This Is
 
-A Python web tool for orchestrating multiple Claude Code agents.
+**Swarm (legacy)** — a Python web tool for orchestrating multiple Claude Code agents.
 Workers run in PTYs managed by a pty-holder sidecar. The background drones handle routine decisions.
 The Queen (headless `claude -p`) handles complex decisions.
+
+Superseded by [Swarm Next](https://github.com/miopea/swarm-next); this repo is
+maintenance-only. Note that **display strings** say "Swarm (legacy)" while
+**identifiers deliberately do not** — the package is still `swarm-ai`, the CLI
+still `swarm`, the unit still `swarm.service`, the DB still `~/.swarm/swarm.db`.
+That split is intentional (renaming any of them breaks existing installs) and is
+recorded in `CLAUDE.md`. Do not "fix" it.
+
+The GitHub repo is `miopea/swarm-legacy`, renamed from `miopea/swarm`. Old URLs
+still resolve — `raw.githubusercontent.com` serves the old path directly and the
+API 301s — so pre-rename installs keep updating; the constants in
+`src/swarm/update.py` were repointed anyway rather than relying on that.
 
 ### Autonomous task momentum
 
@@ -614,6 +626,73 @@ so it is safe and does not take the fleet down. Do not kill the holder PID.
 
 **WARNING**: `--force` alone is NOT enough — uv reuses its build cache, which is
 why `uv cache clean swarm-ai` comes first.
+
+### Install layout — Legacy and Next coexist, and nothing collides today
+
+Measured 2026-08-20, not inferred. The two systems share a box and a name
+*prefix*, but no file, binary, unit, or database.
+
+| | Swarm (legacy) | Swarm Next |
+| --- | --- | --- |
+| CLI on PATH | `swarm` → uv tool `swarm-ai` | `swarmctl` (+ `swarm-terminal-host`) |
+| Binary home | `~/.local/share/uv/tools/swarm-ai/` | `~/.local/lib/swarm-next/current/` |
+| systemd units | `swarm.service` | `swarm-next-api.service`, `swarm-next-terminal-host.service` (+ `-development-reload`, `-host-reconcile`) |
+| State | `~/.swarm/swarm.db` | `swarm-next.sqlite3` (its own store) |
+| Repo | `miopea/swarm-legacy` | `miopea/swarm-next` |
+| Source dir | `~/projects/personal/swarm` | `~/projects/personal/swarm-next` |
+
+The Rust crates are named `swarm-cli`, `swarm-api`, … but the **shipped binary
+is `swarmctl`** — that is why Next can sit beside Legacy's `swarm` without a
+fight. Installing or updating either one does not touch the other.
+
+**The local source directory did NOT change with the repo rename, and must not
+be renamed casually.** The GitHub repo is `swarm-legacy`; the checkout is still
+`~/projects/personal/swarm`. Git does not care (the remote URL is what moved),
+but three things pin that absolute path:
+
+1. `~/.local/share/uv/tools/swarm-ai/uv-receipt.toml` —
+   `directory = "/home/bschleifer/projects/personal/swarm"`
+2. `~/.config/systemd/user/swarm.service.d/dev.conf` —
+   `ExecStart=<that path>/.venv/bin/swarm serve`
+3. `get_local_source_path()` (`update.py`), which reads that receipt and is what
+   the dashboard's **Reload** button uses to reinstall from local source
+
+Renaming the directory without fixing all three gives a daemon that starts from
+a stale copy, or a Reload button that silently reinstalls the wrong tree.
+
+### If Next should later take the `swarm` name
+
+The operator's stated intent is that Swarm Next eventually installs *as* `swarm`.
+That is a rename of Next, not of Legacy, and the order matters — Legacy currently
+owns `~/.local/bin/swarm`:
+
+1. Legacy gives the name up first (`uv tool uninstall swarm-ai`, or accept that
+   its entrypoint is replaced) — otherwise the two fight over one symlink.
+2. Next renames its `[[bin]] name = "swarmctl"` and its unit names.
+3. `miopea/swarm-legacy` keeps its name; `miopea/swarm-next` becomes
+   `miopea/swarm`. GitHub frees a renamed org repo's old name immediately, and
+   the rename this repo already went through is what makes `swarm` available.
+4. Legacy's `~/.swarm/swarm.db` is untouched by any of it — different store.
+
+Nothing here is done. Recorded so the sequencing is not re-derived later.
+
+### The systemd unit self-heals on daemon start
+
+`ensure_killmode_process()` (`src/swarm/service.py`, called from
+`server/runner.py` on every start) patches the installed unit **in place** for
+three drifts: `KillMode=mixed` → `process`, a legacy `-c <yaml>` in `ExecStart`,
+and the pre-rename `Description=Swarm Web Dashboard` → `Swarm (legacy) Web
+Dashboard`. It then runs `systemctl --user daemon-reload` itself.
+
+This exists because `perform_update()` reinstalls the **package only** — it
+never rewrites the unit, and `install_service()` is the only writer. Without the
+in-place patch an updated install would keep its old unit forever.
+
+It deliberately does **not** regenerate from `generate_unit()`: that would
+clobber a hand-tuned `ExecStart` or `WorkingDirectory` — exactly the failure the
+`-c <yaml>` transform exists to clean up after, and this box's `dev.conf`
+arrangement would be a casualty. Matching is exact-string, so a Description an
+operator customised is left alone.
 
 ### Dev Reload — don't tell the user to restart manually
 In dev mode (running from the project `.venv`, i.e. `which swarm` shows `./.venv/bin/swarm`) the dashboard footer has a **Reload** button that is the canonical way to pick up code changes. It:

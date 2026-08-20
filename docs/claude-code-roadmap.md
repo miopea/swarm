@@ -1,5 +1,11 @@
 # Claude Code Intelligence — Implementation Roadmap
 
+> [!IMPORTANT]
+> **Swarm (legacy) is maintenance-only.** Active development moved to
+> [Swarm Next](https://github.com/miopea/swarm-next). Everything proposed below
+> is a record of what *was* planned here, not a commitment — treat unshipped
+> items as candidate input for Swarm Next rather than upcoming work in this repo.
+
 > Derived from reverse-engineering Claude Code v2.1.88 (512K lines, 1,900 files).
 > Source analysis: `docs/claude-code-insights.md`
 > Private source archive: `github.com/miopea/claude-code-source` (private)
