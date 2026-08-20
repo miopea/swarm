@@ -1,5 +1,11 @@
 # Multi-LLM Provider Support: Research & Architecture Reference
 
+> [!IMPORTANT]
+> **Swarm (legacy) is maintenance-only.** Active development moved to
+> [Swarm Next](https://github.com/miopea/swarm-next). Everything proposed below
+> is a record of what *was* planned here, not a commitment — treat unshipped
+> items as candidate input for Swarm Next rather than upcoming work in this repo.
+
 > **Purpose**: Standalone reference document for adding Gemini CLI and Codex CLI as
 > alternative worker backends alongside Claude Code. Not an immediate implementation
 > plan — a well-researched guide to return to when ready.

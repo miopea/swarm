@@ -1,6 +1,13 @@
 # Content System v1 — "No-AI-Slop" Content Orchestration
 
 Status: **specified, not yet implemented**
+
+> [!IMPORTANT]
+> **Swarm (legacy) is maintenance-only.** This spec was written for this repo but
+> was never implemented here, and will not be. Active development moved to
+> [Swarm Next](https://github.com/miopea/swarm-next) — treat this as design input
+> to carry across, not as pending work in this repo.
+
 Date: 2026-05-20
 Interview: 4 rounds, 16 decisions captured below
 Audience: implementer (almost certainly the same model that wrote this spec)
