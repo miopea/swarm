@@ -114,7 +114,7 @@ async def handle_openapi_spec(request: web.Request) -> web.Response:
 async def handle_swagger_ui(request: web.Request) -> web.Response:
     """GET /api/docs/ui — serve a Swagger UI page."""
     html = """<!DOCTYPE html>
-<html><head><title>Swarm API Docs</title>
+<html><head><title>Swarm (legacy) API Docs</title>
 <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
 </head><body>
 <div id="swagger-ui"></div>

@@ -23,7 +23,7 @@ from webauthn.helpers.structs import (
 
 from swarm.auth.passkeys import StoredCredential
 
-_RP_NAME = "Swarm"
+_RP_NAME = "Swarm (legacy)"
 
 # In-memory challenge store: token -> (challenge_bytes, expiry_ts)
 _challenges: dict[str, tuple[bytes, float]] = {}

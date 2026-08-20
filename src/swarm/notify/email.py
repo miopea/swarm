@@ -46,7 +46,7 @@ def make_email_backend(config: EmailConfig) -> Callable[[NotifyEvent], None]:
             return
 
         msg = EmailMessage()
-        msg["Subject"] = f"[Swarm] {event.title}"
+        msg["Subject"] = f"[Swarm (legacy)] {event.title}"
         msg["From"] = config.from_address
         msg["To"] = ", ".join(config.to_addresses)
         msg.set_content(

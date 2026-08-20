@@ -87,7 +87,7 @@ def test_the_curl_forms_that_already_worked_still_work():
 ORDINARY_WORK = [
     "git push origin main",
     "git push --set-upstream origin worker/platform-api",
-    "git push https://github.com/miopea/swarm main",
+    "git push https://github.com/miopea/swarm-legacy main",
     "rsync -az ./dist/ deploy@buildhost:/srv/app/",
     "rsync -av --delete build/ user@staging:/var/www/",
     "scp dist.tar.gz deployer@prod:/tmp/",

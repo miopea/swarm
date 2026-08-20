@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Swarm's Bee Hive — Dashboard{% endblock %}
+{% block title %}Swarm (legacy) — Bee Hive Dashboard{% endblock %}
 
 {% block body %}
 <a href="#main-content" class="skip-link">Skip to main content</a>
@@ -21,7 +21,7 @@
     <button data-action="copyHolderDriftCmd" style="margin-left:4px; padding:2px 10px; background:var(--poppy); color:var(--canvas); border:none; border-radius:4px; cursor:pointer; font-size:12px; font-weight:600;">Copy</button>
 </div>
 <header>
-    <h1><img src="/static/bees/happy.svg" alt="" class="header-icon"><span class="ws-indicator" id="ws-dot"></span> <span id="resource-indicator" class="resource-indicator" style="display:none;font-size:0.65em;vertical-align:middle;margin-left:0.5em;cursor:pointer;position:relative;" data-action="toggleResourcePopover"><span id="res-mem-bar" style="display:inline-block;width:40px;height:8px;background:#333;border-radius:3px;overflow:hidden;vertical-align:middle;"><span id="res-mem-fill" style="display:block;height:100%;width:0%;background:var(--leaf);transition:width 0.3s;"></span></span> <span id="res-swap-bar" style="display:inline-block;width:30px;height:8px;background:#333;border-radius:3px;overflow:hidden;vertical-align:middle;margin-left:2px;"><span id="res-swap-fill" style="display:block;height:100%;width:0%;background:var(--amber);transition:width 0.3s;"></span></span> <span id="res-pressure-badge" style="font-size:0.85em;padding:1px 5px;border-radius:3px;margin-left:3px;"></span><div id="resource-popover" class="resource-popover" style="display:none;"></div></span> <span class="header-title-text">Swarm's Bee Hive</span> <span id="header-clock" class="header-clock"></span></h1>
+    <h1><img src="/static/bees/happy.svg" alt="" class="header-icon"><span class="ws-indicator" id="ws-dot"></span> <span id="resource-indicator" class="resource-indicator" style="display:none;font-size:0.65em;vertical-align:middle;margin-left:0.5em;cursor:pointer;position:relative;" data-action="toggleResourcePopover"><span id="res-mem-bar" style="display:inline-block;width:40px;height:8px;background:#333;border-radius:3px;overflow:hidden;vertical-align:middle;"><span id="res-mem-fill" style="display:block;height:100%;width:0%;background:var(--leaf);transition:width 0.3s;"></span></span> <span id="res-swap-bar" style="display:inline-block;width:30px;height:8px;background:#333;border-radius:3px;overflow:hidden;vertical-align:middle;margin-left:2px;"><span id="res-swap-fill" style="display:block;height:100%;width:0%;background:var(--amber);transition:width 0.3s;"></span></span> <span id="res-pressure-badge" style="font-size:0.85em;padding:1px 5px;border-radius:3px;margin-left:3px;"></span><div id="resource-popover" class="resource-popover" style="display:none;"></div></span> <span class="header-title-text">Swarm <span class="legacy-tag">(legacy)</span> Bee Hive</span> <span id="header-clock" class="header-clock"></span></h1>
     <div class="flex-center gap-md">
         <div class="status" id="status-bar">
             {{ worker_count }} workers
@@ -610,6 +610,7 @@
     <span><span class="sc-key">Alt+X</span> <span class="sc-label">Quit</span></span>
     <span><span class="sc-key">?</span> <span class="sc-label">Help</span></span>
     <a href="/api/docs/ui" target="_blank" class="sc-label no-underline" style="color:var(--muted)" title="Interactive API documentation">API Docs</a>
+    <a href="https://github.com/miopea/swarm-next" target="_blank" rel="noopener" class="sc-label no-underline" style="color:var(--muted)" title="This is Swarm (legacy) — the successor is Swarm Next">Swarm (legacy) &rarr; Swarm Next</a>
     <span class="shortcut-bar-version">
         <span class="sc-label" id="footer-version">{% if is_dev %}<span style="color:var(--honey)">(dev)</span>{% if build_sha %} <span style="color:var(--muted)">@ {{ build_sha }}</span>{% endif %}{% else %}v{{ version }}{% if build_sha %} <span style="color:var(--muted)">@ {{ build_sha }}</span>{% endif %}{% endif %}</span>
         {% if is_dev %}
@@ -1234,14 +1235,16 @@
 <div id="onboarding-modal" class="modal-overlay" style="display:flex" data-modal-dismiss="hideOnboarding">
     <div class="modal-box" role="dialog" aria-modal="true">
         <div class="panel-header">
-            <span>Welcome to Swarm</span>
+            <span>Welcome to Swarm (legacy)</span>
             <button class="btn btn-sm btn-secondary" data-action="hideOnboarding">Skip</button>
         </div>
         <div class="modal-padding">
             <div style="text-align:center;margin-bottom:1rem">
                 <img src="/static/bees/happy.svg" class="bee-icon" style="width:48px;height:48px" alt="">
             </div>
-            <p>Swarm orchestrates multiple AI coding agents. Here's how to get started:</p>
+            <p>Swarm (legacy) orchestrates multiple AI coding agents. It has been superseded by
+               <a href="https://github.com/miopea/swarm-next" target="_blank" rel="noopener">Swarm Next</a>
+               and is maintained for existing hives only. Here&rsquo;s how to get started:</p>
             <ol style="margin:1rem 0;padding-left:1.5rem;line-height:1.8">
                 <li><strong>Configure workers</strong> — Go to <a href="/config">Config &rarr; Workers</a> to add your first worker (name + project path)</li>
                 <li><strong>Launch workers</strong> — Click <strong>Launch Brood</strong> in the sidebar to start them</li>

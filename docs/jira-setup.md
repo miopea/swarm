@@ -1,4 +1,8 @@
-# Connecting your Swarm to Jira
+# Connecting your Swarm (legacy) hive to Jira
+
+> This documents **Swarm (legacy)**, superseded by
+> [Swarm Next](https://github.com/miopea/swarm-next).
+
 
 For a developer setting this up on their own machine. Roughly 10 minutes, most of it
 waiting for a sync cycle.

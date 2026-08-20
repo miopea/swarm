@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta name="theme-color" content="#15130F">
     <link rel="icon" href="/static/icon-192.png" type="image/png" sizes="192x192">
-    <title>Swarm — Login</title>
+    <title>Swarm (legacy) — Login</title>
     <script src="/static/theme.js?v={{ build_sha or version }}" nonce="{{ csp_nonce }}"></script>
     <style>
         :root, [data-theme="dark"] {
@@ -69,11 +69,24 @@
             color: var(--honey);
             margin-bottom: 0.25rem;
         }
+        .login-card h1 .legacy-tag {
+            font-size: 0.6em;
+            font-weight: 600;
+            color: var(--muted);
+            vertical-align: middle;
+        }
         .login-card .subtitle {
             color: var(--muted);
             font-size: 0.85rem;
             margin-bottom: 1.5rem;
         }
+        .login-card .legacy-note {
+            color: var(--muted);
+            font-size: 0.75rem;
+            line-height: 1.5;
+            margin-bottom: 1.5rem;
+        }
+        .login-card .legacy-note a { color: var(--honey); }
         .login-card .bee-logo {
             width: 64px;
             height: 64px;
@@ -173,8 +186,12 @@
 <body>
     <div class="login-card">
         <img src="/static/bees/happy.svg" alt="" class="bee-logo">
-        <h1>Swarm</h1>
+        <h1>Swarm <span class="legacy-tag">(legacy)</span></h1>
         <p class="subtitle">Sign in to your hive</p>
+        <p class="legacy-note">
+            This is <strong>Swarm (legacy)</strong>, superseded by
+            <a href="https://github.com/miopea/swarm-next" rel="noopener">Swarm Next</a>.
+        </p>
 
         {% if error %}
         <div class="error-banner">{{ error }}</div>

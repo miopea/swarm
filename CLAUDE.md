@@ -1,14 +1,20 @@
-# Swarm — Project Guide
+# Swarm (legacy) — Project Guide
 
 > See `~/.claude/CLAUDE.md` for universal rules (code quality, verification, shipping vocabulary, secrets, swarm) and its routing map to `rcg-architecture/docs/standards/`.
 
 ## Orientation
 
-- **What this is.** `swarm-ai` — a hive-mind orchestrator for Claude Code agents.
-  Python ≥3.12, aiohttp daemon plus PTY workers, one `swarm` entry point.
-- **How it runs here.** systemd **user** unit `swarm.service` ("Swarm Web
-  Dashboard"), `ExecStart=.venv/bin/swarm serve`, daemon API on **:9090**. Not a
-  system unit — `systemctl --user`, not `sudo systemctl`.
+- **What this is.** `swarm-ai` — **Swarm (legacy)**, a hive-mind orchestrator for
+  Claude Code agents. Python ≥3.12, aiohttp daemon plus PTY workers, one `swarm`
+  entry point. Superseded by Swarm Next; this repo is maintenance-only. The
+  GitHub repo is `miopea/swarm-legacy` (renamed from `miopea/swarm`).
+  **Display strings say "Swarm (legacy)"; identifiers do not** — the package is
+  still `swarm-ai`, the CLI still `swarm`, the unit still `swarm.service`, the
+  DB still `~/.swarm/swarm.db`. Do not "fix" that inconsistency.
+- **How it runs here.** systemd **user** unit `swarm.service`
+  ("Swarm (legacy) Web Dashboard"), `ExecStart=.venv/bin/swarm serve`, daemon
+  API on **:9090**. Not a system unit — `systemctl --user`, not
+  `sudo systemctl`.
 - **`swarm-next` is a DIFFERENT system on the same box.**
   `swarm-next-api.service` and `swarm-next-terminal-host.service` run alongside
   this one from `~/projects/personal/swarm-next`. Restarting the wrong unit looks

@@ -299,7 +299,9 @@ class SwarmCLI(click.Group):
 @click.version_option(package_name="swarm-ai")
 @click.pass_context
 def main(ctx: click.Context, log_level: str, log_file: str | None, log_format: str) -> None:
-    """Swarm -- a hive-mind for Claude Code agents.
+    """Swarm (legacy) -- a hive-mind for Claude Code agents.
+
+    Superseded by Swarm Next: https://github.com/miopea/swarm-next
 
     \b
     Run with a target name to launch directly:
@@ -2177,7 +2179,7 @@ def install_service_cmd(config_path: str | None, uninstall: bool) -> None:
         if uninstall:
             removed = uninstall_launchd()
             if removed:
-                click.echo("Swarm Launch Agent removed.")
+                click.echo("Swarm (legacy) Launch Agent removed.")
             else:
                 click.echo("No plist file found -- nothing to remove.")
             return
@@ -2200,7 +2202,7 @@ def install_service_cmd(config_path: str | None, uninstall: bool) -> None:
         if uninstall:
             removed = uninstall_service()
             if removed:
-                click.echo("Swarm service removed.")
+                click.echo("Swarm (legacy) service removed.")
             else:
                 click.echo("No service file found -- nothing to remove.")
             return

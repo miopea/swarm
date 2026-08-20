@@ -1,7 +1,7 @@
 [project]
 name = "swarm-ai"
 version = "2026.8.13"
-description = "A hive-mind for Claude Code agents — web orchestrator"
+description = "Swarm (legacy) — a hive-mind for Claude Code agents; superseded by Swarm Next"
 readme = "README.md"
 license = "MIT"
 authors = [
@@ -41,8 +41,9 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/miopea/swarm"
-Documentation = "https://github.com/miopea/swarm#readme"
+Repository = "https://github.com/miopea/swarm-legacy"
+Documentation = "https://github.com/miopea/swarm-legacy#readme"
+Successor = "https://github.com/miopea/swarm-next"
 
 [project.optional-dependencies]
 dev = [

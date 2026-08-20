@@ -1,4 +1,15 @@
-# Swarm
+# Swarm (legacy)
+
+> [!IMPORTANT]
+> **This is Swarm (legacy). It has been superseded by [Swarm Next](https://github.com/miopea/swarm-next).**
+>
+> New hives should start on Swarm Next — an architecture-first rewrite and the
+> project that continues active development. Swarm (legacy) stays available for
+> existing hives and receives maintenance only.
+>
+> Moving an existing hive across? See
+> [Swarm Next migration finalization](docs/specs/swarm-next-migration-finalization.md)
+> and the `swarm migration preview / finish / reverse` commands.
 
 A web-based control center for AI coding agents — [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Gemini CLI](https://github.com/google-gemini/gemini-cli), and [Codex CLI](https://github.com/openai/codex). Manage one agent or ten from a single browser tab — with autopilot, a task board, AI coordination, and email integration.
 
@@ -12,7 +23,7 @@ Every agent session runs in a managed PTY. The **web dashboard** gives you real-
 
 ## Contents
 
-**Start here:** [Why Swarm](#why-swarm) · [Features](#features) · [Requirements](#requirements) · [Installation](#installation) · [Quick Start](#quick-start) · [Install as App (PWA)](#install-as-app-pwa)
+**Start here:** [Why Swarm (legacy)](#why-swarm-legacy) · [Features](#features) · [Requirements](#requirements) · [Installation](#installation) · [Quick Start](#quick-start) · [Install as App (PWA)](#install-as-app-pwa)
 
 **Using it:** [Web Dashboard](#web-dashboard) · [Task System](#task-system) · [Pipelines](#pipelines) · [Queen & Proposals](#queen--proposals) · [MCP for Workers](#mcp-for-workers)
 
@@ -22,7 +33,7 @@ Every agent session runs in a managed PTY. The **web dashboard** gives you real-
 
 **Contributing:** [Testing](#testing) · [Development](#development) · [Contributing](#contributing) · [License](#license)
 
-## Why Swarm
+## Why Swarm (legacy)
 
 **Your agent sessions never stall.** **Drones** — Swarm's background poll workers — auto-approve safe prompts, revive crashed agents, and escalate the hard decisions to the **Queen** (a headless Claude conductor) or the operator. You stop babysitting and start reviewing results.
 
@@ -111,7 +122,7 @@ Drones are specialized background sweepers that share the daemon's poll loop. Ea
 ## Installation
 
 ```bash
-uv tool install git+https://github.com/miopea/swarm.git
+uv tool install git+https://github.com/miopea/swarm-legacy.git
 ```
 
 This puts `swarm` on your PATH. No clone, no venv. Then run the setup wizard:
@@ -953,8 +964,8 @@ Reports are saved as JSONL logs at `~/.swarm/reports/`. Configure via the `test:
 ## Development
 
 ```bash
-git clone https://github.com/miopea/swarm.git
-cd swarm
+git clone https://github.com/miopea/swarm-legacy.git
+cd swarm-legacy
 uv sync                    # install dependencies
 uv run swarm --help        # run CLI from source
 uv run pytest tests/ -q    # run test suite
@@ -964,13 +975,13 @@ uv run ruff format src/    # formatting
 
 ### Releases
 
-Swarm uses calver (`YYYY.M.D[.N]`). The release helper at `scripts/release.py` bumps the version anchor across `pyproject.toml` and `src/swarm/__init__.py` and promotes `CHANGELOG.md`'s `## Unreleased` section to a dated entry in a single motion. The global `/ship` slash command auto-detects this script and runs it before committing — no manual invocation required for normal flows. See `~/.claude/CLAUDE.md` (Release Management) for the contract every release script must honour.
+Swarm (legacy) uses calver (`YYYY.M.D[.N]`). The release helper at `scripts/release.py` bumps the version anchor across `pyproject.toml` and `src/swarm/__init__.py` and promotes `CHANGELOG.md`'s `## Unreleased` section to a dated entry in a single motion. The global `/ship` slash command auto-detects this script and runs it before committing — no manual invocation required for normal flows. See `~/.claude/CLAUDE.md` (Release Management) for the contract every release script must honour.
 
 ## Contributing
 
 Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup,
 the local test/lint gate, and code conventions. Bug reports and feature
-requests go in [GitHub issues](https://github.com/miopea/swarm/issues).
+requests go in [GitHub issues](https://github.com/miopea/swarm-legacy/issues).
 
 ## License
 

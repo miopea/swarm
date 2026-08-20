@@ -137,7 +137,10 @@ def test_both_repos_appear_when_a_command_spans_two():
     repos = repos_touched(
         "Bash",
         {
-            "command": "cp /home/u/projects/rcg/rcg-platform/a.ts /home/u/projects/rcg/rcg-platform-api/b.ts"
+            "command": (
+                "cp /home/u/projects/rcg/rcg-platform/a.ts "
+                "/home/u/projects/rcg/rcg-platform-api/b.ts"
+            )
         },
         "/home/u/projects",
         ROOTS,

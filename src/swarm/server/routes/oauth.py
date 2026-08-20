@@ -225,7 +225,7 @@ def _render_consent_page(
     body = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Authorize access — Swarm</title>
+<title>Authorize access — Swarm (legacy)</title>
 <style>
   :root {{ color-scheme: light dark; }}
   body {{ font-family: system-ui, -apple-system, sans-serif; background: #0f1115;
@@ -248,7 +248,7 @@ def _render_consent_page(
 </style></head>
 <body>
   <main class="card">
-    <h1>Authorize access to your Swarm</h1>
+    <h1>Authorize access to your Swarm (legacy) hive</h1>
     <p>An application is requesting access to <strong>{html.escape(origin)}</strong>’s
        MCP tools — this includes creating and completing tasks and messaging workers.</p>
     <dl>

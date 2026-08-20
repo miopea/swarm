@@ -300,7 +300,7 @@ class TestEmailBackend:
             )
             instance.send_message.assert_called_once()
             msg = instance.send_message.call_args[0][0]
-            assert "[Swarm]" in msg["Subject"]
+            assert "[Swarm (legacy)]" in msg["Subject"]
             assert "admin@test.com" in msg["To"]
 
     def test_filters_by_event_type(self):

@@ -208,7 +208,7 @@ class TestGenerateRegistrationOptions:
 
         kw = mock_gen.call_args.kwargs
         assert kw["rp_id"] == "example.com"
-        assert kw["rp_name"] == "Swarm"
+        assert kw["rp_name"] == "Swarm (legacy)"
 
     def test_excludes_existing_credentials(self) -> None:
         mock_opts = MagicMock()

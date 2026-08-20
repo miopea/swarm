@@ -1,7 +1,7 @@
 openapi: "3.0.3"
 info:
-  title: Swarm API
-  description: REST API for the Swarm multi-agent orchestrator. The version tracks the installed `swarm-ai` package (calendar-versioned).
+  title: Swarm (legacy) API
+  description: REST API for the Swarm (legacy) multi-agent orchestrator, superseded by Swarm Next (https://github.com/miopea/swarm-next). The version tracks the installed `swarm-ai` package (calendar-versioned).
   version: "2026.6.21"
   license:
     name: MIT

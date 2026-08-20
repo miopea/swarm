@@ -89,7 +89,7 @@ def _tail_file(path: Path, lines: int) -> str:
 def _collect_environment() -> Attachment:
     body = "\n".join(
         [
-            f"- **Swarm**: {swarm.__version__}",
+            f"- **Swarm (legacy)**: {swarm.__version__}",
             f"- **Python**: {sys.version.split()[0]}",
             f"- **Platform**: {platform.platform()}",
             f"- **Machine**: {platform.machine()}",
