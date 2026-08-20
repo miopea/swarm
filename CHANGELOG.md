@@ -8,6 +8,14 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Changes
 
+### Fixes
+
+## [2026.8.20] - 2026-08-20
+
+### Features
+
+### Changes
+
 - **This project is now Swarm (legacy).** Active development moved to
   [Swarm Next](https://github.com/miopea/swarm-next); this repository is
   maintenance-only. Every user-visible name — page titles, dashboard header,
@@ -30,6 +38,11 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
   the exact pre-rename string is replaced — a Description the operator
   customised is left alone, and a hand-tuned `ExecStart` / `WorkingDirectory` is
   never regenerated.
+
+- The unit-patch log line no longer claims `KillMode=process` regardless of
+  which transform actually fired — it now names the three it covers. An
+  operator reading the journal to explain a unit change was being pointed at
+  the wrong one.
 
 - INV-2's absence threshold is now its own knob, `drones.inv2_absent_threshold_seconds`,
   defaulting to 3600s instead of inheriting the display-only `drones.sleeping_threshold`
