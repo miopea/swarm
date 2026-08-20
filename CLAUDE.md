@@ -2,6 +2,38 @@
 
 > See `~/.claude/CLAUDE.md` for universal rules (code quality, verification, shipping vocabulary, secrets, swarm) and its routing map to `rcg-architecture/docs/standards/`.
 
+## Orientation
+
+- **What this is.** `swarm-ai` — a hive-mind orchestrator for Claude Code agents.
+  Python ≥3.12, aiohttp daemon plus PTY workers, one `swarm` entry point.
+- **How it runs here.** systemd **user** unit `swarm.service` ("Swarm Web
+  Dashboard"), `ExecStart=.venv/bin/swarm serve`, daemon API on **:9090**. Not a
+  system unit — `systemctl --user`, not `sudo systemctl`.
+- **`swarm-next` is a DIFFERENT system on the same box.**
+  `swarm-next-api.service` and `swarm-next-terminal-host.service` run alongside
+  this one from `~/projects/personal/swarm-next`. Restarting the wrong unit looks
+  like a fix that changed nothing.
+- **All state is one SQLite file: `~/.swarm/swarm.db`** (~99 MB). Beside it,
+  `invariant-log.jsonl` (Tier 0 hook decisions) and `pty-writes.jsonl`. Nothing
+  authoritative lives in this repo's tree.
+- **No deploy.** There is no production target and no `deploy.md`. Push is the
+  terminal state — say `pushed`, never `shipped`.
+- **CI gates on two Python versions**, `test (3.12)` and `test (3.13)`, and they
+  are required checks on `main`. Both must be green before merge.
+
+### Two `swarm.db` traps that have each cost a real investigation
+
+Both look like a correct query returning a true zero.
+
+- **`status` is `done`, NOT `completed`.** Querying `status='completed'` returns
+  `0` from a `0` denominator, which reads exactly like "nothing has happened yet".
+  Live values: `active`, `assigned`, `backlog`, `blocked`, `done`, `unassigned`.
+- **`completed_at` is a unix FLOAT, not an ISO string.** A string comparison
+  silently matches nothing and reports a clean zero.
+
+Query it read-only — `sqlite3.connect(f"file:{db}?mode=ro", uri=True)` — and
+print the denominator beside any count.
+
 ## Quick Reference
 
 ### Essential Rules
