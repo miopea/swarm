@@ -69,7 +69,6 @@ print the denominator beside any count.
 - **Event-driven decoupling** — Pilot emits events, daemon subscribes; never tight-couple components
 - **Feature-based modules** — Organize by domain (worker/, drones/, queen/, tasks/), not by layer
 - **Async everywhere** — All PTY/holder calls are async; all I/O is async. Never block the event loop.
-- **Explicit types** — Use dataclasses and type hints; help AI and humans understand intent
 - **Thin API handlers** — Validation in handlers, business logic in daemon/pilot/managers
 
 ---
