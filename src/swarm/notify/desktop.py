@@ -109,7 +109,7 @@ def _send_notify_send(title: str, message: str, urgency: str = "normal") -> None
     ns = shutil.which("notify-send")
     if not ns:
         return
-    cmd = [ns, f"--urgency={urgency}", "--app-name=Swarm"]
+    cmd = [ns, f"--urgency={urgency}", "--app-name=Swarm (legacy)"]
     icon = _get_icon_path()
     if icon:
         cmd.append(f"--icon={icon}")

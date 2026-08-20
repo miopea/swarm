@@ -17,7 +17,7 @@ _SERVICE_PATH = _SERVICE_DIR / _SERVICE_NAME
 
 _UNIT_TEMPLATE = """\
 [Unit]
-Description=Swarm Web Dashboard
+Description=Swarm (legacy) Web Dashboard
 After=network.target
 
 [Service]

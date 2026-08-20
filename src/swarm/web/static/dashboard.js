@@ -29,7 +29,7 @@
                 document.body.classList.add('panel-mode');
             });
         }
-        try { document.title = 'Swarm — Tasks & Decisions'; } catch (_e2) {}
+        try { document.title = 'Swarm (legacy) — Tasks & Decisions'; } catch (_e2) {}
     }
 
     // Show toast stored before a reload (survives location.reload)
@@ -1056,10 +1056,10 @@
                 // Unified push notification from daemon
                 if (data.priority === 'high') {
                     showToast(data.message, true, BEE.surprised);
-                    notifyBrowser('Swarm Alert', data.message, true);
+                    notifyBrowser('Swarm (legacy) Alert', data.message, true);
                 } else {
                     showToast(data.message, false, BEE.happy);
-                    notifyBrowser('Swarm', data.message);
+                    notifyBrowser('Swarm (legacy)', data.message);
                 }
                 addNotification(data.message, data.priority === 'high');
                 break;
@@ -8718,9 +8718,9 @@
             showToast('Notifications already enabled');
             var testOpts = { body: 'Notifications are working.', icon: '/static/bees/png/happy.png', badge: '/static/icon-192.png' };
             if ('serviceWorker' in navigator) {
-                navigator.serviceWorker.ready.then(function(reg) { reg.showNotification("Swarm's Bee Hive", testOpts); });
+                navigator.serviceWorker.ready.then(function(reg) { reg.showNotification("Swarm (legacy) Bee Hive", testOpts); });
             } else {
-                new Notification("Swarm's Bee Hive", testOpts);
+                new Notification("Swarm (legacy) Bee Hive", testOpts);
             }
             return;
         }

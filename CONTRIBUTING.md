@@ -1,13 +1,17 @@
-# Contributing to Swarm
+# Contributing to Swarm (legacy)
 
-Thanks for your interest in Swarm. This is a Python 3.12+ project managed with
+> **Note:** This repository is Swarm (legacy). Active development happens in
+> [Swarm Next](https://github.com/miopea/swarm-next) — send new features there.
+> Fixes for existing legacy hives are still welcome here.
+
+Thanks for your interest in Swarm (legacy). This is a Python 3.12+ project managed with
 [`uv`](https://docs.astral.sh/uv/).
 
 ## Development setup
 
 ```bash
-git clone https://github.com/miopea/swarm.git
-cd swarm
+git clone https://github.com/miopea/swarm-legacy.git
+cd swarm-legacy
 uv sync                    # install dependencies into .venv
 uv run swarm --help        # run the CLI from source
 ```
@@ -66,7 +70,7 @@ to the `TABS` list in that script. Output overwrites `docs/screenshots/*.png`.
 
 ## Reporting bugs / requesting features
 
-Open an issue on [GitHub](https://github.com/miopea/swarm/issues) with steps to
+Open an issue on [GitHub](https://github.com/miopea/swarm-legacy/issues) with steps to
 reproduce (for bugs) or the use case you're after (for features).
 
 ## License

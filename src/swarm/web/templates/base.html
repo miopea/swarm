@@ -11,7 +11,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="apple-touch-icon" href="/static/icon-192.png">
-    <title>{% block title %}Swarm's Bee Hive{% endblock %}</title>
+    <title>{% block title %}Swarm (legacy) — Bee Hive{% endblock %}</title>
     <script src="/static/theme.js?v={{ build_sha or version }}" nonce="{{ csp_nonce }}"></script>
     <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
@@ -858,6 +858,8 @@
         /* --- Dashboard header --- */
         .header-clock { color: var(--muted); font-size: 0.8rem; font-weight: normal; margin-left: 0.75rem; }
         .header-icon { height: 1.4em; vertical-align: middle; margin-right: 0.3rem; }
+        /* Marks this build as Swarm (legacy); the successor is Swarm Next. */
+        .legacy-tag { color: var(--muted); font-size: 0.7em; font-weight: 600; vertical-align: middle; }
         /* Compact status (mobile-only by default) */
         .status-compact { display: none; }
         /* Mobile-only bottom panel controls (hidden on desktop) */

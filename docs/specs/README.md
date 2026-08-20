@@ -1,6 +1,6 @@
 # Spec index
 
-Design and audit documents for Swarm. **None of these is a status source.**
+Design and audit documents for Swarm (legacy). **None of these is a status source.**
 [`../../CHANGELOG.md`](../../CHANGELOG.md) is the authoritative record of what
 shipped; the code is authoritative for how it works. A spec's job is to preserve
 the *reasoning* — the decisions, the rejected alternatives, and the incidents

@@ -1,4 +1,8 @@
-# Swarm Feature Roadmap
+# Swarm (legacy) Feature Roadmap
+
+> This documents **Swarm (legacy)**, superseded by
+> [Swarm Next](https://github.com/miopea/swarm-next).
+
 
 > Originally compiled from a deep-dive interview on 2026-02-26.
 > **Status (2026-04-16): Phases 1–6 are all shipped, plus a post-roadmap batch of Anthropic-engineering-inspired features (`swarm_batch` MCP tool, cron pipeline schedules, compact telemetry, approval-rate gauge, test infra pinning, skills registry, `claude_code_security` service handler, `swarm analyze-tools` CLI, opt-in CC sandbox).** This doc is retained as a historical reference for the original design. Current roadmap work lives in [`claude-code-roadmap.md`](claude-code-roadmap.md).

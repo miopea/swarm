@@ -28,7 +28,7 @@ _CATEGORY_LABELS: dict[Category, str] = {
     "question": "question",
 }
 
-_DEFAULT_REPO = "miopea/swarm"
+_DEFAULT_REPO = "miopea/swarm-legacy"
 
 
 @dataclass

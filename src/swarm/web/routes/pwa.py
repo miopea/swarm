@@ -57,8 +57,8 @@ async def handle_offline_page(request: web.Request) -> web.Response:
 async def handle_manifest(request: web.Request) -> web.Response:
     """PWA manifest for add-to-homescreen + Web Share Target support."""
     manifest = {
-        "name": "Swarm",
-        "short_name": "Swarm",
+        "name": "Swarm (legacy)",
+        "short_name": "Swarm (legacy)",
         "start_url": "/",
         "display": "standalone",
         "background_color": "#15130F",
@@ -78,7 +78,7 @@ async def handle_manifest(request: web.Request) -> web.Response:
             },
         ],
         # Web Share Target API: when this PWA is installed (homescreen),
-        # "Swarm" appears in the OS share sheet. iOS Safari ≥ 16.4 and
+        # "Swarm (legacy)" appears in the OS share sheet. iOS Safari ≥ 16.4 and
         # Android Chrome both support it. Shared payload lands at
         # /share-receive; server redirects to /?share=<id>; dashboard
         # JS opens the New Task modal pre-filled with the file as an

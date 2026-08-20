@@ -1,4 +1,8 @@
-# Swarm WebSocket Protocol
+# Swarm (legacy) WebSocket Protocol
+
+> This documents **Swarm (legacy)**, superseded by
+> [Swarm Next](https://github.com/miopea/swarm-next).
+
 
 ## Endpoints
 

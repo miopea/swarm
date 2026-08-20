@@ -1,4 +1,4 @@
-# swarm — project notes
+# swarm (legacy) — project notes
 
 > Moved out of `CLAUDE.md` on 2026-08-04 so it is read when relevant
 > rather than loaded into every session. The move itself carried the content
