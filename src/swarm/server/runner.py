@@ -101,12 +101,19 @@ def _acquire_daemon_lock() -> int:
 
 
 def _maybe_patch_systemd_unit() -> None:
-    """Auto-patch existing systemd unit to use KillMode=process."""
+    """Auto-patch the existing systemd unit to match current architecture.
+
+    See ``ensure_killmode_process`` for the transforms; it covers more than
+    KillMode now, so this logs the generic fact rather than naming one.
+    """
     try:
         from swarm.service import ensure_killmode_process
 
         if ensure_killmode_process():
-            _log.info("Patched systemd unit: KillMode=process (preserves workers across restarts)")
+            _log.info(
+                "Patched systemd unit (KillMode / legacy -c flag / Description) "
+                "and reloaded systemd"
+            )
     except Exception:
         pass  # not critical — skip on non-systemd systems
 
