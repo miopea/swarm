@@ -1,5 +1,5 @@
 ---
-description: Report structured progress on your current task — phase and percent complete.
+description: Reports structured progress on your current task — phase and percent complete. Use when the user asks for a progress update, or when a long task reaches a phase boundary worth recording on the board.
 argument-hint: <phase> <percent>
 ---
 

@@ -1,5 +1,5 @@
 ---
-description: Report that one of your tasks is blocked by another task — pauses idle-watcher nudges until the blocker clears.
+description: Reports that one of your tasks is blocked by another task, which pauses idle-watcher nudges until the blocker clears. Use when work cannot proceed because it depends on another task, or when the user says something is blocked or waiting on someone else.
 argument-hint: <task#> <blocked-by-task#> <reason>
 ---
 

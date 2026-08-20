@@ -1,5 +1,5 @@
 ---
-description: Show your current Swarm task, queue, peer worker status, and any unread messages.
+description: Shows your current Swarm task, queue, peer worker status, and any unread messages. Use when the user asks what you are working on, who is idle, what is on the board, or whether anything is waiting on you.
 ---
 
 Show me a tight Swarm status summary using the coordination tools.

@@ -1,5 +1,5 @@
 ---
-description: Share a finding — to named peers, or to the Queen when it affects everyone.
+description: Share a finding — to named peers, or to the Queen when it affects everyone. Pull-only by design: this sends to other workers or dispatches work, so it carries no "use when" trigger and fires only when invoked deliberately.
 argument-hint: <freeform finding text> [| to: worker1, worker2]
 ---
 

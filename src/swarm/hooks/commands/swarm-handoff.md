@@ -1,5 +1,5 @@
 ---
-description: Hand off your current task and dispatch follow-on work to another worker. Both arguments required.
+description: Hand off your current task and dispatch follow-on work to another worker. Both arguments required. Pull-only by design: this sends to other workers or dispatches work, so it carries no "use when" trigger and fires only when invoked deliberately.
 argument-hint: <target-worker> <task description>
 ---
 

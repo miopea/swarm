@@ -1,5 +1,5 @@
 ---
-description: Send a warning to a specific worker — API change, breakage, dependency they need to know about.
+description: Send a warning to a specific worker — API change, breakage, dependency they need to know about. Pull-only by design: this sends to other workers or dispatches work, so it carries no "use when" trigger and fires only when invoked deliberately.
 argument-hint: <to-worker> <warning text>
 ---
 
