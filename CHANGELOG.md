@@ -71,6 +71,13 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
   pins the relocation state so unit naming does not depend on whether the machine
   running the tests happens to be relocated.
 
+- `test_dev_reexec_when_installed` hung for 30s and timed out. It patched
+  `os.execvp` with a bare mock, but `execvp` *replaces* the process — nothing
+  after it runs — so execution fell through into `run_daemon()` and the test
+  waited on a real daemon. The circular-import fix above is what exposed it: the
+  `ImportError` had been aborting the test before it ever got that far. The mock
+  now raises `SystemExit`, which is what the real call does to the interpreter.
+
 ## [2026.8.20] - 2026-08-20
 
 ### Features
