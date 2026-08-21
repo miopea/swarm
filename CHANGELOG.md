@@ -10,6 +10,46 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+## [2026.8.21] - 2026-08-21
+
+### Features
+
+- **`swarm relocate` — the destructive update that frees the `swarm` name.**
+  Moves `~/.swarm` → `~/.swarm-legacy`, renames `swarm.service` →
+  `swarm-legacy.service` (carrying any `swarm.service.d/` drop-in across, with
+  its `ExecStart` renamed too), and removes the `swarm` entrypoint. Nothing about
+  a hive's contents changes — only where they live — and Legacy keeps working
+  afterwards under `swarm-legacy`.
+
+  It is genuinely destructive: the pty-holder binds `<state>/holder.sock`, and a
+  Unix socket's path is fixed at `bind()`, so the sidecar and every running
+  worker must go down for the directory to move. The command prints exactly what
+  will move, lists the live daemon/holder PIDs by name, and requires the operator
+  to type `relocate`. `--dry-run` shows all of it and touches nothing.
+
+  Every step is idempotent and the directory moves *first*, so an interrupted run
+  is fixed by re-running rather than by hand: state already in the new location is
+  found by `state_dir()` regardless of what the unit still says.
+
+  Both `swarm` and `swarm-legacy` entrypoints now ship together, so an install
+  that has not relocated is completely unaffected by the update.
+
+### Changes
+
+- **All runtime state now resolves through `swarm.paths.state_dir()`** instead of
+  ~50 hardcoded `~/.swarm` literals. Resolution is `$SWARM_STATE_DIR`, then
+  `~/.swarm-legacy` if it exists, then `~/.swarm`. The relocated directory is
+  preferred deliberately: freeing the old name means something else may create a
+  fresh `~/.swarm`, and Legacy must keep reading its own hive rather than
+  silently adopting an empty stranger.
+
+  Config values that get *serialized* (`report_dir`, the log file) use
+  `state_path_str()`, which stays `~`-anchored. Writing an absolute path into the
+  user's config would freeze today's location into the file and break on the next
+  relocation.
+
+### Fixes
+
 - **A lingering daemon could silently undo a relocation.** `_stop_live` sent
   SIGTERM and moved on; a daemon still shutting down keeps the log path it
   resolved at import — the old one — and recreates the directory the move just
@@ -99,46 +139,6 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
   Dropping the `swarm` entrypoint from the package would *not* have been a
   safe alternative: an un-relocated install would lose the command while its
   `swarm.service` still invoked `swarm serve`, breaking the service outright.
-
-## [2026.8.21] - 2026-08-21
-
-### Features
-
-- **`swarm relocate` — the destructive update that frees the `swarm` name.**
-  Moves `~/.swarm` → `~/.swarm-legacy`, renames `swarm.service` →
-  `swarm-legacy.service` (carrying any `swarm.service.d/` drop-in across, with
-  its `ExecStart` renamed too), and removes the `swarm` entrypoint. Nothing about
-  a hive's contents changes — only where they live — and Legacy keeps working
-  afterwards under `swarm-legacy`.
-
-  It is genuinely destructive: the pty-holder binds `<state>/holder.sock`, and a
-  Unix socket's path is fixed at `bind()`, so the sidecar and every running
-  worker must go down for the directory to move. The command prints exactly what
-  will move, lists the live daemon/holder PIDs by name, and requires the operator
-  to type `relocate`. `--dry-run` shows all of it and touches nothing.
-
-  Every step is idempotent and the directory moves *first*, so an interrupted run
-  is fixed by re-running rather than by hand: state already in the new location is
-  found by `state_dir()` regardless of what the unit still says.
-
-  Both `swarm` and `swarm-legacy` entrypoints now ship together, so an install
-  that has not relocated is completely unaffected by the update.
-
-### Changes
-
-- **All runtime state now resolves through `swarm.paths.state_dir()`** instead of
-  ~50 hardcoded `~/.swarm` literals. Resolution is `$SWARM_STATE_DIR`, then
-  `~/.swarm-legacy` if it exists, then `~/.swarm`. The relocated directory is
-  preferred deliberately: freeing the old name means something else may create a
-  fresh `~/.swarm`, and Legacy must keep reading its own hive rather than
-  silently adopting an empty stranger.
-
-  Config values that get *serialized* (`report_dir`, the log file) use
-  `state_path_str()`, which stays `~`-anchored. Writing an absolute path into the
-  user's config would freeze today's location into the file and break on the next
-  relocation.
-
-### Fixes
 
 - **`swarm stop`, `swarm migration finish` and `swarm migration reverse` were
   broken by a circular import** and failed with `ImportError: cannot import name
