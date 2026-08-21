@@ -405,3 +405,62 @@ class TestSurvivesAnAwkwardMachine:
 
         assert custom / "swarm" in result.entrypoints_removed
         assert not (custom / "swarm").exists()
+
+
+class TestUpdateDoesNotDestroyWhatOwnsTheNameNow:
+    """`uv tool install --force` overwrites whatever sits at a script name.
+
+    Verified against the real command, not assumed: a foreign `swarm` on
+    PATH is silently replaced by ours. On a relocated install that name has
+    been deliberately handed to something else, so an unguarded update
+    would destroy the binary standing there.
+    """
+
+    def test_preserves_and_restores_a_foreign_swarm(self, home: Path, monkeypatch) -> None:
+        from swarm.update import (
+            _preserve_foreign_entrypoints,
+            _restore_foreign_entrypoints,
+        )
+
+        (home / ".swarm-legacy").mkdir()
+        bin_dir = home / ".local" / "bin"
+        bin_dir.mkdir(parents=True)
+        foreign = bin_dir / "swarm"
+        foreign.write_text("#!/bin/sh\necho other project\n")
+
+        saved = _preserve_foreign_entrypoints()
+        assert saved and saved[0][0] == foreign
+        assert not foreign.exists()  # out of uv's way
+
+        # uv installs its own copy at the same name.
+        foreign.write_text("#!/bin/sh\necho swarm-ai\n")
+        _restore_foreign_entrypoints(saved)
+
+        assert "other project" in foreign.read_text()
+        assert not saved[0][1].exists()  # backup consumed
+
+    def test_leaves_our_own_shim_for_the_normal_cleanup(self, home: Path) -> None:
+        """Ours is not preserved — it is meant to be removed, not restored."""
+        from swarm.update import _preserve_foreign_entrypoints
+
+        (home / ".swarm-legacy").mkdir()
+        tools = home / ".local" / "share" / "uv" / "tools" / "swarm-ai" / "bin"
+        tools.mkdir(parents=True)
+        (tools / "swarm").write_text("#!/bin/sh\n")
+        bin_dir = home / ".local" / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "swarm").symlink_to(tools / "swarm")
+
+        assert _preserve_foreign_entrypoints() == []
+
+    def test_does_nothing_before_relocation(self, home: Path) -> None:
+        """`swarm` is legitimately ours there; moving it would break them."""
+        from swarm.update import _preserve_foreign_entrypoints
+
+        (home / ".swarm").mkdir()
+        bin_dir = home / ".local" / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "swarm").write_text("#!/bin/sh\n")
+
+        assert _preserve_foreign_entrypoints() == []
+        assert (bin_dir / "swarm").exists()

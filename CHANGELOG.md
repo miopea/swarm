@@ -41,6 +41,19 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
     exists to prevent. The search now covers both, and `perform_update()` shares
     the same helper so the two cannot drift.
 
+- **An update would have destroyed whatever else owned the `swarm` name.**
+  `uv tool install --force` overwrites whatever sits at a declared script's
+  name — confirmed by running it against a foreign binary and watching it
+  vanish. On a relocated install that name has deliberately been handed to
+  something else, so an update silently replaced it. `perform_update()` now
+  moves a `swarm` it does not own aside before installing and restores it
+  afterwards (preserving a symlink as a symlink), verified end to end: the
+  other project's binary is still there and still itself after a full update.
+
+  Dropping the `swarm` entrypoint from the package would *not* have been a
+  safe alternative: an un-relocated install would lose the command while its
+  `swarm.service` still invoked `swarm serve`, breaking the service outright.
+
 ## [2026.8.21] - 2026-08-21
 
 ### Features
