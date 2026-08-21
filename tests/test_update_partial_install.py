@@ -123,3 +123,184 @@ class TestSuccessIsVerified:
 
         assert ok is False, "a package missing its templates is not a successful update"
         assert "did not finish" in output
+
+
+class TestFailureIsRecoverable:
+    """A failed update must leave the full output somewhere on disk.
+
+    Both UI callers truncated to the FIRST 200 characters — which is uv's
+    download progress, while the line explaining the failure is appended
+    last. An operator was shown progress and told it was an error, on two
+    separate pages, and the real cause could not be recovered from the
+    browser at all.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_a_failed_install_writes_the_full_output(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+
+        async def _location() -> str:
+            return up._REPO_FULL_NAME
+
+        monkeypatch.setattr(up, "fetch_repo_location", _location)
+        monkeypatch.setattr(up, "_preserve_foreign_entrypoints", list)
+
+        async def _fail(cmd, output_lines, emit):
+            output_lines.append("Resolved 44 packages in 848ms")
+            output_lines.append("Downloading cryptography (4.5MiB)")
+            output_lines.append("error: the actual cause, appended last")
+            return False
+
+        monkeypatch.setattr(up, "_stream_install", _fail)
+
+        ok, output = await up.perform_update()
+
+        assert ok is False
+        log = tmp_path / up.UPDATE_LOG
+        assert log.is_file(), "the full output must survive the UI's truncation"
+        assert "the actual cause, appended last" in log.read_text()
+        assert str(log) in output, "and the operator must be told where it is"
+
+    @pytest.mark.asyncio()
+    async def test_the_log_is_rewritten_not_appended(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A stale log reads as evidence about the run you just did."""
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+        (tmp_path / up.UPDATE_LOG).write_text("OUTPUT FROM A PREVIOUS ATTEMPT")
+
+        up._write_update_log("the new attempt")
+
+        assert (tmp_path / up.UPDATE_LOG).read_text() == "the new attempt"
+
+
+class TestGitFailureExplainsItself:
+    """uv wraps git and swallows git's stderr.
+
+    All the operator sees is "Git operation failed / process didn't exit
+    successfully" — no cause, nothing to act on. Observed on a real box
+    where an `insteadOf` rule sent a PUBLIC repository down an
+    authenticated SSH path and the systemd daemon had no ssh-agent.
+    """
+
+    UV_OUTPUT = (
+        "Updating https://github.com/miopea/swarm.git (HEAD)\n"
+        "error: Git operation failed\n"
+        "  Caused by: failed to fetch into: /tmp/.tmpX/git-v0/db/cf0ffb2a\n"
+        "  Caused by: process didn't exit successfully"
+    )
+
+    def test_a_rewrite_is_named_when_the_fetch_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            up,
+            "github_url_rewrites",
+            lambda: ["url.git@github.com:.insteadof https://github.com/"],
+        )
+
+        hint = up.git_auth_hint(self.UV_OUTPUT)
+
+        assert hint is not None
+        assert "insteadof" in hint.lower(), "the actual rule must be quoted back"
+        assert "uv tool install --force" in hint, "and a way forward given"
+
+    def test_no_rewrite_still_gives_a_reproduction_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without a rewrite we cannot name the cause — so hand over the
+        command that reveals it, rather than guessing."""
+        monkeypatch.setattr(up, "github_url_rewrites", list)
+
+        hint = up.git_auth_hint(self.UV_OUTPUT)
+
+        assert hint is not None
+        assert "git ls-remote" in hint
+
+    def test_a_successful_run_is_not_annotated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(up, "github_url_rewrites", list)
+        assert up.git_auth_hint("Installed 44 packages in 121ms") is None
+
+    def test_the_rewrite_probe_ignores_non_github_rules(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A rewrite for some other host is not evidence about this fetch."""
+        import subprocess as sp
+
+        def _fake_run(*a: object, **kw: object) -> sp.CompletedProcess[str]:
+            return sp.CompletedProcess(
+                [], 0, stdout="url.git@gitlab.com:.insteadof https://gitlab.com/\n", stderr=""
+            )
+
+        monkeypatch.setattr(up.subprocess, "run", _fake_run)
+        assert up.github_url_rewrites() == []
+
+    def test_the_rewrite_probe_survives_a_missing_git(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _boom(*a: object, **kw: object) -> None:
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(up.subprocess, "run", _boom)
+        assert up.github_url_rewrites() == []
+
+
+class TestTheChildDoesNotInheritAUrlRewrite:
+    """The update must not need credentials for a PUBLIC repository.
+
+    Failing fast beats hanging, but needing no credentials beats both.
+    An operator rule like
+
+        url."git@github.com:".insteadOf = "https://github.com/"
+
+    drags an anonymous HTTPS clone onto SSH. From a shell that works —
+    the operator types the passphrase. In a systemd user daemon there is
+    no terminal to prompt on and no SSH_AUTH_SOCK to unlock a key with,
+    so the fetch dies as "process didn't exit successfully" with no cause
+    attached. Verified by hand against a real git with that rule set:
+    the fetch fails with "Host key verification failed" without this
+    override, and returns the HEAD sha with it.
+    """
+
+    def test_the_prefix_is_the_owner_not_the_whole_repo(self) -> None:
+        """Owner-scoped: long enough to beat a github.com-wide rule on
+        git's longest-prefix rule, narrow enough to leave every other
+        remote's routing alone."""
+        assert up._install_url_prefix() == "https://github.com/miopea/"
+
+    def test_an_identity_rewrite_is_injected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+
+        env = up._noninteractive_git_env()
+
+        assert env["GIT_CONFIG_COUNT"] == "1"
+        assert env["GIT_CONFIG_KEY_0"] == "url.https://github.com/miopea/.insteadOf"
+        assert env["GIT_CONFIG_VALUE_0"] == "https://github.com/miopea/", (
+            "value must equal the key's prefix — that is what makes it a no-op "
+            "that outranks the operator's rewrite"
+        )
+
+    def test_existing_git_config_env_is_extended_not_clobbered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An operator already using GIT_CONFIG_* keeps theirs."""
+        monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+        monkeypatch.setenv("GIT_CONFIG_KEY_0", "http.sslVerify")
+        monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
+
+        env = up._noninteractive_git_env()
+
+        assert env["GIT_CONFIG_COUNT"] == "2"
+        assert env["GIT_CONFIG_KEY_0"] == "http.sslVerify", "theirs survives"
+        assert env["GIT_CONFIG_KEY_1"] == "url.https://github.com/miopea/.insteadOf"
+
+    def test_git_cannot_prompt_or_ask(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A prompt against stdin=DEVNULL is a hang, not a failure."""
+        monkeypatch.setenv("SSH_ASKPASS", "/usr/bin/ssh-askpass")
+        monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+
+        env = up._noninteractive_git_env()
+
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
+        assert "BatchMode=yes" in env["GIT_SSH_COMMAND"]
+        assert "SSH_ASKPASS" not in env, "a GUI prompt on a headless daemon is a hang too"

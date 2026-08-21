@@ -14,6 +14,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -551,6 +552,46 @@ _GIT_AUTH_MARKERS = (
     "host key verification failed",
 )
 
+# uv wraps git and does NOT pass through git's stderr, so the underlying
+# reason is invisible: all the operator sees is "process didn't exit
+# successfully". These are uv's own words for "the git fetch failed", and
+# they are the only hook available for explaining WHY.
+_GIT_FAILURE_MARKERS = (
+    "git operation failed",
+    "failed to fetch into",
+    "failed to clone into",
+)
+
+
+def github_url_rewrites() -> list[str]:
+    """Any ``insteadOf`` rule that redirects github.com URLs.
+
+    Deterministic where string-matching is not.  This repository is
+    public, so an HTTPS clone needs no credentials — but a rule like
+    ``url.git@github.com:.insteadOf=https://github.com/`` silently sends
+    it over SSH instead, and a systemd user daemon has no ``SSH_AUTH_SOCK``
+    and no way to unlock a key.  The fetch then fails for a reason uv
+    never shows.
+
+    Returns the offending config lines, empty when there are none.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "config", "--get-regexp", r"url\..*\.insteadOf"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    return [
+        line.strip()
+        for line in proc.stdout.splitlines()
+        if "github.com" in line.lower() and line.strip()
+    ]
+
 
 def _noninteractive_git_env() -> dict[str, str]:
     """Environment that makes git FAIL rather than wait for a human.
@@ -580,26 +621,85 @@ def _noninteractive_git_env() -> dict[str, str]:
         env["GIT_SSH_COMMAND"] = f"{existing} -oBatchMode=yes"
     env.pop("SSH_ASKPASS", None)
     env.pop("SSH_ASKPASS_REQUIRE", None)
+
+    # Neutralise any `insteadOf` rewrite for OUR url, for this child only.
+    #
+    # Failing fast is better than hanging, but the best outcome is not
+    # needing credentials at all: this repository is public, so anonymous
+    # HTTPS works everywhere. An operator rule like
+    #   url."git@github.com:".insteadOf = "https://github.com/"
+    # (common on machines set up for other tooling) drags the clone onto
+    # SSH, and a systemd user daemon has neither a terminal to prompt on
+    # nor an ssh-agent to unlock a key with. Observed exactly that: the
+    # same command succeeds from a shell, where the operator types the
+    # passphrase, and fails in the daemon with no recoverable reason.
+    #
+    # git resolves insteadOf by LONGEST matching prefix, so an identity
+    # rewrite on the more specific owner prefix wins over a rule written
+    # for all of github.com. Scoped to the repo we actually install from,
+    # so no other remote's routing is touched.
+    prefix = _install_url_prefix()
+    if prefix:
+        count = env.get("GIT_CONFIG_COUNT")
+        index = int(count) if count and count.isdigit() else 0
+        env[f"GIT_CONFIG_KEY_{index}"] = f"url.{prefix}.insteadOf"
+        env[f"GIT_CONFIG_VALUE_{index}"] = prefix
+        env["GIT_CONFIG_COUNT"] = str(index + 1)
     return env
 
 
-def git_auth_hint(output: str) -> str | None:
-    """Explain an auth failure that should never have been reachable.
+def _install_url_prefix() -> str:
+    """The ``https://host/owner/`` prefix of the install source, or ''."""
+    url = _INSTALL_SOURCE.removeprefix("git+")
+    if not url.startswith("https://"):
+        return ""
+    parts = url.split("/")
+    # https: / / host / owner / repo  ->  need at least the owner segment
+    if len(parts) < 5:
+        return ""
+    return "/".join(parts[:4]) + "/"
 
-    Without this the operator sees a raw ssh error for a PUBLIC repo,
-    which reads as "the update is broken" rather than "your git is
-    rewriting this URL to SSH and the daemon has no key".
+
+def git_auth_hint(output: str) -> str | None:
+    """Explain a git failure that should never have been reachable.
+
+    Two ways in.  An explicit auth marker is conclusive.  But uv wraps
+    git and swallows its stderr, so the common case shows only "Git
+    operation failed / process didn't exit successfully" with no cause at
+    all — observed on a real box, where the operator could not have
+    diagnosed it from any output the tool produced.
+
+    For that case the rewrite rules are checked directly, which is
+    deterministic where string-matching is not: this repository is
+    public, so if git still needed credentials, something redirected the
+    URL away from anonymous HTTPS.
     """
     lowered = output.lower()
-    if not any(marker in lowered for marker in _GIT_AUTH_MARKERS):
+    explicit_auth = any(marker in lowered for marker in _GIT_AUTH_MARKERS)
+    git_failed = any(marker in lowered for marker in _GIT_FAILURE_MARKERS)
+    if not (explicit_auth or git_failed):
         return None
+
+    rewrites = github_url_rewrites()
+    if rewrites:
+        return (
+            "The git fetch failed, and this git rewrites GitHub URLs: "
+            + "; ".join(rewrites)
+            + ". That sends a PUBLIC repository — which needs no credentials over "
+            "HTTPS — down an authenticated SSH path instead, and this daemon has no "
+            "ssh-agent to unlock a key with. Scope or remove that rewrite, or start "
+            "the daemon with access to an agent. Until then, update from a shell "
+            f"that can authenticate: uv tool install --force --no-cache {_INSTALL_SOURCE}"
+        )
+    if explicit_auth:
+        return (
+            "The update needed git credentials, but this repository is public and "
+            "an HTTPS clone needs none. Something is redirecting the URL away from "
+            "anonymous HTTPS. Check with: git config --get-regexp 'url\\..*insteadOf'"
+        )
     return (
-        "The update needed git credentials, but this repository is public and "
-        "an HTTPS clone needs none. Your git is almost certainly rewriting "
-        "https://github.com/ to SSH (an 'insteadOf' rule in ~/.gitconfig), and "
-        "the daemon has no way to unlock a passphrase-protected key. Remove or "
-        "scope that rewrite, or load the key into an ssh-agent the daemon can "
-        "reach. Check with: git config --get-regexp 'url\\..*insteadOf'"
+        "The git fetch failed and uv does not report git's own error. Reproduce it "
+        f"directly to see the cause: git ls-remote {_INSTALL_SOURCE.removeprefix('git+')}"
     )
 
 
@@ -656,6 +756,32 @@ async def _stream_install(
         return False
 
 
+# In $HOME, beside the relocation log and for the same reason: the update
+# REPLACES the package, so a log inside the install tree is destroyed by the
+# very operation it is recording.
+UPDATE_LOG = ".swarm-update.log"
+
+
+def _write_update_log(output: str) -> Path | None:
+    """Persist the full update output, whatever the UI chose to show.
+
+    Both callers truncated: the dashboard and the config page each showed
+    the first 200 characters, which is uv's download progress, while the
+    line that explains the failure is appended LAST. An operator was
+    shown progress and told it was an error, twice, and the actual cause
+    was unrecoverable from the browser.
+
+    A file on disk is not subject to anyone's formatting decisions.
+    """
+    path = Path.home() / UPDATE_LOG
+    try:
+        path.write_text(output)
+        return path
+    except OSError:
+        _log.debug("could not write %s", path, exc_info=True)
+        return None
+
+
 async def perform_update(
     on_output: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
@@ -689,13 +815,22 @@ async def perform_update(
 
     output_lines: list[str] = []
     if not await _stream_install(cmd, output_lines, _emit):
-        return False, "\n".join(output_lines)
+        combined = "\n".join(output_lines)
+        written = _write_update_log(combined)
+        if written:
+            note = f"Full output: {written}"
+            _emit(note)
+            combined += f"\n{note}"
+        _log.error("[update] failed; full output at %s", written or "<unwritable>")
+        return False, combined
 
     # uv exited 0 — but verify what it produced rather than trusting the
     # exit code, since a broken install is reported by the WEB layer four
     # steps later, long after the update claimed to have worked.
     if _report_partial_install(output_lines, _emit):
-        return False, "\n".join(output_lines)
+        combined = "\n".join(output_lines)
+        _write_update_log(combined)
+        return False, combined
 
     # Clear cache so next check reflects the new version
     try:

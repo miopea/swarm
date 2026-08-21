@@ -10,6 +10,85 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+## [2026.8.21.9] - 2026-08-21
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **The in-app update failed on any machine whose git rewrites GitHub URLs.**
+  This is the root cause behind every "Update failed" report in this sequence.
+
+  A rule like `url."git@github.com:".insteadOf = "https://github.com/"` — common
+  on machines set up for other tooling — drags an anonymous HTTPS clone of a
+  PUBLIC repository onto SSH. From a shell that still works, because the
+  operator types the passphrase. In a systemd user daemon there is no terminal
+  to prompt on and no `SSH_AUTH_SOCK` to unlock a key with, so the fetch dies as
+  `error: Git operation failed / process didn't exit successfully` — with the
+  cause never reaching any log, because uv does not pass through git's stderr.
+
+  Better messages were not the fix; not needing credentials was. The updater now
+  injects an identity `insteadOf` for its own owner prefix into the install
+  child's environment via `GIT_CONFIG_*`. git resolves `insteadOf` by longest
+  matching prefix, so `https://github.com/miopea/` outranks a rule written for
+  all of `github.com`, and the clone stays on anonymous HTTPS. Scoped to the
+  repo we install from, applied only to that child, and no other remote's
+  routing is affected.
+
+  Verified against a real git carrying that rule: without the override the fetch
+  fails with `Host key verification failed`; with it, `git ls-remote` returns the
+  HEAD sha.
+
+## [2026.8.21.8] - 2026-08-21
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **A failed git fetch now explains itself.** uv wraps git and does not pass
+  through git's stderr, so a fetch failure surfaces as nothing but
+  `error: Git operation failed / Caused by: process didn't exit successfully`.
+  There is no cause in that message and nothing an operator can act on — the
+  update simply appears broken.
+
+  On a real box the actual reason was an `insteadOf` rule rewriting
+  `https://github.com/` to SSH. This repository is PUBLIC, so an HTTPS clone
+  needs no credentials at all; the rewrite sent it down an authenticated path
+  instead, and a systemd user daemon has no `SSH_AUTH_SOCK` to unlock a key
+  with. Nothing in any log said so.
+
+  On a git failure the updater now reads the rewrite rules directly — which is
+  deterministic where matching uv's prose is not — and names the offending rule,
+  explains why a public repo should not have needed credentials, and gives a
+  shell command that will work. With no rewrite to blame it hands over the
+  `git ls-remote` that reproduces the failure with git's own error visible,
+  rather than guessing.
+
+## [2026.8.21.7] - 2026-08-21
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **A failed update could not be diagnosed from the browser.** Both UI callers
+  showed `output.substring(0, 200)` — the FIRST 200 characters, which is uv's
+  download progress, while the line that explains the failure is appended LAST.
+  The operator was shown progress and told it was an error. `dashboard.js` was
+  corrected in 2026.8.21.5; `config.html` has its own copy of the handler and
+  was missed, so the Updates panel kept doing it.
+
+  Both now show the tail, and `perform_update()` writes the complete output to
+  `~/.swarm-update.log` regardless — in `$HOME` rather than the install tree,
+  because the update REPLACES the package and a log inside it is destroyed by
+  the operation it is recording. A file on disk is not subject to anyone's
+  formatting decisions.
+
 ## [2026.8.21.6] - 2026-08-21
 
 ### Features
