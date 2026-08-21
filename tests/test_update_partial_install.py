@@ -1,0 +1,125 @@
+"""A killed update must not leave a package that looks installed but is not.
+
+The chain this pins, observed end to end on a live box:
+
+``_INSTALL_TIMEOUT`` was 120s. A real update on a real connection was
+still downloading cryptography (4.5 MiB) and building red-black-tree-mod
+from source when the timeout fired and ``proc.kill()`` ran. But
+``uv tool install --force`` uninstalls BEFORE it installs, so the kill
+landed after the old version was gone and before the data files were
+written. The .py modules were there, so the daemon started and served
+happily — until the first page load, which died with "Template
+'dashboard.html' not found", a symptom four steps removed from its cause.
+
+Meanwhile the dashboard reported the failure as the FIRST 200 characters
+of output, which is download progress. The one line that explained it —
+the timeout message — is appended last, and was never shown.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from swarm import update as up
+
+
+class TestArtifactDetection:
+    def test_a_complete_install_reports_nothing_missing(self) -> None:
+        """Positive control: this very checkout is complete."""
+        assert up.missing_install_artifacts() == []
+
+    def test_a_missing_template_is_detected(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The exact shape of the broken install: modules yes, data files no."""
+        pkg = tmp_path / "swarm"
+        (pkg / "web" / "static").mkdir(parents=True)
+        (pkg / "web" / "static" / "dashboard.js").write_text("// present")
+        (pkg / "web" / "templates").mkdir(parents=True)
+        # dashboard.html deliberately absent
+        fake = type("M", (), {"__file__": str(pkg / "__init__.py")})
+        monkeypatch.setitem(__import__("sys").modules, "swarm", fake)
+
+        missing = up.missing_install_artifacts()
+
+        assert missing == ["web/templates/dashboard.html"]
+
+    def test_an_unlocatable_package_invents_no_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Not knowing must not be reported as broken."""
+        broken = type("M", (), {})  # no __file__
+        monkeypatch.setitem(__import__("sys").modules, "swarm", broken)
+        assert up.missing_install_artifacts() == []
+
+
+class TestTimeoutIsNotSilent:
+    @pytest.mark.asyncio()
+    async def test_timeout_names_itself_and_the_risk(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(up, "_INSTALL_TIMEOUT", 0.01)
+        monkeypatch.setattr(up, "missing_install_artifacts", lambda: ["web/templates/x.html"])
+
+        class _Hanging:
+            returncode = None
+
+            def __init__(self) -> None:
+                self.stdout = self
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self) -> bytes:
+                import asyncio as _a
+
+                await _a.sleep(10)  # never yields before the timeout
+                raise StopAsyncIteration
+
+            def kill(self) -> None:
+                self.returncode = -9
+
+            async def wait(self) -> int:
+                return -9
+
+        lines: list[str] = []
+        with patch("asyncio.create_subprocess_exec", return_value=_Hanging()):
+            ok = await up._stream_install(["uv"], lines, lines.append)
+
+        assert ok is False
+        joined = "\n".join(lines)
+        assert "timed out" in joined and "killed" in joined
+        assert "partly written" in joined, "the destructive consequence must be stated"
+        assert "uv tool install --force" in joined, "and the recovery command given"
+
+
+class TestSuccessIsVerified:
+    @pytest.mark.asyncio()
+    async def test_uv_exit_zero_is_not_trusted_on_its_own(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """uv exited 0 but the data files are missing — that is a failure.
+
+        Trusting the exit code is what let a broken install be reported
+        four steps later by the web layer instead of by the updater.
+        """
+        monkeypatch.setattr(up, "_preserve_foreign_entrypoints", list)
+        monkeypatch.setattr(up, "_restore_foreign_entrypoints", lambda saved: None)
+        monkeypatch.setattr(up, "_drop_reoccupied_entrypoint", list)
+
+        async def _location() -> str:
+            return up._REPO_FULL_NAME
+
+        monkeypatch.setattr(up, "fetch_repo_location", _location)
+        monkeypatch.setattr(up, "missing_install_artifacts", lambda: ["web/templates/x.html"])
+
+        install = AsyncMock()
+        install.returncode = 0
+        install.stdout.__aiter__.return_value = iter([b"Installed 44 packages\n"])
+
+        with patch("asyncio.create_subprocess_exec", return_value=install):
+            ok, output = await up.perform_update()
+
+        assert ok is False, "a package missing its templates is not a successful update"
+        assert "did not finish" in output

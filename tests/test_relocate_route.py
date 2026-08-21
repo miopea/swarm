@@ -307,3 +307,64 @@ class TestBlockedRelocation:
             )
         )
         assert payload["blocked_reason"] is None
+
+
+class TestStatusDoesNotBlockTheEventLoop:
+    """The relocation banner's own status call froze the whole daemon.
+
+    ``plan()`` was correctly offloaded with ``asyncio.to_thread`` — and
+    then ``_relocation_payload()`` was called on the event loop, where
+    ``dir_size_bytes()`` runs ``rglob("*")`` plus a ``stat()`` on every
+    file in the state directory. That directory holds ``backups/`` (up
+    to seven daily copies of a ~99 MB database), ``uploads/``,
+    ``memory/`` and the Queen's workdir.
+
+    While that walk runs, nothing else does: no HTTP, no WebSocket, no
+    worker polling. Observed on a real box as a dashboard that HUNG
+    rather than errored — and because the freeze happened on the very
+    request the banner makes to render itself, the relocation it was
+    offering could never be started at all.
+    """
+
+    def test_the_directory_walk_happens_off_the_event_loop(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        import threading
+
+        source = tmp_path / ".swarm"
+        source.mkdir()
+        (source / "swarm.db").write_bytes(b"x" * 1024)
+
+        monkeypatch.setattr(
+            rl,
+            "plan",
+            lambda: rl.RelocationPlan(
+                source=source,
+                target=tmp_path / ".swarm-legacy",
+                move_needed=True,
+                old_unit=None,
+                new_unit=tmp_path / "swarm-legacy.service",
+                unit_active=False,
+                target_exists=False,
+            ),
+        )
+
+        loop_thread = threading.get_ident()
+        walked_on: list[int] = []
+        real = rl.dir_size_bytes
+
+        def _tracking(path: Path) -> int | None:
+            walked_on.append(threading.get_ident())
+            return real(path)
+
+        monkeypatch.setattr(rl, "dir_size_bytes", _tracking)
+
+        request = make_mocked_request("GET", "/api/relocate")
+        resp = asyncio.run(system.handle_relocation_status(request))
+
+        assert resp.status == 200
+        assert walked_on, "positive control — the size walk must actually have run"
+        assert all(tid != loop_thread for tid in walked_on), (
+            "dir_size_bytes ran on the event loop thread; a large state directory "
+            "would freeze every request, socket and worker poll for its duration"
+        )

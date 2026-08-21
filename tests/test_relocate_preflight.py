@@ -110,3 +110,52 @@ class TestPreflightOrdering:
         monkeypatch.setattr(rl, "_check_socket_path_fits", lambda t: None)
 
         rl.preflight(_plan(source=source, target=target))  # must not raise
+
+
+class TestSystemdPreflight:
+    """systemd is what starts the hive again — verify it BEFORE stopping anything."""
+
+    def test_missing_systemd_refuses_without_stopping_the_hive(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Otherwise: service stopped, state moved, unit nothing can load.
+
+        The operator is then left with no dashboard and no obvious way
+        back — from pressing one button in a web page.
+        """
+        source = tmp_path / ".swarm"
+        source.mkdir()
+        (source / "swarm.db").write_bytes(b"the hive")
+
+        stopped: list[str] = []
+        monkeypatch.setattr(rl, "_stop_live", lambda p, **kw: stopped.append("stopped"))
+        monkeypatch.setattr(rl, "_check_socket_path_fits", lambda t: None)
+        monkeypatch.setattr("swarm.service._check_systemd", lambda: "systemctl not found.")
+
+        with pytest.raises(rl.RelocationError, match="systemctl not found"):
+            rl.relocate(_plan(source=source, target=tmp_path / ".swarm-legacy"))
+
+        assert stopped == [], "nothing may be stopped when nothing can restart it"
+        assert (source / "swarm.db").read_bytes() == b"the hive"
+
+    def test_the_refusal_says_nothing_was_changed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A destructive command refusing must say the hive is untouched."""
+        source = tmp_path / ".swarm"
+        source.mkdir()
+        monkeypatch.setattr(rl, "_check_socket_path_fits", lambda t: None)
+        monkeypatch.setattr("swarm.service._check_systemd", lambda: "systemd unavailable")
+
+        with pytest.raises(rl.RelocationError, match="still running where it was"):
+            rl.preflight(_plan(source=source, target=tmp_path / ".swarm-legacy"))
+
+    def test_available_systemd_does_not_block(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        source = tmp_path / ".swarm"
+        source.mkdir()
+        monkeypatch.setattr(rl, "_check_socket_path_fits", lambda t: None)
+        monkeypatch.setattr("swarm.service._check_systemd", lambda: None)
+
+        rl.preflight(_plan(source=source, target=tmp_path / ".swarm-legacy"))  # must not raise

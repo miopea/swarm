@@ -32,6 +32,10 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         "_systemctl",
         lambda *args: subprocess.CompletedProcess(list(args), 0, stdout="", stderr=""),
     )
+    # The systemd availability pre-flight shells out through swarm.service,
+    # which is not stubbed by the line above and finds no systemctl in the
+    # test sandbox.  Stub the answer, not the mechanism.
+    monkeypatch.setattr("swarm.service._check_systemd", lambda: None)
     monkeypatch.delenv(ENV_VAR, raising=False)
     monkeypatch.delenv("UV_TOOL_BIN_DIR", raising=False)
     monkeypatch.delenv("XDG_BIN_HOME", raising=False)

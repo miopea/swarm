@@ -110,13 +110,19 @@ class TestMoveDetection:
 class TestPostUpdateCheck:
     @pytest.mark.asyncio()
     async def test_successful_update_reports_a_rename(self, monkeypatch) -> None:
-        """The user's ask: check the location AFTER the update lands."""
+        """The user's ask: check the location AFTER the update lands.
+
+        Uses a name from our OWN history. A rename between names this
+        project has answered to is the normal supported path — it is
+        reported, not refused. Refusing it would break every install
+        whose baked-in URL predates the current name.
+        """
         monkeypatch.setattr("swarm.update._preserve_foreign_entrypoints", list)
         monkeypatch.setattr("swarm.update._restore_foreign_entrypoints", lambda saved: None)
         monkeypatch.setattr("swarm.update._drop_reoccupied_entrypoint", list)
 
         async def _installed() -> str:
-            return "miopea/swarm-renamed-again"
+            return "miopea/swarm"
 
         monkeypatch.setattr("swarm.update.fetch_repo_location", _installed)
 
@@ -128,11 +134,62 @@ class TestPostUpdateCheck:
         with patch("asyncio.create_subprocess_exec", return_value=install):
             ok, output = await perform_update(on_output=lines.append)
 
-        assert ok is True
-        assert "miopea/swarm-renamed-again" in output
-        assert any("renamed-again" in line for line in lines), (
+        assert ok is True, "a rename within our own history must not block the update"
+        assert "miopea/swarm" in output
+        assert any("serves it as" in line for line in lines), (
             "the rename must reach the dashboard, not just the log"
         )
+
+    @pytest.mark.asyncio()
+    async def test_a_reused_name_is_refused_before_anything_installs(self, monkeypatch) -> None:
+        """The hazard behind freeing the `swarm` name.
+
+        GitHub's rename redirect is the only reason builds carrying the
+        old URL still update. It dies the moment a NEW repo claims the
+        freed name — and then the same baked-in URL resolves to someone
+        else's project, which would be installed straight over this hive
+        with no error at any layer. Refuse, and refuse BEFORE running uv:
+        refusing afterwards means the wrong package is already on disk.
+        """
+        monkeypatch.setattr("swarm.update._preserve_foreign_entrypoints", list)
+        monkeypatch.setattr("swarm.update._restore_foreign_entrypoints", lambda saved: None)
+        monkeypatch.setattr("swarm.update._drop_reoccupied_entrypoint", list)
+
+        async def _hijacked() -> str:
+            return "someone-else/swarm"
+
+        monkeypatch.setattr("swarm.update.fetch_repo_location", _hijacked)
+
+        with patch("asyncio.create_subprocess_exec") as spawn:
+            ok, output = await perform_update()
+
+        assert ok is False
+        assert "someone-else/swarm" in output
+        assert spawn.call_count == 0, "nothing may be installed from a repo that is not ours"
+
+    @pytest.mark.asyncio()
+    async def test_an_unreachable_probe_never_blocks_an_update(self, monkeypatch) -> None:
+        """A network failure is not evidence of a hijacked name.
+
+        Blocking on it would break the very migration the gate protects.
+        """
+        monkeypatch.setattr("swarm.update._preserve_foreign_entrypoints", list)
+        monkeypatch.setattr("swarm.update._restore_foreign_entrypoints", lambda saved: None)
+        monkeypatch.setattr("swarm.update._drop_reoccupied_entrypoint", list)
+
+        async def _unreachable() -> str:
+            return ""
+
+        monkeypatch.setattr("swarm.update.fetch_repo_location", _unreachable)
+
+        install = AsyncMock()
+        install.returncode = 0
+        install.stdout.__aiter__.return_value = iter([b"Installed 2 executables\n"])
+
+        with patch("asyncio.create_subprocess_exec", return_value=install):
+            ok, _ = await perform_update()
+
+        assert ok is True
 
     @pytest.mark.asyncio()
     async def test_unmoved_repo_stays_quiet(self, monkeypatch) -> None:

@@ -2326,7 +2326,14 @@ async def _restart_running_daemon(port: int, token: str, timeout: float = 30.0) 
     is_flag=True,
     help="Skip auto-restart of a running daemon after install",
 )
-def update(check_only: bool, no_restart: bool) -> None:
+@click.option(
+    "-y",
+    "--yes",
+    "assume_yes",
+    is_flag=True,
+    help="Skip the confirmation prompt (for scripted / fleet-wide upgrades)",
+)
+def update(check_only: bool, no_restart: bool, assume_yes: bool) -> None:
     """Check for and install updates from GitHub.
 
     If a swarm daemon is running on the local machine, it is automatically
@@ -2355,7 +2362,10 @@ def update(check_only: bool, no_restart: bool) -> None:
     if check_only:
         return
 
-    if not click.confirm("  Install update?", default=True):
+    # ``click.confirm`` aborts on EOF, so without this the command cannot be
+    # driven from a script — which is precisely how a fleet gets moved onto a
+    # build before an old repo name is reused.
+    if not assume_yes and not click.confirm("  Install update?", default=True):
         return
 
     click.echo("  Updating...")
