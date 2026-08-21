@@ -55,6 +55,22 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 - Three tests asserted `~/.swarm` literals and so passed only on an un-relocated
   developer machine. They now assert the value follows the state dir.
 
+- **`swarm init` would have resurrected `swarm.service` on a relocated install.**
+  It installs the unit whenever one is absent — and after `swarm relocate` one
+  *is* absent, so it wrote a fresh `swarm.service` re-occupying the freed name and
+  pointing at a `swarm` entrypoint that no longer exists: a unit that can never
+  start, created by a command the operator thought was safe. `install_service()`
+  and `ensure_killmode_process()` now resolve the unit through
+  `current_unit_name()`, which follows the state directory.
+
+- **The test suite wrote, enabled and started the developer's real
+  `~/.config/systemd/user/swarm.service`.** Eight `test_init_*` cases reached
+  `install_service()` unpatched. On a relocated box this silently undid part of
+  the relocation on every test run — which is how the bug above was found. An
+  autouse fixture now redirects the unit directory and stubs `systemctl`, and
+  pins the relocation state so unit naming does not depend on whether the machine
+  running the tests happens to be relocated.
+
 ## [2026.8.20] - 2026-08-20
 
 ### Features

@@ -16,6 +16,33 @@ _SERVICE_NAME = "swarm.service"
 _SERVICE_DIR = Path.home() / ".config" / "systemd" / "user"
 _SERVICE_PATH = _SERVICE_DIR / _SERVICE_NAME
 
+
+def current_unit_name() -> str:
+    """The unit this install actually uses.
+
+    After ``swarm relocate`` that is ``swarm-legacy.service``.  Resolving
+    it here rather than at import keeps ``swarm init`` and
+    ``swarm install-service`` from recreating ``swarm.service`` on a
+    relocated box — which would re-occupy the name the relocation just
+    freed, and point it at a ``swarm`` entrypoint that no longer exists.
+    """
+    from swarm.paths import is_relocated
+
+    return "swarm-legacy.service" if is_relocated() else _SERVICE_NAME
+
+
+def current_unit_path() -> Path:
+    """Path of the unit this install actually uses.
+
+    Derived from ``_SERVICE_PATH`` rather than ``_SERVICE_DIR`` so that a
+    test patching the former still controls where this points.
+    """
+    name = current_unit_name()
+    if name == _SERVICE_NAME:
+        return _SERVICE_PATH
+    return _SERVICE_PATH.parent / name
+
+
 _UNIT_TEMPLATE = """\
 [Unit]
 Description=Swarm (legacy) Web Dashboard
@@ -91,9 +118,10 @@ def ensure_killmode_process() -> bool:
     picks up the change immediately.  Returns True if the unit was
     patched.
     """
-    if not _SERVICE_PATH.exists():
+    unit_path = current_unit_path()
+    if not unit_path.exists():
         return False
-    content = _SERVICE_PATH.read_text()
+    content = unit_path.read_text()
     changed = False
     # Downgrade from KillMode=mixed (kills workers!) back to process
     if "KillMode=mixed" in content:
@@ -120,7 +148,7 @@ def ensure_killmode_process() -> bool:
         changed = True
     if not changed:
         return False
-    _SERVICE_PATH.write_text(content)
+    unit_path.write_text(content)
     _systemctl("daemon-reload")
     return True
 
@@ -262,15 +290,22 @@ def install_service(config_path: str | None = None) -> Path:
         raise RuntimeError(error)
 
     unit_content = generate_unit(config_path)
+    unit_name = current_unit_name()
+    unit_path = current_unit_path()
+    if unit_name != _SERVICE_NAME:
+        # Relocated install: the `swarm` entrypoint is gone.
+        unit_content = unit_content.replace("/swarm serve", "/swarm-legacy serve").replace(
+            " swarm serve", " swarm-legacy serve"
+        )
 
     _SERVICE_DIR.mkdir(parents=True, exist_ok=True)
-    _SERVICE_PATH.write_text(unit_content)
+    unit_path.write_text(unit_content)
 
     _systemctl("daemon-reload")
-    _systemctl("enable", _SERVICE_NAME)
-    _systemctl("start", _SERVICE_NAME)
+    _systemctl("enable", unit_name)
+    _systemctl("start", unit_name)
 
-    return _SERVICE_PATH
+    return unit_path
 
 
 def uninstall_service() -> bool:

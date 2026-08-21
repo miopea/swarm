@@ -45,13 +45,6 @@ def relocated_state_dir() -> Path:
     return Path.home() / RELOCATED_NAME
 
 
-def is_relocated() -> bool:
-    """True once the state directory has been moved off ``~/.swarm``."""
-    if os.environ.get(ENV_VAR):
-        return True
-    return relocated_state_dir().is_dir()
-
-
 def state_dir() -> Path:
     """Return the directory holding all Swarm (legacy) runtime state."""
     override = os.environ.get(ENV_VAR)
@@ -61,6 +54,17 @@ def state_dir() -> Path:
     if relocated.is_dir():
         return relocated
     return original_state_dir()
+
+
+def is_relocated() -> bool:
+    """True when this hive lives in the relocated directory.
+
+    Keyed on the resolved directory's *name*, not on how it was chosen, so
+    an explicit ``$SWARM_STATE_DIR`` pointing somewhere custom counts as
+    neither relocated nor original — which is right, because the unit and
+    entrypoint names only follow the ``.swarm-legacy`` convention.
+    """
+    return state_dir().name == RELOCATED_NAME
 
 
 def state_path_str(*parts: str) -> str:

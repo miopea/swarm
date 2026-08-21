@@ -226,3 +226,29 @@ class TestLiveProcessDetection:
         monkeypatch.setattr(rl, "_pid_alive", lambda _pid: False)
 
         assert rl.find_live_processes(state) == []
+
+
+class TestServiceNamingFollowsRelocation:
+    """`swarm init` must not resurrect the unit the relocation removed."""
+
+    def test_unit_name_is_swarm_service_before_relocating(self, home: Path, monkeypatch) -> None:
+        from swarm import service as svc
+
+        monkeypatch.undo()  # drop the conftest pin on current_unit_name
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+        (home / ".swarm").mkdir(exist_ok=True)
+        assert svc.current_unit_name() == "swarm.service"
+
+    def test_unit_name_follows_the_relocated_state_dir(self, home: Path, monkeypatch) -> None:
+        """Otherwise `swarm init` writes swarm.service on a relocated box.
+
+        That re-occupies the name the relocation just freed, and points it
+        at a `swarm` entrypoint that no longer exists — a unit that can
+        never start, created by a command the operator thought was safe.
+        """
+        from swarm import service as svc
+
+        monkeypatch.undo()
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
+        (home / ".swarm-legacy").mkdir(exist_ok=True)
+        assert svc.current_unit_name() == "swarm-legacy.service"
