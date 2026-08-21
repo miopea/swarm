@@ -10,6 +10,33 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+## [2026.8.21.8] - 2026-08-21
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **A failed git fetch now explains itself.** uv wraps git and does not pass
+  through git's stderr, so a fetch failure surfaces as nothing but
+  `error: Git operation failed / Caused by: process didn't exit successfully`.
+  There is no cause in that message and nothing an operator can act on — the
+  update simply appears broken.
+
+  On a real box the actual reason was an `insteadOf` rule rewriting
+  `https://github.com/` to SSH. This repository is PUBLIC, so an HTTPS clone
+  needs no credentials at all; the rewrite sent it down an authenticated path
+  instead, and a systemd user daemon has no `SSH_AUTH_SOCK` to unlock a key
+  with. Nothing in any log said so.
+
+  On a git failure the updater now reads the rewrite rules directly — which is
+  deterministic where matching uv's prose is not — and names the offending rule,
+  explains why a public repo should not have needed credentials, and gives a
+  shell command that will work. With no rewrite to blame it hands over the
+  `git ls-remote` that reproduces the failure with git's own error visible,
+  rather than guessing.
+
 ## [2026.8.21.7] - 2026-08-21
 
 ### Features

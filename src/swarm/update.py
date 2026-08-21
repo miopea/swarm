@@ -14,6 +14,7 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
@@ -551,6 +552,46 @@ _GIT_AUTH_MARKERS = (
     "host key verification failed",
 )
 
+# uv wraps git and does NOT pass through git's stderr, so the underlying
+# reason is invisible: all the operator sees is "process didn't exit
+# successfully". These are uv's own words for "the git fetch failed", and
+# they are the only hook available for explaining WHY.
+_GIT_FAILURE_MARKERS = (
+    "git operation failed",
+    "failed to fetch into",
+    "failed to clone into",
+)
+
+
+def github_url_rewrites() -> list[str]:
+    """Any ``insteadOf`` rule that redirects github.com URLs.
+
+    Deterministic where string-matching is not.  This repository is
+    public, so an HTTPS clone needs no credentials — but a rule like
+    ``url.git@github.com:.insteadOf=https://github.com/`` silently sends
+    it over SSH instead, and a systemd user daemon has no ``SSH_AUTH_SOCK``
+    and no way to unlock a key.  The fetch then fails for a reason uv
+    never shows.
+
+    Returns the offending config lines, empty when there are none.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "config", "--get-regexp", r"url\..*\.insteadOf"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if proc.returncode != 0:
+        return []
+    return [
+        line.strip()
+        for line in proc.stdout.splitlines()
+        if "github.com" in line.lower() and line.strip()
+    ]
+
 
 def _noninteractive_git_env() -> dict[str, str]:
     """Environment that makes git FAIL rather than wait for a human.
@@ -584,22 +625,45 @@ def _noninteractive_git_env() -> dict[str, str]:
 
 
 def git_auth_hint(output: str) -> str | None:
-    """Explain an auth failure that should never have been reachable.
+    """Explain a git failure that should never have been reachable.
 
-    Without this the operator sees a raw ssh error for a PUBLIC repo,
-    which reads as "the update is broken" rather than "your git is
-    rewriting this URL to SSH and the daemon has no key".
+    Two ways in.  An explicit auth marker is conclusive.  But uv wraps
+    git and swallows its stderr, so the common case shows only "Git
+    operation failed / process didn't exit successfully" with no cause at
+    all — observed on a real box, where the operator could not have
+    diagnosed it from any output the tool produced.
+
+    For that case the rewrite rules are checked directly, which is
+    deterministic where string-matching is not: this repository is
+    public, so if git still needed credentials, something redirected the
+    URL away from anonymous HTTPS.
     """
     lowered = output.lower()
-    if not any(marker in lowered for marker in _GIT_AUTH_MARKERS):
+    explicit_auth = any(marker in lowered for marker in _GIT_AUTH_MARKERS)
+    git_failed = any(marker in lowered for marker in _GIT_FAILURE_MARKERS)
+    if not (explicit_auth or git_failed):
         return None
+
+    rewrites = github_url_rewrites()
+    if rewrites:
+        return (
+            "The git fetch failed, and this git rewrites GitHub URLs: "
+            + "; ".join(rewrites)
+            + ". That sends a PUBLIC repository — which needs no credentials over "
+            "HTTPS — down an authenticated SSH path instead, and this daemon has no "
+            "ssh-agent to unlock a key with. Scope or remove that rewrite, or start "
+            "the daemon with access to an agent. Until then, update from a shell "
+            f"that can authenticate: uv tool install --force --no-cache {_INSTALL_SOURCE}"
+        )
+    if explicit_auth:
+        return (
+            "The update needed git credentials, but this repository is public and "
+            "an HTTPS clone needs none. Something is redirecting the URL away from "
+            "anonymous HTTPS. Check with: git config --get-regexp 'url\\..*insteadOf'"
+        )
     return (
-        "The update needed git credentials, but this repository is public and "
-        "an HTTPS clone needs none. Your git is almost certainly rewriting "
-        "https://github.com/ to SSH (an 'insteadOf' rule in ~/.gitconfig), and "
-        "the daemon has no way to unlock a passphrase-protected key. Remove or "
-        "scope that rewrite, or load the key into an ssh-agent the daemon can "
-        "reach. Check with: git config --get-regexp 'url\\..*insteadOf'"
+        "The git fetch failed and uv does not report git's own error. Reproduce it "
+        f"directly to see the cause: git ls-remote {_INSTALL_SOURCE.removeprefix('git+')}"
     )
 
 

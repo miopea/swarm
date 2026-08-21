@@ -1,6 +1,6 @@
 [project]
 name = "swarm-ai"
-version = "2026.8.21.7"
+version = "2026.8.21.8"
 description = "Swarm (legacy) — a hive-mind for Claude Code agents; superseded by Swarm Next"
 readme = "README.md"
 license = "MIT"

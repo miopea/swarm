@@ -174,3 +174,72 @@ class TestFailureIsRecoverable:
         up._write_update_log("the new attempt")
 
         assert (tmp_path / up.UPDATE_LOG).read_text() == "the new attempt"
+
+
+class TestGitFailureExplainsItself:
+    """uv wraps git and swallows git's stderr.
+
+    All the operator sees is "Git operation failed / process didn't exit
+    successfully" — no cause, nothing to act on. Observed on a real box
+    where an `insteadOf` rule sent a PUBLIC repository down an
+    authenticated SSH path and the systemd daemon had no ssh-agent.
+    """
+
+    UV_OUTPUT = (
+        "Updating https://github.com/miopea/swarm.git (HEAD)\n"
+        "error: Git operation failed\n"
+        "  Caused by: failed to fetch into: /tmp/.tmpX/git-v0/db/cf0ffb2a\n"
+        "  Caused by: process didn't exit successfully"
+    )
+
+    def test_a_rewrite_is_named_when_the_fetch_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            up,
+            "github_url_rewrites",
+            lambda: ["url.git@github.com:.insteadof https://github.com/"],
+        )
+
+        hint = up.git_auth_hint(self.UV_OUTPUT)
+
+        assert hint is not None
+        assert "insteadof" in hint.lower(), "the actual rule must be quoted back"
+        assert "uv tool install --force" in hint, "and a way forward given"
+
+    def test_no_rewrite_still_gives_a_reproduction_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Without a rewrite we cannot name the cause — so hand over the
+        command that reveals it, rather than guessing."""
+        monkeypatch.setattr(up, "github_url_rewrites", list)
+
+        hint = up.git_auth_hint(self.UV_OUTPUT)
+
+        assert hint is not None
+        assert "git ls-remote" in hint
+
+    def test_a_successful_run_is_not_annotated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(up, "github_url_rewrites", list)
+        assert up.git_auth_hint("Installed 44 packages in 121ms") is None
+
+    def test_the_rewrite_probe_ignores_non_github_rules(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A rewrite for some other host is not evidence about this fetch."""
+        import subprocess as sp
+
+        def _fake_run(*a: object, **kw: object) -> sp.CompletedProcess[str]:
+            return sp.CompletedProcess(
+                [], 0, stdout="url.git@gitlab.com:.insteadof https://gitlab.com/\n", stderr=""
+            )
+
+        monkeypatch.setattr(up.subprocess, "run", _fake_run)
+        assert up.github_url_rewrites() == []
+
+    def test_the_rewrite_probe_survives_a_missing_git(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _boom(*a: object, **kw: object) -> None:
+            raise FileNotFoundError("git")
+
+        monkeypatch.setattr(up.subprocess, "run", _boom)
+        assert up.github_url_rewrites() == []
