@@ -349,33 +349,61 @@ def _relocate_helper() -> Path | None:
     return Path(found) if found else None
 
 
-def _kill_mode_guard() -> str | None:
-    """Refuse the relocation when systemd would kill the helper mid-move.
+def _systemd_run_path() -> str | None:
+    """Path to ``systemd-run``, or None. A seam so tests can drive both paths."""
+    import shutil
 
-    ``relocate()`` runs ``systemctl stop swarm.service`` as its first
-    real step.  ``start_new_session=True`` puts the helper in its own
-    session but NOT its own cgroup, so without ``KillMode=process`` the
-    stop takes the whole cgroup down — helper included — leaving state
-    moved and the unit never rewritten.  That is exactly the
-    half-relocated hive that needs a terminal to repair, so it is worth
-    a pre-flight check rather than a post-mortem.
+    return shutil.which("systemd-run")
+
+
+def _relocate_command(helper: Path, log_path: Path) -> list[str]:
+    """The argv that runs the relocation OUTSIDE this daemon's cgroup.
+
+    ``relocate()`` runs ``systemctl --user stop swarm.service`` as its
+    first real step, so whatever performs the relocation must not be part
+    of what is being stopped.  A plain child with
+    ``start_new_session=True`` gets its own session but SHARES THE
+    CGROUP, and that is not enough: observed on a real box, the helper
+    was killed mid-stop while blocked on its own ``systemctl`` child,
+    which survived as an orphan.  The relocation log ended after the
+    plan, with no traceback, because a signal leaves none.
+
+    ``KillMode=process`` did not save it, and a pre-flight that checked
+    for ``KillMode=process`` was therefore checking the wrong thing
+    entirely — it passed, and the helper died anyway.
+
+    ``systemd-run --user`` puts the helper in its OWN transient unit and
+    cgroup, structurally out of reach of anything done to
+    ``swarm.service``.  ``--collect`` garbage-collects the transient unit
+    when it exits so a failed run does not linger in ``systemctl
+    --user list-units``.
+
+    Falls back to a bare invocation when ``systemd-run`` is unavailable.
+    That path keeps the old hazard, but it only applies where systemd is
+    absent — and where systemd is absent, nothing stops a unit, so
+    nothing kills the helper either.
     """
-    from swarm.service import current_unit_path
-
-    unit = current_unit_path()
-    if not unit.exists():
-        # Not systemd-managed — nothing stops the unit, nothing kills the helper.
-        return None
-    try:
-        if "KillMode=process" in unit.read_text():
-            return None
-    except OSError:
-        return None
-    return (
-        f"{unit.name} does not set KillMode=process, so stopping the service would "
-        "kill the relocation partway through. Reload swarm once (which patches the "
-        "unit), then try again."
-    )
+    runner = _systemd_run_path()
+    if not runner:
+        return [str(helper), "relocate", "--yes"]
+    # systemd-run sends the unit's output to the JOURNAL, not to the fd we
+    # pass it, so without these the relocation log silently stops existing —
+    # and that log is the only reason the last failure was diagnosable at
+    # all.  ``append:`` rather than ``truncate:`` because the caller has
+    # already opened the file fresh for this attempt; truncating again here
+    # would race that open and could discard the first lines.
+    return [
+        runner,
+        "--user",
+        "--collect",
+        "--unit=swarm-relocate",
+        "--description=Swarm (legacy) relocation",
+        f"--property=StandardOutput=append:{log_path}",
+        f"--property=StandardError=append:{log_path}",
+        str(helper),
+        "relocate",
+        "--yes",
+    ]
 
 
 @handle_errors
@@ -436,24 +464,20 @@ async def handle_relocate(request: web.Request) -> web.Response:
             "could not find the 'swarm-legacy' command needed to run the relocation", 500
         )
 
-    refusal = _kill_mode_guard()
-    if refusal is not None:
-        return json_error(refusal, 409)
-
     # The daemon dies partway through, so its output cannot be read back
     # in-process — and DEVNULL meant a RelocationError vanished entirely,
     # leaving the dashboard on "Relocating..." with no way to learn why.
     # A file outside the state directory survives the move either way.
     log_path = Path.home() / _RELOCATE_LOG
     try:
+        # Fresh per attempt: a stale log from a previous run is worse than
+        # none, because it reads as evidence about the run you just did.
         log = log_path.open("w")
     except OSError:
         log = None
     try:
         await asyncio.create_subprocess_exec(
-            str(helper),
-            "relocate",
-            "--yes",
+            *_relocate_command(helper, log_path),
             stdin=asyncio.subprocess.DEVNULL,
             stdout=log or asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.STDOUT if log else asyncio.subprocess.DEVNULL,

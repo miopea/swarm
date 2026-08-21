@@ -64,7 +64,6 @@ def helper_ok(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     helper = tmp_path / "swarm-legacy"
     helper.write_text("#!/bin/sh\n")
     monkeypatch.setattr(system, "_relocate_helper", lambda: helper)
-    monkeypatch.setattr(system, "_kill_mode_guard", lambda: None)
     return helper
 
 
@@ -86,29 +85,11 @@ class TestRefusals:
         assert b'"already"' in resp.body
         assert spawns == [], "a finished relocation must not re-run the helper"
 
-    def test_kill_mode_guard_refuses_before_touching_state(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, spawns: list
-    ) -> None:
-        """Without KillMode=process the stop kills the helper mid-move.
-
-        Discovering that afterwards means state moved and no unit written
-        — the one outcome that needs a terminal to repair.
-        """
-        monkeypatch.setattr(rl, "plan", lambda: _plan(tmp_path=tmp_path))
-        monkeypatch.setattr(system, "_relocate_helper", lambda: tmp_path / "swarm-legacy")
-        monkeypatch.setattr(system, "_kill_mode_guard", lambda: "unit would kill the helper")
-
-        resp = asyncio.run(system.handle_relocate(_post()))
-
-        assert resp.status == 409
-        assert spawns == [], "refused, so nothing may have been launched"
-
     def test_missing_helper_is_an_error_not_a_silent_noop(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, spawns: list
     ) -> None:
         monkeypatch.setattr(rl, "plan", lambda: _plan(tmp_path=tmp_path))
         monkeypatch.setattr(system, "_relocate_helper", lambda: None)
-        monkeypatch.setattr(system, "_kill_mode_guard", lambda: None)
 
         resp = asyncio.run(system.handle_relocate(_post()))
 
@@ -117,19 +98,63 @@ class TestRefusals:
 
 
 class TestHandoff:
-    def test_helper_runs_detached_so_the_stop_cannot_kill_it(
+    def test_helper_runs_in_its_own_cgroup_not_the_daemons(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, spawns: list, helper_ok: Path
     ) -> None:
+        """The defect a real box exposed: a child shares the daemon's cgroup.
+
+        ``relocate()`` runs ``systemctl --user stop swarm.service``, so a
+        helper inside that unit's cgroup is killed by the very command it
+        issued. ``start_new_session=True`` gives a new session but NOT a
+        new cgroup, and ``KillMode=process`` did not save it either — the
+        helper died mid-stop while blocked on its own ``systemctl`` child,
+        which survived as an orphan.
+
+        ``systemd-run --user`` is the structural fix: its own transient
+        unit, its own cgroup, out of reach of anything done to
+        swarm.service.
+        """
         monkeypatch.setattr(rl, "plan", lambda: _plan(tmp_path=tmp_path))
+        monkeypatch.setattr(system, "_systemd_run_path", lambda: "/usr/bin/systemd-run")
 
         resp = asyncio.run(system.handle_relocate(_post()))
 
         assert resp.status == 200
         assert len(spawns) == 1, "exactly one helper"
+        argv = spawns[0]["argv"]
+        assert argv[0] == "/usr/bin/systemd-run"
+        assert "--user" in argv and "--collect" in argv
+        assert argv[-3:] == [str(helper_ok), "relocate", "--yes"]
+
+    def test_the_relocation_log_survives_systemd_run(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, spawns: list, helper_ok: Path
+    ) -> None:
+        """systemd-run sends output to the JOURNAL, not to our fd.
+
+        Without an explicit StandardOutput the relocation log silently
+        stops existing — and that log is the only reason the previous
+        failure could be diagnosed at all.
+        """
+        monkeypatch.setattr(rl, "plan", lambda: _plan(tmp_path=tmp_path))
+        monkeypatch.setattr(system, "_systemd_run_path", lambda: "/usr/bin/systemd-run")
+
+        asyncio.run(system.handle_relocate(_post()))
+
+        argv = spawns[0]["argv"]
+        assert any(a.startswith("--property=StandardOutput=append:") for a in argv)
+        assert any(a.startswith("--property=StandardError=append:") for a in argv)
+
+    def test_falls_back_to_a_plain_spawn_without_systemd_run(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, spawns: list, helper_ok: Path
+    ) -> None:
+        """No systemd-run means no systemd, and no systemd means no unit to
+        stop — so the cgroup hazard the wrapper exists for cannot arise."""
+        monkeypatch.setattr(rl, "plan", lambda: _plan(tmp_path=tmp_path))
+        monkeypatch.setattr(system, "_systemd_run_path", lambda: None)
+
+        asyncio.run(system.handle_relocate(_post()))
+
         assert spawns[0]["argv"] == [str(helper_ok), "relocate", "--yes"]
-        assert spawns[0]["kwargs"]["start_new_session"] is True, (
-            "without a new session the helper dies with the daemon it stops"
-        )
 
     def test_helper_is_never_the_shim_the_relocation_deletes(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -150,35 +175,6 @@ class TestHandoff:
 
         assert found is not None
         assert found.name == "swarm-legacy"
-
-
-class TestKillModeGuard:
-    def test_absent_unit_does_not_block(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        """Nothing stops a unit that does not exist, so nothing kills the helper."""
-        monkeypatch.setattr("swarm.service.current_unit_path", lambda: tmp_path / "absent.service")
-        assert system._kill_mode_guard() is None
-
-    def test_kill_mode_process_passes(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        unit = tmp_path / "swarm.service"
-        unit.write_text("[Service]\nKillMode=process\nExecStart=/x\n")
-        monkeypatch.setattr("swarm.service.current_unit_path", lambda: unit)
-        assert system._kill_mode_guard() is None
-
-    def test_kill_mode_mixed_is_refused_with_a_fix(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-    ) -> None:
-        unit = tmp_path / "swarm.service"
-        unit.write_text("[Service]\nKillMode=mixed\nExecStart=/x\n")
-        monkeypatch.setattr("swarm.service.current_unit_path", lambda: unit)
-
-        message = system._kill_mode_guard()
-
-        assert message is not None
-        assert "Reload swarm once" in message, "a refusal must name the way out"
 
 
 class TestPayload:

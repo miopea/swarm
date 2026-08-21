@@ -10,6 +10,39 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+## [2026.8.21.6] - 2026-08-21
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **The relocation helper was killed by the very command it issued.** It ran as
+  a child of the daemon, and `relocate()`'s first real step is
+  `systemctl --user stop swarm.service` — so the process performing the
+  shutdown was inside the thing being shut down. `start_new_session=True` gives
+  a new session but SHARES THE CGROUP, which was never enough.
+
+  Observed on a real box: the helper died mid-stop while blocked on its own
+  `systemctl` child, which survived as an orphan
+  (`Unit process 1141 (systemctl) remains running after unit stopped`). The
+  relocation log ended after the plan with no traceback, because a signal
+  leaves none. Nothing moved, and the hive was left stopped.
+
+  `KillMode=process` did NOT prevent it — so the pre-flight that checked for
+  `KillMode=process` was checking the wrong thing entirely: it passed, and the
+  helper died anyway. That guard is removed rather than patched, because a
+  guard that passes on the failing case is worse than no guard.
+
+  The helper now runs under `systemd-run --user --collect`, in its own
+  transient unit and cgroup, structurally out of reach of anything done to
+  `swarm.service`. `--property=StandardOutput=append:` keeps the relocation log
+  working, since systemd-run otherwise sends output to the journal instead of
+  the caller's fd — and that log is the only reason this failure was
+  diagnosable. Falls back to a plain spawn where `systemd-run` is absent, which
+  is safe: no systemd means no unit to stop, so the hazard cannot arise.
+
 ## [2026.8.21.5] - 2026-08-21
 
 ### Fixed — the relocation banner froze the daemon it was offering to move
