@@ -524,3 +524,39 @@ class TestJourneyGotchas:
         result = rl.relocate(rl.plan(), start=False)
 
         assert bin_dir / "swarm" in result.still_occupied
+
+
+class TestPostMoveFailuresAreActionable:
+    def test_unit_generation_does_not_depend_on_PATH(self, home: Path, monkeypatch) -> None:
+        """`generate_unit()` locates the binary with shutil.which.
+
+        Invoking the command by absolute path, or from a shell whose PATH
+        lacks the bin directory, made it raise *after* the state directory
+        had already moved — a half-finished relocation reported as a
+        traceback.
+        """
+        bin_dir = home / ".local" / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "swarm").write_text("#!/bin/sh\n")
+        (bin_dir / "swarm").chmod(0o755)
+        (home / ".swarm").mkdir()
+        # Production-shape install (no source checkout), which is the branch
+        # that needs the `swarm` binary on PATH.
+        monkeypatch.setattr("swarm.service._detect_source_dir", lambda: None)
+        monkeypatch.setenv("PATH", "/nonexistent")
+
+        result = rl.relocate(rl.plan(), start=False)  # must not raise
+
+        assert result.unit_written is not None
+        assert "swarm-legacy serve" in result.unit_written.read_text()
+
+    def test_a_failure_after_the_move_says_what_to_do(self, home: Path, monkeypatch) -> None:
+        """Never let a post-move failure read like data loss."""
+        (home / ".swarm").mkdir()
+        monkeypatch.setattr(rl, "_write_unit", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+
+        with pytest.raises(rl.RelocationError, match="Re-run the command"):
+            rl.relocate(rl.plan(), start=False)
+
+        # The move itself stands; re-running finishes the job.
+        assert (home / ".swarm-legacy").is_dir()

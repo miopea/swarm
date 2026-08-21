@@ -369,10 +369,27 @@ def _rename_exec_start(unit: str) -> str:
 
 
 def _write_unit() -> Path:
+    """Write ``swarm-legacy.service``, pointed at the renamed entrypoint.
+
+    ``generate_unit()`` locates the binary with ``shutil.which``, which
+    fails outright when the command was invoked by absolute path or from a
+    shell whose PATH lacks the bin directory — both perfectly ordinary.
+    It raised *after* the state directory had already moved, leaving a
+    half-finished relocation reported as a traceback.  The directories we
+    already know about are put on PATH for the duration of the call.
+    """
     from swarm.service import generate_unit
 
-    # Point the unit at the renamed entrypoint; the old one is removed below.
-    unit = _rename_exec_start(generate_unit())
+    original = os.environ.get("PATH", "")
+    extra = [str(d) for d in _shim_directories() if d.is_dir()]
+    if extra:
+        os.environ["PATH"] = (
+            os.pathsep.join([*extra, original]) if original else os.pathsep.join(extra)
+        )
+    try:
+        unit = _rename_exec_start(generate_unit())
+    finally:
+        os.environ["PATH"] = original
     _UNIT_DIR.mkdir(parents=True, exist_ok=True)
     path = _UNIT_DIR / LEGACY_UNIT
     path.write_text(unit)
@@ -445,11 +462,21 @@ def relocate(plan_: RelocationPlan, *, start: bool = True) -> RelocationResult:
     _check_socket_path_fits(plan_.target)
     _stop_live(plan_)
     moved = _move_state(plan_.source, plan_.target)
-    unit = _write_unit()
-    dropins = _migrate_dropins()
-    removed_unit = _remove_old_unit()
-    removed_entrypoints = _remove_old_entrypoints(plan_.old_entrypoints)
-    _systemctl("daemon-reload")
+    # Past this point the state directory has already moved.  Anything that
+    # goes wrong now must say so in terms the operator can act on — every
+    # step is idempotent, so re-running finishes the job — rather than
+    # surfacing a traceback that reads like data loss.
+    try:
+        unit = _write_unit()
+        dropins = _migrate_dropins()
+        removed_unit = _remove_old_unit()
+        removed_entrypoints = _remove_old_entrypoints(plan_.old_entrypoints)
+        _systemctl("daemon-reload")
+    except Exception as exc:
+        raise RelocationError(
+            f"State was moved to {plan_.target} but the rest did not finish: {exc}\n"
+            "Nothing was lost. Re-run the command to complete it."
+        ) from exc
     if start:
         _systemctl("enable", LEGACY_UNIT)
         _systemctl("start", LEGACY_UNIT)
