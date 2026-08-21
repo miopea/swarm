@@ -100,7 +100,7 @@ Drones are specialized background sweepers that share the daemon's poll loop. Ea
 
 - **Jira integration** -- two-way sync with Jira Cloud (OAuth 2.0), import/export tasks, create Jira issues from the task board
 - **REST API** -- full JSON API with 250+ routes and OpenAPI docs at `/api/docs/ui` (open `http://localhost:9090/api/docs/ui` with the dashboard running)
-- **SQLite persistence** -- tasks, proposals, messages, pipelines, skills, and history are stored in `~/.swarm/swarm.db`; YAML is the seed/import format
+- **SQLite persistence** -- tasks, proposals, messages, pipelines, skills, and history are stored in `swarm.db` inside the state directory — `~/.swarm`, or `~/.swarm-legacy` after [`swarm relocate`](#relocating-off-the-swarm-name--swarm-relocate); YAML is the seed/import format
 - **Resource monitoring** -- memory/swap thresholds with optional auto-suspend of workers on system pressure
 - **In-app feedback** -- a footer button opens a bug / feature / question form; submissions are filed as GitHub issues via the `gh` CLI, with a preview-and-edit step and automatic redaction of sensitive paths
 - **Remote access** -- Cloudflare Tunnel support for reaching the dashboard from a phone or remote machine; optional named domain via `tunnel_domain`
@@ -291,7 +291,7 @@ Headless Queen analyzes hive state
 
 ### Interactive Queen CLAUDE.md
 
-The interactive Queen reads her role from `~/.swarm/queen/workdir/CLAUDE.md` — seeded on first daemon start from the `QUEEN_SYSTEM_PROMPT` constant in `swarm.queen.runtime`. **The operator can edit this file**; the Queen also edits it herself to document coordination policies learned through operator feedback.
+The interactive Queen reads her role from `queen/workdir/CLAUDE.md` inside the state directory (`~/.swarm`, or `~/.swarm-legacy` once relocated) — seeded on first daemon start from the `QUEEN_SYSTEM_PROMPT` constant in `swarm.queen.runtime`. **The operator can edit this file**; the Queen also edits it herself to document coordination policies learned through operator feedback.
 
 On each daemon startup, Swarm reconciles the on-disk `CLAUDE.md` against the shipped constant using a three-state compare (what shipped last time vs what shipped now vs what's on disk):
 
@@ -309,7 +309,7 @@ swarm queen sync-claude-md --keep-local        # acknowledge drift; preserve loc
 
 ### Configuration
 
-- **`queen.system_prompt`** — *headless-decision prompt* only. Prepended to the `claude -p` calls (auto-assign, oversight, completion eval, escalation). Leave empty on fresh install and the daemon seeds `HEADLESS_DECISION_PROMPT` automatically. The *interactive Queen's* role lives in `~/.swarm/queen/workdir/CLAUDE.md`, not this field.
+- **`queen.system_prompt`** — *headless-decision prompt* only. Prepended to the `claude -p` calls (auto-assign, oversight, completion eval, escalation). Leave empty on fresh install and the daemon seeds `HEADLESS_DECISION_PROMPT` automatically. The *interactive Queen's* role lives in `queen/workdir/CLAUDE.md` inside the state directory, not this field.
 - **`queen.min_confidence`** — confidence threshold on a `0.0–1.0` scale (default `0.7`). Proposals at or above the threshold are eligible for auto-execution; below it they stay pending until the operator approves.
 - **`queen.cooldown`** — minimum seconds between headless-Queen invocations (default `30`, rate limiting)
 - **`queen.oversight`** — proactive monitoring of active workers: prolonged-BUZZING detection, task-drift checks, and an hourly oversight call budget
@@ -401,7 +401,7 @@ integrations:
 
 HTML email bodies are converted to Markdown before storage (paragraphs, lists, headings, blockquotes, code, inline marks, embedded `cid:` images), so task descriptions read cleanly in the dashboard and pasted Outlook content survives a round-trip into the WYSIWYG task editor.
 
-Tokens are stored in `~/.swarm/swarm.db` (`secrets` table) and auto-refreshed on expiry.
+Tokens are stored in `swarm.db` (`secrets` table) inside the state directory and auto-refreshed on expiry.
 
 ## Jira Integration
 
@@ -437,7 +437,7 @@ integrations:
 - **Sync frequency**: configurable via `sync_interval_minutes` (default `5`). Swarm status changes are always pushed to Jira on the next sync; Swarm does not overwrite Jira-side edits on fields it doesn't manage.
 - **Ticket badge**: a task synced from Jira shows its key (`KEY-N`) as a badge on its row in the task board — click it to open the issue. If Jira is connected but no site URL was recorded (tokens predating that field), the badge still renders, dashed and non-clickable, so provenance is visible rather than silently absent.
 - **Acceptance criteria**: a linked task with no criteria gets them synthesized from the description it already mirrors — on assign, on Queen reassign, and on link (create-then-link assigns before the key exists, so linking is when the Jira context actually arrives). Gated on `drones.verifier_criteria_synthesis` (default on); the verifier default-passes a task with no criteria, which is what this closes.
-- **Tokens**: stored in `~/.swarm/swarm.db` (`secrets` table), auto-refreshed on expiry
+- **Tokens**: stored in `swarm.db` (`secrets` table) inside the state directory, auto-refreshed on expiry
 
 Full walkthrough: [`docs/jira-setup.md`](docs/jira-setup.md).
 
@@ -491,6 +491,11 @@ Swarm (legacy) originally owned the `swarm` command, `swarm.service`, and `~/.sw
 | Command | `swarm` | `swarm-legacy` |
 | Service | `swarm.service` | `swarm-legacy.service` |
 | State | `~/.swarm` | `~/.swarm-legacy` |
+
+Everywhere else in this README, **"the state directory"** means whichever of those
+two you are on — `~/.swarm` before relocating, `~/.swarm-legacy` after. It holds
+`swarm.db`, the holder socket, logs, uploads and the Queen's workdir. Code should
+never hardcode either: `swarm.paths.state_dir()` resolves it.
 
 #### The upgrade, step by step
 
@@ -595,7 +600,7 @@ Uninstalling the service leaves your config and database untouched — `~/.confi
 | `swarm install-service` | Install/manage background service (systemd or launchd) |
 | `swarm check-states` | Diagnostic: show current worker states from PTY ring buffer |
 | `swarm analyze-tools [--since=7d] [--json]` | Summarise MCP tool usage from the buzz log (calls / errors / error samples per tool) |
-| `swarm db <stats\|export\|prune\|backup\|restore\|check>` | Database management — inspect, export, prune, back up, restore, and integrity-check `~/.swarm/swarm.db`. `restore` recovers from a backup (newest auto-backup by default), keeping the replaced DB at `swarm.db.pre-restore` |
+| `swarm db <stats\|export\|prune\|backup\|restore\|check>` | Database management — inspect, export, prune, back up, restore, and integrity-check the hive database. `restore` recovers from a backup (newest auto-backup by default), keeping the replaced DB at `swarm.db.pre-restore` |
 | `swarm queen sync-claude-md [--accept-shipped\|--keep-local]` | Three-way reconcile the interactive Queen's CLAUDE.md against the shipped `QUEEN_SYSTEM_PROMPT` constant. No flags = status report; `--accept-shipped` overwrites on-disk with shipped; `--keep-local` ack drift + preserve edits |
 | `swarm queen contribute-claude-md` | Reverse-sync local interactive-Queen CLAUDE.md edits back into the shipped `QUEEN_SYSTEM_PROMPT` constant — for promoting operator-tuned coordination policy into the next ship |
 | `swarm test [--pin-model=<id>]` | Run supervised orchestration tests — scaffolds a synthetic project, auto-resolves proposals, and generates an AI-powered report to `~/.swarm/reports/`. `--pin-model` records the model identifier in the infra snapshot for reproducible regressions |
@@ -605,7 +610,7 @@ Uninstalling the service leaves your config and database untouched — `~/.confi
 
 | Flag | Env Var | Description |
 |------|---------|-------------|
-| `-c <path>` | | Config file path. Honoured **only** when `~/.swarm/swarm.db` has no user data (fresh install / explicit DB-empty bootstrap); silently ignored on populated DBs with a WARNING log. |
+| `-c <path>` | | Config file path. Honoured **only** when the hive database has no user data (fresh install / explicit DB-empty bootstrap); silently ignored on populated DBs with a WARNING log. |
 | `--log-level <LEVEL>` | `SWARM_LOG_LEVEL` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 | `--log-file <path>` | `SWARM_LOG_FILE` | Log to file |
 | `--version` | | Show version and exit |
@@ -627,11 +632,11 @@ Environment variables override the corresponding config file values.
 
 ## Configuration
 
-All settings are managed from the web dashboard at `/config` — a tabbed editor with sections for General, LLMs, Workers, Automation (drones · Queen · workflows · pipelines), Notifications, Integrations, Security, Usage, Advanced, and Logs. Changes save directly to `~/.swarm/swarm.db` and are hot-applied in the same request — no daemon restart required.
+All settings are managed from the web dashboard at `/config` — a tabbed editor with sections for General, LLMs, Workers, Automation (drones · Queen · workflows · pipelines), Notifications, Integrations, Security, Usage, Advanced, and Logs. Changes save directly to the hive database and are hot-applied in the same request — no daemon restart required.
 
 ![Config editor — workers, drones, Queen tuning](docs/screenshots/config-editor.png)
 
-**Runtime state lives in SQLite — `~/.swarm/swarm.db` is the source of truth.** On first run Swarm seeds the DB from a YAML (renaming the source file to `config.yaml.migrated` once consumed); from then on the daemon reads and writes workers, groups, approval rules, tasks, proposals, task history, messages, pipelines, buzz log, secrets, and scalar config directly from the DB. Dashboard edits hit the DB immediately and are hot-applied in the same request; **YAML is not re-written** by the dashboard. Use `swarm db stats`, `swarm db export`, `swarm db backup`, `swarm db restore`, and `swarm db prune` to inspect and maintain it (the daemon also auto-backs-up daily and runs an integrity check).
+**Runtime state lives in SQLite — `swarm.db` in the state directory is the source of truth.** On first run Swarm seeds the DB from a YAML (renaming the source file to `config.yaml.migrated` once consumed); from then on the daemon reads and writes workers, groups, approval rules, tasks, proposals, task history, messages, pipelines, buzz log, secrets, and scalar config directly from the DB. Dashboard edits hit the DB immediately and are hot-applied in the same request; **YAML is not re-written** by the dashboard. Use `swarm db stats`, `swarm db export`, `swarm db backup`, `swarm db restore`, and `swarm db prune` to inspect and maintain it (the daemon also auto-backs-up daily and runs an integrity check).
 
 **YAML is a bootstrap-only seed.** `swarm init` writes the initial config to `~/.config/swarm/config.yaml` and you can also place a `swarm.yaml` in your project directory. The YAML loaders are consulted **only when `swarm.db` has no user data** (fresh install, explicit DB-empty bootstrap). For a populated DB the YAML loaders — including the `-c /path/to/config.yaml` flag — are intentionally ignored, with a WARNING log on every silently-discarded `-c`. Re-importing from YAML after first run is possible but explicit; treat `swarm.yaml` as a seed/import format, not a live mirror.
 
@@ -993,7 +998,7 @@ The daemon exposes a JSON API on the same port as the web dashboard. All mutatin
 │  file claims · learnings       dedup · read tracking     │
 │  playbooks (synthesized)       health-sweep · digests    │
 ├─────────────────────────────────────────────────────────┤
-│  SQLite (~/.swarm/swarm.db)    Notification Bus          │
+│  SQLite (<state>/swarm.db)     Notification Bus          │
 │  tasks · proposals · history   terminal · desktop · push │
 │  messages · pipelines · config resource monitor          │
 ├─────────────────────────────────────────────────────────┤
