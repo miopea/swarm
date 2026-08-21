@@ -280,10 +280,13 @@ def _drop_reoccupied_entrypoint() -> Path | None:
     a ``swarm`` belonging to something else is never deleted by us.
     """
     from swarm.paths import is_relocated
+    from swarm.relocate import _shim_directories
 
     if not is_relocated():
         return None
-    for directory in (Path.home() / ".local" / "bin", Path.home() / "bin"):
+    # Shared with the relocation itself so the two cannot disagree about
+    # where a shim lives.
+    for directory in _shim_directories():
         shim = directory / "swarm"
         if not (shim.exists() or shim.is_symlink()):
             continue

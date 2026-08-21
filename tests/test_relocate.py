@@ -17,6 +17,10 @@ import pytest
 from swarm import relocate as rl
 from swarm.paths import ENV_VAR, state_dir, state_path_str
 
+# Captured before the `home` fixture stubs it, so the no-systemd test can
+# exercise the real guard instead of a stub that fakes the failure.
+_REAL_SYSTEMCTL = rl._systemctl
+
 
 @pytest.fixture
 def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -307,3 +311,97 @@ class TestUpdateDoesNotReoccupyTheName:
 
         assert _drop_reoccupied_entrypoint() is None
         assert shim.exists()
+
+
+class TestSurvivesAnAwkwardMachine:
+    """Edge cases that would otherwise strand an operator mid-relocation."""
+
+    def test_no_systemd_does_not_abort_after_the_move(self, home: Path, monkeypatch) -> None:
+        """macOS / systemd-less WSL have no `systemctl` binary at all.
+
+        Unguarded, FileNotFoundError aborted the run *after* the state
+        directory had already moved — a correct-but-alarming half-finish
+        reported as a raw traceback.
+        """
+
+        def _no_systemctl(*_a, **_kw):
+            raise FileNotFoundError("systemctl")
+
+        # Restore the real _systemctl and remove the binary underneath it,
+        # so the guard inside it is what gets tested.
+        monkeypatch.setattr(rl, "_systemctl", _REAL_SYSTEMCTL)
+        monkeypatch.setattr(rl.subprocess, "run", _no_systemctl)
+        src = home / ".swarm"
+        src.mkdir()
+        (src / "swarm.db").write_text("data")
+
+        # Must complete rather than raise.
+        result = rl.relocate(rl.plan(), start=True)
+
+        assert result.moved is True
+        assert (home / ".swarm-legacy" / "swarm.db").read_text() == "data"
+
+    def test_relocating_before_first_run_still_marks_it_relocated(self, home: Path) -> None:
+        """An install relocated before it ever created a state directory.
+
+        Without creating the target, the unit and entrypoint get renamed
+        while `state_dir()` still resolves to the old path — an install
+        that looks relocated but writes its state straight back to the
+        name it was supposed to free.
+        """
+        bin_dir = home / ".local" / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "swarm").write_text("#!/bin/sh\n")
+        assert not (home / ".swarm").exists()
+
+        rl.relocate(rl.plan(), start=False)
+
+        assert (home / ".swarm-legacy").is_dir()
+        assert state_dir() == home / ".swarm-legacy"
+        from swarm.paths import is_relocated
+
+        assert is_relocated() is True
+
+    def test_a_dangling_enable_link_alone_is_not_already_done(self, home: Path) -> None:
+        """Otherwise re-running reports success and never cleans it up."""
+        unit_dir = home / ".config" / "systemd" / "user"
+        wants = unit_dir / "default.target.wants"
+        wants.mkdir(parents=True)
+        (wants / "swarm.service").symlink_to(unit_dir / "swarm.service")
+        (home / ".swarm-legacy").mkdir()
+
+        plan = rl.plan()
+        assert plan.stale_enable_link is True
+        assert plan.already_done is False
+
+    def test_clears_a_dangling_enable_link(self, home: Path) -> None:
+        """A unit file removed by hand leaves the wants symlink behind.
+
+        systemd then complains on every daemon-reload. `_remove_old_unit`
+        used to return early when the file was already gone, so nothing
+        ever cleaned it up.
+        """
+        unit_dir = home / ".config" / "systemd" / "user"
+        wants = unit_dir / "default.target.wants"
+        wants.mkdir(parents=True)
+        dangling = wants / "swarm.service"
+        dangling.symlink_to(unit_dir / "swarm.service")  # target does not exist
+        assert dangling.is_symlink() and not dangling.exists()
+        (home / ".swarm").mkdir()
+
+        rl.relocate(rl.plan(), start=False)
+
+        assert not dangling.is_symlink()
+
+    def test_finds_a_shim_in_a_custom_uv_bin_dir(self, home: Path, monkeypatch) -> None:
+        """uv honours $UV_TOOL_BIN_DIR; missing it leaves the name occupied."""
+        custom = home / "opt" / "bin"
+        custom.mkdir(parents=True)
+        (custom / "swarm").write_text("#!/bin/sh\n")
+        monkeypatch.setenv("UV_TOOL_BIN_DIR", str(custom))
+        (home / ".swarm").mkdir()
+
+        result = rl.relocate(rl.plan(), start=False)
+
+        assert custom / "swarm" in result.entrypoints_removed
+        assert not (custom / "swarm").exists()

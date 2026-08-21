@@ -80,10 +80,23 @@ class RelocationPlan:
     unit_active: bool
     old_entrypoints: list[Path] = field(default_factory=list)
     live: list[LiveProcess] = field(default_factory=list)
+    stale_enable_link: bool = False
 
     @property
     def already_done(self) -> bool:
-        return not self.move_needed and self.old_unit is None and not self.old_entrypoints
+        """True only when nothing of the old name is left anywhere.
+
+        The stale enable link counts: a dangling
+        ``default.target.wants/swarm.service`` makes systemd complain on
+        every reload, and reporting "already relocated" while leaving it
+        behind means re-running never cleans it up.
+        """
+        return (
+            not self.move_needed
+            and self.old_unit is None
+            and not self.old_entrypoints
+            and not self.stale_enable_link
+        )
 
 
 @dataclass
@@ -117,7 +130,19 @@ def _read_pid(path: Path) -> int | None:
 
 
 def _systemctl(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
+    """Run ``systemctl --user``, tolerating a machine that has no systemd.
+
+    macOS and systemd-less WSL have no ``systemctl`` at all, and the raw
+    call raises ``FileNotFoundError``.  Unguarded, that aborted the
+    relocation *after* the state directory had already moved — leaving a
+    correct-but-alarming half-finished run and a raw traceback.  A failed
+    CompletedProcess lets the rest of the sequence finish and report.
+    """
+    try:
+        return subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError):
+        _log.warning("systemctl --user %s unavailable on this machine", " ".join(args))
+        return subprocess.CompletedProcess(["systemctl", *args], 1, stdout="", stderr="")
 
 
 def _unit_is_active(unit: str) -> bool:
@@ -143,12 +168,35 @@ def find_live_processes(state: Path) -> list[LiveProcess]:
     return live
 
 
+def _shim_directories() -> list[Path]:
+    """Every directory a ``swarm`` shim could plausibly live in.
+
+    ``uv`` honours ``$UV_TOOL_BIN_DIR`` and ``$XDG_BIN_HOME``, so checking
+    only ``~/.local/bin`` would silently leave the old name occupied on
+    any install that moved its bin directory — the one thing this command
+    exists to prevent.
+    """
+    seen: list[Path] = []
+    for raw in (
+        os.environ.get("UV_TOOL_BIN_DIR"),
+        os.environ.get("XDG_BIN_HOME"),
+        str(Path.home() / ".local" / "bin"),
+        str(Path.home() / "bin"),
+    ):
+        if not raw:
+            continue
+        directory = Path(raw).expanduser()
+        if directory not in seen:
+            seen.append(directory)
+    return seen
+
+
 def _entrypoint_candidates() -> list[Path]:
     """Installed ``swarm`` shims that would keep the old name alive."""
     found: list[Path] = []
-    for directory in (Path.home() / ".local" / "bin", Path.home() / "bin"):
+    for directory in _shim_directories():
         candidate = directory / "swarm"
-        if candidate.exists() or candidate.is_symlink():
+        if (candidate.exists() or candidate.is_symlink()) and candidate not in found:
             found.append(candidate)
     return found
 
@@ -158,6 +206,7 @@ def plan(*, source: Path | None = None, target: Path | None = None) -> Relocatio
     src = source or original_state_dir()
     dst = target or relocated_state_dir()
     old_unit = _UNIT_DIR / OLD_UNIT
+    wants = _UNIT_DIR / "default.target.wants" / OLD_UNIT
     return RelocationPlan(
         source=src,
         target=dst,
@@ -167,6 +216,7 @@ def plan(*, source: Path | None = None, target: Path | None = None) -> Relocatio
         unit_active=_unit_is_active(OLD_UNIT),
         old_entrypoints=_entrypoint_candidates(),
         live=find_live_processes(src if src.is_dir() else dst),
+        stale_enable_link=wants.is_symlink() and not wants.exists(),
     )
 
 
@@ -185,6 +235,13 @@ def _stop_live(plan_: RelocationPlan) -> None:
 
 def _move_state(src: Path, dst: Path) -> bool:
     if not src.is_dir():
+        # Nothing to move — an install relocated before it ever ran.  The
+        # target still has to exist, because its existence is what marks
+        # this install as relocated.  Without it the unit and entrypoint
+        # would be renamed while `state_dir()` still resolved to the old
+        # path: an install that looks relocated but writes its state back
+        # to the name it was supposed to free.
+        dst.mkdir(parents=True, exist_ok=True)
         return False
     if dst.exists():
         raise RelocationError(
@@ -251,10 +308,23 @@ def _migrate_dropins() -> list[Path]:
 
 
 def _remove_old_unit() -> bool:
+    """Disable and delete ``swarm.service``, including a stale enable link.
+
+    ``disable`` runs even when the unit file is already gone: systemd
+    records the enablement as a symlink under ``default.target.wants``,
+    and a unit file removed by hand leaves that symlink dangling, which
+    systemd reports on every ``daemon-reload``.
+    """
     old = _UNIT_DIR / OLD_UNIT
+    _systemctl("disable", OLD_UNIT)
+    wants = _UNIT_DIR / "default.target.wants" / OLD_UNIT
+    if wants.is_symlink() and not wants.exists():
+        try:
+            wants.unlink()
+        except OSError:
+            _log.warning("could not clear dangling enable link %s", wants, exc_info=True)
     if not old.exists():
         return False
-    _systemctl("disable", OLD_UNIT)
     old.unlink()
     return True
 

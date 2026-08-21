@@ -10,6 +10,37 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+- **Pre-merge review of `swarm relocate` turned up five defects.** All were
+  found by exercising the awkward paths rather than re-reading the code:
+
+  - **No systemd meant a crash *after* the state directory had moved.** macOS
+    and systemd-less WSL have no `systemctl` binary, and the raw call raises
+    `FileNotFoundError`. Unguarded, that aborted the run partway through and
+    reported it as a traceback. `_systemctl` now tolerates a missing binary.
+
+  - **Relocating before first run half-applied, silently.** With no `~/.swarm`
+    to move, nothing created `~/.swarm-legacy` — so the unit and entrypoint were
+    renamed while `state_dir()` still resolved to the old path. The install
+    looked relocated but would have written its state straight back to the name
+    it was supposed to free, and neither `swarm init` nor the update cleanup
+    would have recognised it as relocated. The target is now created even when
+    there is nothing to move; its existence *is* the marker.
+
+  - **A dangling enable link was left behind.** `_remove_old_unit` returned
+    early when the unit file was already gone, so
+    `default.target.wants/swarm.service` kept pointing at nothing and systemd
+    complained on every reload. `disable` now always runs and the stale symlink
+    is cleared.
+
+  - **`already_done` ignored that stale link**, so re-running reported success
+    and never cleaned it up. It now counts.
+
+  - **Shims outside `~/.local/bin` were missed.** `uv` honours
+    `$UV_TOOL_BIN_DIR` and `$XDG_BIN_HOME`; an install that moved its bin
+    directory would have kept the old name occupied — the one thing the command
+    exists to prevent. The search now covers both, and `perform_update()` shares
+    the same helper so the two cannot drift.
+
 ## [2026.8.21] - 2026-08-21
 
 ### Features
