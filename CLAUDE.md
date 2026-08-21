@@ -7,17 +7,21 @@
 - **What this is.** `swarm-ai` — **Swarm (legacy)**, a hive-mind orchestrator for
   Claude Code agents. Python ≥3.12, aiohttp daemon plus PTY workers, one `swarm`
   entry point. Superseded by Swarm Next; this repo is maintenance-only. The
-  GitHub repo is `miopea/swarm-legacy` (renamed from `miopea/swarm`).
+  GitHub repo is `miopea/swarm-legacy`, and this checkout now lives at
+  `~/projects/personal/swarm-legacy` — `~/projects/personal/swarm` was freed
+  for Swarm Next on 2026-08-21.
   **Display strings say "Swarm (legacy)"; the package name does not** — it is
   still `swarm-ai` on PyPI. The *installed* names do move, but only when the
   operator runs `swarm relocate`: `swarm` → `swarm-legacy`, `swarm.service` →
   `swarm-legacy.service`, `~/.swarm` → `~/.swarm-legacy`. Both entrypoints ship
   together so an un-relocated install keeps working.
-- **How it runs here.** This box is **relocated**: systemd **user** unit
-  `swarm-legacy.service` ("Swarm (legacy) Web Dashboard"),
-  `ExecStart=…/swarm-legacy serve`, daemon API on **:9090**, state in
-  `~/.swarm-legacy`. Not a system unit — `systemctl --user`, not
-  `sudo systemctl`. Pre-relocation installs still use `swarm.service`.
+- **How it runs here.** This box is **relocated** and now a *production*
+  install: systemd **user** unit `swarm-legacy.service`,
+  `ExecStart=~/.local/bin/swarm-legacy serve`, `WorkingDirectory=$HOME`,
+  daemon API on **:9090**, state in `~/.swarm-legacy`. It no longer runs from
+  this checkout — the tool is installed from git, so the source tree is for
+  editing only and `uv run` is not in the startup path. Not a system unit —
+  `systemctl --user`, not `sudo systemctl`.
 - **`swarm-next` is a DIFFERENT system on the same box.**
   `swarm-next-api.service` and `swarm-next-terminal-host.service` run alongside
   this one from `~/projects/personal/swarm-next`. Restarting the wrong unit looks

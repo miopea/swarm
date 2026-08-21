@@ -616,10 +616,10 @@ uv run swarm validate            # Validate swarm.yaml
 After changing source code, reinstall with cache-busting. **This is the one
 canonical form** — other reinstall incantations appear elsewhere in the docs and
 in older notes; prefer this one, run from the repo root
-(`/home/bschleifer/projects/personal/swarm`):
+(`/home/bschleifer/projects/personal/swarm-legacy`):
 ```bash
 uv cache clean swarm-ai && uv tool install --no-cache --force .
-swarm holder-restart
+swarm-legacy holder-restart
 ```
 `holder-restart` restarts the PTY holder **preserving worker child processes**,
 so it is safe and does not take the fleet down. Do not kill the holder PID.
@@ -639,26 +639,47 @@ Measured 2026-08-20, not inferred. The two systems share a box and a name
 | systemd units | `swarm.service` | `swarm-next-api.service`, `swarm-next-terminal-host.service` (+ `-development-reload`, `-host-reconcile`) |
 | State | `~/.swarm/swarm.db` | `swarm-next.sqlite3` (its own store) |
 | Repo | `miopea/swarm-legacy` | `miopea/swarm-next` |
-| Source dir | `~/projects/personal/swarm` | `~/projects/personal/swarm-next` |
+| Source dir (dev only) | `~/projects/personal/swarm-legacy` | `~/projects/personal/swarm-next` |
 
 The Rust crates are named `swarm-cli`, `swarm-api`, … but the **shipped binary
 is `swarmctl`** — that is why Next can sit beside Legacy's `swarm` without a
 fight. Installing or updating either one does not touch the other.
 
-**The local source directory did NOT change with the repo rename, and must not
-be renamed casually.** The GitHub repo is `swarm-legacy`; the checkout is still
-`~/projects/personal/swarm`. Git does not care (the remote URL is what moved),
-but three things pin that absolute path:
+**The checkout is a developer artifact, and `swarm relocate` does not touch it.**
+A normal install has no source tree at all: its unit is
+`ExecStart=~/.local/bin/swarm-legacy serve` with `WorkingDirectory=$HOME`. Only a
+*dev* install has a checkout, and then the unit says `uv run swarm-legacy serve`
+with `WorkingDirectory=<checkout>` — that path is where `uv run` resolves the
+package from source, **not** where state lives. Relocation moves state, the
+command and the unit; moving somebody's git clone is not an installer's business.
 
-1. `~/.local/share/uv/tools/swarm-ai/uv-receipt.toml` —
-   `directory = "/home/bschleifer/projects/personal/swarm"`
-2. `~/.config/systemd/user/swarm.service.d/dev.conf` —
-   `ExecStart=<that path>/.venv/bin/swarm serve`
-3. `get_local_source_path()` (`update.py`), which reads that receipt and is what
-   the dashboard's **Reload** button uses to reinstall from local source
+### Freeing the checkout path too (done on this box 2026-08-21)
 
-Renaming the directory without fixing all three gives a daemon that starts from
-a stale copy, or a Reload button that silently reinstalls the wrong tree.
+Only needed when you want the *directory name* back — here, so Swarm Next could
+take `~/projects/personal/swarm`. Not part of any update, and no user has to do
+it. The order matters, because three things pin the old absolute path:
+
+1. **Rescue anything untracked.** `docs/specs/` is gitignored, so a spec living
+   only on disk dies with the folder. `git status --porcelain --ignored=matching`
+   is the check.
+2. **Cut the install's dependency on it.** `uv tool install --force --no-cache
+   git+https://github.com/miopea/swarm-legacy.git` rewrites
+   `~/.local/share/uv/tools/swarm-ai/uv-receipt.toml` from
+   `directory = "<checkout>"` to `git = "..."`, which is also what
+   `get_local_source_path()` reads for the dashboard's **Reload** button. A manual
+   `uv tool install` recreates the `swarm` shim, so drop it again —
+   `swarm.update._drop_reoccupied_entrypoint()` is the supported way.
+3. **Rewrite the unit to production shape** and delete
+   `swarm-legacy.service.d/dev.conf`, or the service keeps pointing `uv run` at a
+   directory that is about to move.
+4. **Repoint any worker whose `path` is the checkout** — with the daemon stopped,
+   or its in-memory config writes the old value back. Here that was the worker
+   literally named `swarm`, holding 13 open tasks.
+5. **Then** `mv` the directory. A rename on one filesystem keeps open handles
+   valid — cwd follows the inode — so even a shell sitting inside it survives.
+
+Skipping step 2 or 3 gives a daemon that starts from a stale copy, or a Reload
+button that silently reinstalls the wrong tree.
 
 ### If Next should later take the `swarm` name
 
