@@ -10,6 +10,24 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+- **A lingering daemon could silently undo a relocation.** `_stop_live` sent
+  SIGTERM and moved on; a daemon still shutting down keeps the log path it
+  resolved at import — the old one — and recreates the directory the move just
+  emptied, re-occupying the freed name and leaving a re-run convinced there is
+  still state to move. Observed directly: a relocation reporting success with
+  `~/.swarm` back moments later holding a lone `swarm.log`. It now waits for the
+  signalled processes to exit and SIGKILLs anything ignoring SIGTERM. The result
+  also carries `source_recreated`, so if the old directory does come back the
+  command says something is still running against it instead of printing
+  "Relocation complete" over the top.
+
+- The relocated flake in `test_worker_selector_browser` is fixed. It pressed
+  ArrowDown and evaluated the highlight immediately; the keypress is handled
+  asynchronously, so roughly one run in five reported "no active row". It now
+  waits for the state the assertion is about. Confirmed 8/8 after, from 1-in-5
+  failures before — unrelated to the relocation work, but a random CI failure is
+  friction nobody needs.
+
 - **End-to-end rehearsal of the developer journey found three more defects.**
   A released 2026.8.20 install was built, given real state and a bound holder,
   updated through its own `perform_update()`, then relocated — on a machine with
