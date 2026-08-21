@@ -14,6 +14,15 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Features
 
+- **The updater now reports when the repo has been renamed underneath it.**
+  Every build bakes in the repo URL current when it shipped, and a rename does
+  not break anything — GitHub redirects and git follows — so the failure is
+  silent: the name compiled into the binary stops being true and nothing says
+  so. After a successful update, `perform_update()` asks the API which repo it
+  actually served and emits a note to the dashboard when that differs from
+  `_REPO_FULL_NAME`. Reported, never acted on: silently retargeting an install
+  at a repo the operator did not name is not a decision an updater gets to make.
+
 - **Relocate from the dashboard — the last step that still needed a terminal.**
   `swarm relocate` was reachable only from a shell, so "update without a
   terminal" was a half-truth: the in-app update landed the new build, and then
@@ -47,6 +56,15 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
   once, from `GET /api/relocate`, when the banner first renders.
 
 ### Fixes
+
+- **A repo rename silently emptied the update banner's commit line.** The
+  version probe reads `raw.githubusercontent.com`, which served the renamed repo
+  fine; the commit probe reads `api.github.com`, which answered `301`. Both ran
+  curl without `-L`, so `json.loads` succeeded on the redirect body — a dict
+  where a list was expected — and `_fetch_latest_commit()` returned `{}`. No
+  error, no log: the banner just rendered a stale sha and no message, which is
+  exactly what an install here was observed doing. Both probes now follow
+  redirects.
 
 - **`dir_size_bytes()` reported a confident `0` for a directory it could not
   read.** `rglob` on a missing path yields nothing and raises nothing, so the
