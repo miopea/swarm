@@ -885,7 +885,10 @@ def test_dev_reexec_when_installed(monkeypatch):
         patch("swarm.cli.load_config") as mock_cfg,
         patch("swarm.update.get_local_source_path", return_value="/home/user/projects/swarm"),
         patch("os.chdir") as mock_chdir,
-        patch("os.execvp") as mock_execvp,
+        # execvp *replaces* the process, so nothing after it ever runs.  A
+        # bare mock lets execution fall through into run_daemon() and the
+        # test hangs on a real daemon.  SystemExit models the real call.
+        patch("os.execvp", side_effect=SystemExit(0)) as mock_execvp,
     ):
         mock_cfg.return_value.port = 9090
         runner = CliRunner()

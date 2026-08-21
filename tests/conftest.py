@@ -6,6 +6,7 @@ import asyncio
 import itertools
 import logging
 import os
+import subprocess
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -75,6 +76,32 @@ from tests.fakes.process import FakeWorkerProcess  # noqa: E402
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
+
+
+@pytest.fixture(autouse=True)
+def _isolate_systemd_unit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the suite out of the developer's real systemd configuration.
+
+    Eight ``test_init_*`` cases reached ``install_service()`` unpatched and
+    wrote (and enabled, and started) the real
+    ``~/.config/systemd/user/swarm.service``.  On a relocated box that
+    silently resurrected the very unit ``swarm relocate`` had removed,
+    pointing it at a ``swarm`` entrypoint that no longer exists.
+
+    Also pins the relocation state, so unit naming does not depend on
+    whether the machine running the tests happens to be relocated.
+    """
+    unit_dir = tmp_path / "systemd-user"
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("swarm.service._SERVICE_DIR", unit_dir)
+    monkeypatch.setattr("swarm.service._SERVICE_PATH", unit_dir / "swarm.service")
+    # Pin the *name* only; current_unit_path() derives its directory from
+    # _SERVICE_PATH, so a test patching that still controls the location.
+    monkeypatch.setattr("swarm.service.current_unit_name", lambda: "swarm.service")
+    monkeypatch.setattr(
+        "swarm.service._systemctl",
+        lambda *args: subprocess.CompletedProcess(list(args), 0, stdout="", stderr=""),
+    )
 
 
 @pytest.fixture(autouse=True)

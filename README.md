@@ -474,7 +474,45 @@ Swarm includes built-in Cloudflare Tunnel support for accessing the dashboard fr
 
 The dashboard checks for updates automatically on startup and shows a banner when a new version is available — click **Update & Restart** to install it. You can also check manually from the dashboard footer. Your config (`swarm.yaml`) is never touched by upgrades.
 
-Claude Code hooks and the cross-task hook script (`~/.swarm/hooks/cross-task-hook.sh`) are automatically reinstalled every time the daemon starts (`swarm serve`), so they stay in sync with the installed package version — no manual `swarm init` or `swarm install-hooks` needed after upgrades.
+Claude Code hooks and the cross-task hook script (`<state>/hooks/cross-task-hook.sh`) are automatically reinstalled every time the daemon starts (`swarm serve`), so they stay in sync with the installed package version — no manual `swarm init` or `swarm install-hooks` needed after upgrades.
+
+### Relocating off the `swarm` name — `swarm relocate`
+
+> [!WARNING]
+> **This is a destructive update. It takes the pty-holder sidecar offline, which
+> terminates every running worker.** Stop or finish your workers first. Your
+> tasks, database and history are *not* modified — only where they live.
+
+Swarm (legacy) originally owned the `swarm` command, `swarm.service`, and `~/.swarm`.
+`swarm relocate` hands those names back and moves this hive alongside them:
+
+| | Before | After |
+|---|---|---|
+| Command | `swarm` | `swarm-legacy` |
+| Service | `swarm.service` | `swarm-legacy.service` |
+| State | `~/.swarm` | `~/.swarm-legacy` |
+
+```bash
+swarm relocate --dry-run   # show exactly what would change, touch nothing
+swarm relocate             # asks you to type 'relocate' to confirm
+```
+
+Nothing about your hive's *contents* changes and you keep using Legacy exactly as
+before — only under the new name. The relocation is what makes the old names
+available for something else to occupy.
+
+**Why the sidecar must go offline.** The pty-holder binds `<state>/holder.sock`,
+and a Unix socket's path is fixed at `bind()`. Moving the directory under a live
+holder leaves it serving a socket no client can reach, while the daemon keeps
+writing to the old directory through an already-open handle. There is no way to
+move a bound socket, so the workers go down with it.
+
+Both `swarm` and `swarm-legacy` ship together, so an install that has **not**
+relocated keeps working unchanged. `swarm relocate` is the only thing that
+removes the old name, and every step is idempotent — if it is interrupted, run
+it again rather than repairing by hand.
+
+Already relocated? The command says so and exits without touching anything.
 
 ## Documentation
 

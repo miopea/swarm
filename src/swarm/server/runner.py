@@ -23,15 +23,16 @@ from aiohttp import web
 
 from swarm.drones.rules import Decision
 from swarm.logging import get_logger
-from swarm.server.daemon import SwarmDaemon
+from swarm.paths import state_dir
 from swarm.tasks.store import FileTaskStore
 
 if TYPE_CHECKING:
     from swarm.config import HiveConfig
+    from swarm.server.daemon import SwarmDaemon
 
 _log = get_logger("server.runner")
 
-_DAEMON_LOCK_PATH = Path.home() / ".swarm" / "daemon.lock"
+_DAEMON_LOCK_PATH = state_dir() / "daemon.lock"
 
 
 def _read_lock_pid() -> int | None:
@@ -151,7 +152,9 @@ async def run_daemon(
 
     test_store = None
     if test_mode:
-        test_store = FileTaskStore(path=Path.home() / ".swarm" / "test-tasks.json")
+        test_store = FileTaskStore(path=state_dir() / "test-tasks.json")
+    from swarm.server.daemon import SwarmDaemon
+
     daemon = SwarmDaemon(config, task_store=test_store)
     daemon._lock_fd = _daemon_lock_fd  # prevent GC / keep lock alive
 
@@ -589,7 +592,9 @@ async def run_test_daemon(
     port = port or config.test.port
 
     # Isolate test tasks from the main task board so they don't leak.
-    test_store = FileTaskStore(path=Path.home() / ".swarm" / "test-tasks.json")
+    test_store = FileTaskStore(path=state_dir() / "test-tasks.json")
+    from swarm.server.daemon import SwarmDaemon
+
     daemon = SwarmDaemon(config, task_store=test_store)
 
     from swarm.pty.pool import ProcessPool

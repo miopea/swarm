@@ -8,20 +8,25 @@
   Claude Code agents. Python ≥3.12, aiohttp daemon plus PTY workers, one `swarm`
   entry point. Superseded by Swarm Next; this repo is maintenance-only. The
   GitHub repo is `miopea/swarm-legacy` (renamed from `miopea/swarm`).
-  **Display strings say "Swarm (legacy)"; identifiers do not** — the package is
-  still `swarm-ai`, the CLI still `swarm`, the unit still `swarm.service`, the
-  DB still `~/.swarm/swarm.db`. Do not "fix" that inconsistency.
-- **How it runs here.** systemd **user** unit `swarm.service`
-  ("Swarm (legacy) Web Dashboard"), `ExecStart=.venv/bin/swarm serve`, daemon
-  API on **:9090**. Not a system unit — `systemctl --user`, not
-  `sudo systemctl`.
+  **Display strings say "Swarm (legacy)"; the package name does not** — it is
+  still `swarm-ai` on PyPI. The *installed* names do move, but only when the
+  operator runs `swarm relocate`: `swarm` → `swarm-legacy`, `swarm.service` →
+  `swarm-legacy.service`, `~/.swarm` → `~/.swarm-legacy`. Both entrypoints ship
+  together so an un-relocated install keeps working.
+- **How it runs here.** This box is **relocated**: systemd **user** unit
+  `swarm-legacy.service` ("Swarm (legacy) Web Dashboard"),
+  `ExecStart=…/swarm-legacy serve`, daemon API on **:9090**, state in
+  `~/.swarm-legacy`. Not a system unit — `systemctl --user`, not
+  `sudo systemctl`. Pre-relocation installs still use `swarm.service`.
 - **`swarm-next` is a DIFFERENT system on the same box.**
   `swarm-next-api.service` and `swarm-next-terminal-host.service` run alongside
   this one from `~/projects/personal/swarm-next`. Restarting the wrong unit looks
   like a fix that changed nothing.
-- **All state is one SQLite file: `~/.swarm/swarm.db`** (~99 MB). Beside it,
-  `invariant-log.jsonl` (Tier 0 hook decisions) and `pty-writes.jsonl`. Nothing
-  authoritative lives in this repo's tree.
+- **All state is one SQLite file, in the state dir** — `~/.swarm-legacy/swarm.db`
+  after `swarm relocate`, `~/.swarm/swarm.db` before it (~99 MB). **Never
+  hardcode either**: call `swarm.paths.state_dir()`, which prefers the relocated
+  directory. Beside the DB, `invariant-log.jsonl` (Tier 0 hook decisions) and
+  `pty-writes.jsonl`. Nothing authoritative lives in this repo's tree.
 - **No deploy.** There is no production target and no `deploy.md`. Push is the
   terminal state — say `pushed`, never `shipped`.
 - **CI gates on two Python versions**, `test (3.12)` and `test (3.13)`, and they
@@ -38,7 +43,9 @@ Both look like a correct query returning a true zero.
   silently matches nothing and reports a clean zero.
 
 Query it read-only — `sqlite3.connect(f"file:{db}?mode=ro", uri=True)` — and
-print the denominator beside any count.
+print the denominator beside any count. Resolve `db` with
+`swarm.paths.state_dir() / "swarm.db"`, never a hardcoded `~/.swarm`: after
+`swarm relocate` that path is gone and the query reads nothing.
 
 ## Quick Reference
 

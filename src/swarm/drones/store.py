@@ -13,10 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 
 _log = get_logger("drones.store")
 
-_DEFAULT_DB_PATH = Path.home() / ".swarm" / "system_log.db"
+_DEFAULT_DB_PATH = state_dir() / "system_log.db"
 _DEFAULT_MAX_AGE_DAYS = 30
 
 _SCHEMA = """\

@@ -11,10 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 
 _log = get_logger("tasks.history")
 
-_DEFAULT_LOG_PATH = Path.home() / ".swarm" / "task_history.jsonl"
+_DEFAULT_LOG_PATH = state_dir() / "task_history.jsonl"
 _DEFAULT_MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 _DEFAULT_MAX_ROTATIONS = 2
 

@@ -8,13 +8,13 @@ from __future__ import annotations
 import json
 import os
 import time
-from pathlib import Path
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 
 _log = get_logger("queen.session")
 
-STATE_DIR = Path.home() / ".swarm" / "queen"
+STATE_DIR = state_dir() / "queen"
 
 
 def save_session(session_name: str, session_id: str) -> None:

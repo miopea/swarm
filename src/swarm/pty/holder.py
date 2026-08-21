@@ -35,11 +35,12 @@ from pathlib import Path
 from typing import Any
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 from swarm.pty.buffer import RingBuffer
 
 _log = get_logger("pty.holder")
 
-_SWARM_DIR = Path.home() / ".swarm"
+_SWARM_DIR = state_dir()
 DEFAULT_SOCKET_PATH = _SWARM_DIR / "holder.sock"
 DEFAULT_PID_PATH = _SWARM_DIR / "holder.pid"
 # #1658: one attributable row per PTY write. A dedicated file rather than the logger,

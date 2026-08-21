@@ -10,6 +10,183 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+- **A lingering daemon could silently undo a relocation.** `_stop_live` sent
+  SIGTERM and moved on; a daemon still shutting down keeps the log path it
+  resolved at import — the old one — and recreates the directory the move just
+  emptied, re-occupying the freed name and leaving a re-run convinced there is
+  still state to move. Observed directly: a relocation reporting success with
+  `~/.swarm` back moments later holding a lone `swarm.log`. It now waits for the
+  signalled processes to exit and SIGKILLs anything ignoring SIGTERM. The result
+  also carries `source_recreated`, so if the old directory does come back the
+  command says something is still running against it instead of printing
+  "Relocation complete" over the top.
+
+- The relocated flake in `test_worker_selector_browser` is fixed. It pressed
+  ArrowDown and evaluated the highlight immediately; the keypress is handled
+  asynchronously, so roughly one run in five reported "no active row". It now
+  waits for the state the assertion is about. Confirmed 8/8 after, from 1-in-5
+  failures before — unrelated to the relocation work, but a random CI failure is
+  friction nobody needs.
+
+- **End-to-end rehearsal of the developer journey found three more defects.**
+  A released 2026.8.20 install was built, given real state and a bound holder,
+  updated through its own `perform_update()`, then relocated — on a machine with
+  no systemd and a non-standard `uv` bin directory.
+
+  - **Relocation reported success while leaving `swarm` occupied.**
+    `$UV_TOOL_BIN_DIR` is an *install-time* variable and is normally absent from
+    the shell that later runs `swarm relocate`, and `uv tool dir --bin` then
+    reports the default rather than the directory actually used. The command's
+    entire purpose failed silently. The shim search now starts from the
+    directory of the running command — if you can type `swarm relocate`, the
+    shim is right there — and also reads the `install-path` entries in `uv`'s own
+    receipt.
+
+  - **The command could claim success it had not achieved.** It now re-checks
+    afterwards and, if any `swarm` is still present, says so in red with the
+    paths rather than printing "Relocation complete".
+
+  - **A move that would break the holder is now refused.** A Unix socket path is
+    capped at ~104 bytes by `sockaddr_un.sun_path`, and `.swarm-legacy` is seven
+    bytes longer than `.swarm`. A deep enough home directory would leave the
+    holder unable to bind and no worker able to start — *after* a one-way move.
+    Checked before anything is touched. (Hit for real while rehearsing, in a
+    deep scratch directory.)
+
+  - The completion message no longer tells a machine without systemd to run
+    `systemctl`.
+
+- **Pre-merge review of `swarm relocate` turned up five defects.** All were
+  found by exercising the awkward paths rather than re-reading the code:
+
+  - **No systemd meant a crash *after* the state directory had moved.** macOS
+    and systemd-less WSL have no `systemctl` binary, and the raw call raises
+    `FileNotFoundError`. Unguarded, that aborted the run partway through and
+    reported it as a traceback. `_systemctl` now tolerates a missing binary.
+
+  - **Relocating before first run half-applied, silently.** With no `~/.swarm`
+    to move, nothing created `~/.swarm-legacy` — so the unit and entrypoint were
+    renamed while `state_dir()` still resolved to the old path. The install
+    looked relocated but would have written its state straight back to the name
+    it was supposed to free, and neither `swarm init` nor the update cleanup
+    would have recognised it as relocated. The target is now created even when
+    there is nothing to move; its existence *is* the marker.
+
+  - **A dangling enable link was left behind.** `_remove_old_unit` returned
+    early when the unit file was already gone, so
+    `default.target.wants/swarm.service` kept pointing at nothing and systemd
+    complained on every reload. `disable` now always runs and the stale symlink
+    is cleared.
+
+  - **`already_done` ignored that stale link**, so re-running reported success
+    and never cleaned it up. It now counts.
+
+  - **Shims outside `~/.local/bin` were missed.** `uv` honours
+    `$UV_TOOL_BIN_DIR` and `$XDG_BIN_HOME`; an install that moved its bin
+    directory would have kept the old name occupied — the one thing the command
+    exists to prevent. The search now covers both, and `perform_update()` shares
+    the same helper so the two cannot drift.
+
+- **An update would have destroyed whatever else owned the `swarm` name.**
+  `uv tool install --force` overwrites whatever sits at a declared script's
+  name — confirmed by running it against a foreign binary and watching it
+  vanish. On a relocated install that name has deliberately been handed to
+  something else, so an update silently replaced it. `perform_update()` now
+  moves a `swarm` it does not own aside before installing and restores it
+  afterwards (preserving a symlink as a symlink), verified end to end: the
+  other project's binary is still there and still itself after a full update.
+
+  Dropping the `swarm` entrypoint from the package would *not* have been a
+  safe alternative: an un-relocated install would lose the command while its
+  `swarm.service` still invoked `swarm serve`, breaking the service outright.
+
+## [2026.8.21] - 2026-08-21
+
+### Features
+
+- **`swarm relocate` — the destructive update that frees the `swarm` name.**
+  Moves `~/.swarm` → `~/.swarm-legacy`, renames `swarm.service` →
+  `swarm-legacy.service` (carrying any `swarm.service.d/` drop-in across, with
+  its `ExecStart` renamed too), and removes the `swarm` entrypoint. Nothing about
+  a hive's contents changes — only where they live — and Legacy keeps working
+  afterwards under `swarm-legacy`.
+
+  It is genuinely destructive: the pty-holder binds `<state>/holder.sock`, and a
+  Unix socket's path is fixed at `bind()`, so the sidecar and every running
+  worker must go down for the directory to move. The command prints exactly what
+  will move, lists the live daemon/holder PIDs by name, and requires the operator
+  to type `relocate`. `--dry-run` shows all of it and touches nothing.
+
+  Every step is idempotent and the directory moves *first*, so an interrupted run
+  is fixed by re-running rather than by hand: state already in the new location is
+  found by `state_dir()` regardless of what the unit still says.
+
+  Both `swarm` and `swarm-legacy` entrypoints now ship together, so an install
+  that has not relocated is completely unaffected by the update.
+
+### Changes
+
+- **All runtime state now resolves through `swarm.paths.state_dir()`** instead of
+  ~50 hardcoded `~/.swarm` literals. Resolution is `$SWARM_STATE_DIR`, then
+  `~/.swarm-legacy` if it exists, then `~/.swarm`. The relocated directory is
+  preferred deliberately: freeing the old name means something else may create a
+  fresh `~/.swarm`, and Legacy must keep reading its own hive rather than
+  silently adopting an empty stranger.
+
+  Config values that get *serialized* (`report_dir`, the log file) use
+  `state_path_str()`, which stays `~`-anchored. Writing an absolute path into the
+  user's config would freeze today's location into the file and break on the next
+  relocation.
+
+### Fixes
+
+- **`swarm stop`, `swarm migration finish` and `swarm migration reverse` were
+  broken by a circular import** and failed with `ImportError: cannot import name
+  '_DAEMON_LOCK_PATH' from partially initialized module 'swarm.server.runner'`.
+  `runner` imported `daemon` at module top while `daemon` re-exported names back
+  from `runner` at its bottom (a back-compat shim from the god-object refactor),
+  so importing `runner` first — which every one of those CLI paths does — blew up
+  before doing any work. `runner` now imports `SwarmDaemon` lazily at the two
+  sites that construct one. Our own migration procedure told operators to run
+  `swarm stop` first, so this broke the documented path.
+
+- Three tests asserted `~/.swarm` literals and so passed only on an un-relocated
+  developer machine. They now assert the value follows the state dir.
+
+- **`swarm init` would have resurrected `swarm.service` on a relocated install.**
+  It installs the unit whenever one is absent — and after `swarm relocate` one
+  *is* absent, so it wrote a fresh `swarm.service` re-occupying the freed name and
+  pointing at a `swarm` entrypoint that no longer exists: a unit that can never
+  start, created by a command the operator thought was safe. `install_service()`
+  and `ensure_killmode_process()` now resolve the unit through
+  `current_unit_name()`, which follows the state directory.
+
+- **The test suite wrote, enabled and started the developer's real
+  `~/.config/systemd/user/swarm.service`.** Eight `test_init_*` cases reached
+  `install_service()` unpatched. On a relocated box this silently undid part of
+  the relocation on every test run — which is how the bug above was found. An
+  autouse fixture now redirects the unit directory and stubs `systemctl`, and
+  pins the relocation state so unit naming does not depend on whether the machine
+  running the tests happens to be relocated.
+
+- `test_dev_reexec_when_installed` hung for 30s and timed out. It patched
+  `os.execvp` with a bare mock, but `execvp` *replaces* the process — nothing
+  after it runs — so execution fell through into `run_daemon()` and the test
+  waited on a real daemon. The circular-import fix above is what exposed it: the
+  `ImportError` had been aborting the test before it ever got that far. The mock
+  now raises `SystemExit`, which is what the real call does to the interpreter.
+
+- **Every in-app update re-occupied the `swarm` name on a relocated install.**
+  `uv tool install` writes every console script the package declares, so each
+  update handed `swarm` straight back to Legacy — silently undoing the one thing
+  `swarm relocate` exists to do. Confirmed by running the real update command on
+  a relocated box and watching `~/.local/bin/swarm` reappear. `perform_update()`
+  now removes the recreated shim and says so at WARNING level.
+
+  It removes the shim **only** when it resolves into this package's own tool
+  directory. Once something else owns `swarm`, deleting it would be destructive
+  rather than tidy, so a foreign binary is left alone and logged instead.
+
 ## [2026.8.20] - 2026-08-20
 
 ### Features

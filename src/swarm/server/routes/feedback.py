@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from pathlib import Path
 from typing import cast
 
 from aiohttp import web
@@ -19,9 +18,10 @@ from swarm.feedback import build_issue_url, collect_attachments
 from swarm.feedback.builder import Attachment as BuilderAttachment
 from swarm.feedback.builder import Category, FeedbackPayload, build_markdown
 from swarm.feedback.gh_submit import GhSubmitError, check_gh_status, submit_via_gh
+from swarm.paths import state_dir
 from swarm.server.helpers import get_daemon, handle_errors, json_error
 
-_LAST_REPORT_PATH = Path("~/.swarm/last-report.json").expanduser()
+_LAST_REPORT_PATH = state_dir() / "last-report.json"
 
 _VALID_CATEGORIES: set[str] = {"bug", "feature", "question"}
 

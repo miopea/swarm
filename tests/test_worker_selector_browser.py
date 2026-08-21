@@ -315,6 +315,10 @@ def test_the_active_row_stays_visible_against_the_tints(phone_page):
     _open_selector(page, base)
 
     page.keyboard.press("ArrowDown")
+    # The keypress is handled asynchronously; evaluating straight away raced it
+    # and reported "no active row" roughly one run in five. Wait for the state
+    # the assertion is about, rather than for a fixed interval.
+    page.wait_for_selector("#wsel-list .wsel-opt.wsel-active", timeout=10000)
     same = page.evaluate("""() => {
         const active = document.querySelector('#wsel-list .wsel-opt.wsel-active');
         if (!active) return 'no active row';

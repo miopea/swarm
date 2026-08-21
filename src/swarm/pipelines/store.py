@@ -8,11 +8,12 @@ import threading
 from pathlib import Path
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 from swarm.pipelines.models import Pipeline, pipeline_from_dict
 
 _log = get_logger("pipelines.store")
 
-_DEFAULT_PATH = Path.home() / ".swarm" / "pipelines.json"
+_DEFAULT_PATH = state_dir() / "pipelines.json"
 
 
 class PipelineStore:

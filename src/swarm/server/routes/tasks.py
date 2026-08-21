@@ -7,6 +7,7 @@ from typing import Any
 
 from aiohttp import web
 
+from swarm.paths import state_dir
 from swarm.server.helpers import (
     get_daemon,
     handle_errors,
@@ -80,7 +81,7 @@ def _validate_edit_body(body: dict[str, Any]) -> web.Response | None:
         if isinstance(desc, str) and len(desc) > 10_000:
             return json_error("Task description too long (max 10000 characters)")
     if "attachments" in body:
-        uploads_dir = (Path.home() / ".swarm" / "uploads").resolve()
+        uploads_dir = (state_dir() / "uploads").resolve()
         for att in body["attachments"]:
             att_path = Path(att).resolve()
             if not att_path.is_relative_to(uploads_dir):

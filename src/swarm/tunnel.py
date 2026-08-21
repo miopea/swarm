@@ -7,9 +7,9 @@ import re
 import shutil
 from collections.abc import Callable
 from enum import Enum
-from pathlib import Path
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 
 _log = get_logger("tunnel")
 
@@ -20,7 +20,7 @@ _STOP_TIMEOUT = 5.0  # seconds
 _RESTART_BACKOFF_BASE = 5.0
 _RESTART_MAX_ATTEMPTS = 5
 
-_RESTART_MARKER = Path.home() / ".swarm" / "tunnel-restart"
+_RESTART_MARKER = state_dir() / "tunnel-restart"
 
 _URL_RE = re.compile(r"https://[a-zA-Z0-9_-]+\.trycloudflare\.com")
 

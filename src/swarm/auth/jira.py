@@ -7,13 +7,13 @@ import json
 import logging
 import os
 import time
-from pathlib import Path
 
 import aiohttp
 
 from swarm.auth._oauth import apply_token_response, parse_token_error
+from swarm.paths import state_dir
 
-_TOKEN_PATH = Path.home() / ".swarm" / "jira_tokens.json"
+_TOKEN_PATH = state_dir() / "jira_tokens.json"
 _AUTH_URL = "https://auth.atlassian.com/authorize"
 _TOKEN_URL = "https://auth.atlassian.com/oauth/token"
 _RESOURCES_URL = "https://api.atlassian.com/oauth/token/accessible-resources"
@@ -281,7 +281,7 @@ class JiraTokenManager:
     def _load(self) -> None:
         """Load tokens from DB, fall back to file."""
         raw = None
-        if _TOKEN_PATH == Path.home() / ".swarm" / "jira_tokens.json":
+        if _TOKEN_PATH == state_dir() / "jira_tokens.json":
             from swarm.db.secrets import load_secret
 
             raw = load_secret("jira_tokens")
@@ -317,7 +317,7 @@ class JiraTokenManager:
             "client_id": self.client_id,
             "client_secret": self.client_secret,
         }
-        if _TOKEN_PATH == Path.home() / ".swarm" / "jira_tokens.json":
+        if _TOKEN_PATH == state_dir() / "jira_tokens.json":
             from swarm.db.secrets import save_secret
 
             save_secret("jira_tokens", data)

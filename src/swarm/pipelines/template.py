@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import Any
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 from swarm.pipelines.models import Pipeline, PipelineStep, StepType
 
 _log = get_logger("pipelines.template")
 
-_DEFAULT_TEMPLATE_DIR = Path.home() / ".swarm" / "pipeline-templates"
+_DEFAULT_TEMPLATE_DIR = state_dir() / "pipeline-templates"
 
 
 def load_template(

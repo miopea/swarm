@@ -16,6 +16,7 @@ import aiohttp
 from swarm.config import JiraConfig
 from swarm.integrations.retry import is_transient_status, retry_transient
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 from swarm.tasks.task import (
     JIRA_SYNC_MARKER,
     SwarmTask,
@@ -594,9 +595,7 @@ class JiraSyncService:
         self._running = False
         # (project, swarm status) pairs already warned about — see export_status.
         self._unmapped_warned: set[tuple[str, str]] = set()
-        self._uploads_dir = (
-            _Path(str(uploads_dir)) if uploads_dir else _Path.home() / ".swarm" / "uploads"
-        )
+        self._uploads_dir = _Path(str(uploads_dir)) if uploads_dir else state_dir() / "uploads"
 
     @property
     def enabled(self) -> bool:

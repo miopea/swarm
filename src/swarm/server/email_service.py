@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from swarm.drones.log import LogCategory, SystemAction
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 from swarm.tasks.task import auto_classify_type, smart_title
 
 if TYPE_CHECKING:
@@ -349,7 +350,7 @@ class EmailService:
         self._queen = queen
         self._graph_mgr = graph_mgr
         self._broadcast_ws = broadcast_ws
-        self._uploads_dir = (uploads_dir or (Path.home() / ".swarm" / "uploads")).resolve()
+        self._uploads_dir = (uploads_dir or (state_dir() / "uploads")).resolve()
 
     _SAFE_FILENAME_RE = re.compile(r"[^a-zA-Z0-9._-]")
 

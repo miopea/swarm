@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import aiohttp_jinja2
 from aiohttp import web
 
+from swarm.paths import state_dir
 from swarm.server.helpers import MAX_QUERY_LIMIT, _display_sort, get_daemon
 from swarm.web.app import (
     _queen_dict,
@@ -225,7 +225,7 @@ async def handle_partial_logs(request: web.Request) -> web.Response:
     INFO + WARNING + ERROR, mirroring how Python's logging module
     treats level thresholds.
     """
-    log_path = Path.home() / ".swarm" / "swarm.log"
+    log_path = state_dir() / "swarm.log"
     if not log_path.exists():
         return web.Response(text="(no log file found)", content_type="text/plain")
 

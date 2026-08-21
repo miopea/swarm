@@ -26,6 +26,7 @@ from swarm.logging import get_logger
 from swarm.notify.bus import NotificationBus
 from swarm.notify.desktop import desktop_backend
 from swarm.notify.terminal import terminal_bell_backend
+from swarm.paths import state_dir
 from swarm.queen.queen import Queen
 from swarm.queen.queue import QueenCallQueue
 from swarm.server.analyzer import QueenAnalyzer
@@ -1034,7 +1035,7 @@ class SwarmDaemon(EventEmitter):
         _BACKUP_INTERVAL = 86400  # 24 hours
         _BACKUP_KEEP_DAYS = 7
         last_backup = time.time()
-        backup_dir = Path.home() / ".swarm" / "backups"
+        backup_dir = state_dir() / "backups"
         try:
             while True:
                 await asyncio.sleep(_WAL_INTERVAL)

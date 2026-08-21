@@ -1,6 +1,6 @@
 [project]
 name = "swarm-ai"
-version = "2026.8.20"
+version = "2026.8.21"
 description = "Swarm (legacy) — a hive-mind for Claude Code agents; superseded by Swarm Next"
 readme = "README.md"
 license = "MIT"
@@ -67,7 +67,11 @@ dev = [
 ]
 
 [project.scripts]
+# Both names ship together on purpose.  `swarm` keeps every existing
+# install working across the update; `swarm-legacy` is the name the
+# hive answers to after `swarm relocate` frees `swarm`.
 swarm = "swarm.cli:main"
+swarm-legacy = "swarm.cli:main"
 
 [build-system]
 requires = ["hatchling"]

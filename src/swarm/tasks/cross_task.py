@@ -6,9 +6,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+from swarm.paths import state_dir
 from swarm.tasks.task import DEPENDENCY_TYPE_MAP, PRIORITY_MAP, TYPE_MAP
 
-CROSS_TASK_DIR = Path.home() / ".swarm" / "cross-tasks"
+CROSS_TASK_DIR = state_dir() / "cross-tasks"
 
 _MAX_TITLE_LEN = 500
 _MAX_DESC_LEN = 10_000

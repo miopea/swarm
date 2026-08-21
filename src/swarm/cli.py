@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -12,6 +13,7 @@ import click
 
 from swarm.config import HiveConfig, load_config
 from swarm.logging import get_logger, setup_logging, setup_logging_from_cli
+from swarm.paths import state_dir
 
 _log = get_logger("cli")
 
@@ -1234,7 +1236,7 @@ def _cleanup_test(mgr: object) -> None:
     if hasattr(mgr, "cleanup"):
         mgr.cleanup()
     # Remove isolated test task board so it doesn't accumulate stale tasks
-    test_tasks_path = Path.home() / ".swarm" / "test-tasks.json"
+    test_tasks_path = state_dir() / "test-tasks.json"
     test_tasks_path.unlink(missing_ok=True)
 
 
@@ -2388,6 +2390,131 @@ def update(check_only: bool, no_restart: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _dir_size(path: Path) -> str:
+    """Human-readable size of *path*, or "?" when it cannot be walked."""
+    try:
+        total = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+    except OSError:
+        return "?"
+    for unit in ("B", "K", "M", "G"):
+        if total < 1024 or unit == "G":
+            return f"{total:.0f}{unit}"
+        total /= 1024
+    return "?"
+
+
+def _print_relocation_warnings(result: Any) -> None:
+    """Surface anything that means the relocation did not fully land."""
+    if result.source_recreated:
+        click.echo("")
+        click.secho(
+            f"  WARNING: {result.source} came back after the move — something is",
+            fg="red",
+        )
+        click.secho("  still running against it and will keep re-occupying the name.", fg="red")
+        click.echo("  Stop it, delete that directory, then re-run.")
+
+    if result.still_occupied:
+        click.echo("")
+        click.secho(
+            "  WARNING: the 'swarm' name is still occupied — relocation is incomplete:",
+            fg="red",
+        )
+        for entry in result.still_occupied:
+            click.echo(f"    {entry}")
+        click.echo("  Remove it by hand, then re-run 'swarm-legacy relocate'.")
+
+
+def _print_relocation_plan(current: Any) -> None:
+    """Show exactly what the relocation will change, before asking."""
+    click.echo("")
+    click.secho("  DESTRUCTIVE UPDATE — Swarm (legacy) relocation", fg="yellow", bold=True)
+    click.echo("")
+    click.echo("  Frees the 'swarm' name and moves this hive to 'swarm-legacy'.")
+    click.echo("  Your tasks, database and history are NOT changed — only where they live.")
+    click.echo("")
+    click.secho(
+        "  The pty-holder sidecar must go offline. Every running worker will be",
+        fg="yellow",
+    )
+    click.secho("  terminated. Stop or finish your workers first if you can.", fg="yellow")
+    click.echo("")
+    if current.move_needed:
+        click.echo("  Move state:")
+        click.echo(f"    {current.source}  ->  {current.target}  ({_dir_size(current.source)})")
+    if current.old_unit is not None:
+        click.echo("  Rename service:")
+        click.echo(f"    {current.old_unit.name}  ->  {current.new_unit.name}")
+    if current.old_entrypoints:
+        click.echo("  Remove old command (use 'swarm-legacy' afterwards):")
+        for entry in current.old_entrypoints:
+            click.echo(f"    {entry}")
+    if current.live:
+        click.echo("")
+        click.secho("  Still running — will be terminated:", fg="red")
+        for proc in current.live:
+            click.echo(f"    {proc.kind:<12} pid {proc.pid:<8} {proc.detail}")
+    click.echo("")
+
+
+@main.command()
+@click.option("--dry-run", is_flag=True, help="Show what would change and exit.")
+@click.option("--yes", is_flag=True, help="Skip the typed confirmation (for scripts).")
+@click.option("--no-start", is_flag=True, help="Do not start the renamed service afterwards.")
+def relocate(dry_run: bool, yes: bool, no_start: bool) -> None:
+    """Move this hive off the `swarm` name (DESTRUCTIVE — stops workers).
+
+    Frees `swarm` for reuse and moves this hive to `swarm-legacy`. Your
+    tasks, database and history are not modified — only relocated. The
+    pty-holder sidecar goes offline, so running workers are terminated.
+    """
+    from swarm.relocate import RelocationError, plan
+    from swarm.relocate import relocate as do_relocate
+
+    current = plan()
+    if current.already_done:
+        click.echo("Already relocated — nothing to do.")
+        click.echo(f"  State:   {current.target}")
+        click.echo(f"  Service: {current.new_unit.name}")
+        return
+
+    _print_relocation_plan(current)
+
+    if dry_run:
+        click.echo("Dry run. Nothing was changed.")
+        return
+
+    if not yes:
+        answer = click.prompt("Type 'relocate' to continue", default="", show_default=False)
+        if answer.strip() != "relocate":
+            click.echo("Aborted. Nothing was changed.")
+            raise SystemExit(1)
+
+    try:
+        result = do_relocate(current, start=not no_start)
+    except RelocationError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo("")
+    if result.moved:
+        click.echo(f"Moved:   {result.source}  ->  {result.target}")
+    if result.unit_written is not None:
+        click.echo(f"Service: {result.unit_written.name}")
+    for entry in result.entrypoints_removed:
+        click.echo(f"Removed: {entry}")
+    _print_relocation_warnings(result)
+
+    click.echo("")
+    click.secho("Relocation complete. This hive now answers to 'swarm-legacy'.", bold=True)
+    click.echo("  swarm-legacy status      # instead of 'swarm status'")
+    # Only point at systemctl where it exists — macOS and systemd-less WSL
+    # would otherwise be told to run a command they do not have.
+    if shutil.which("systemctl"):
+        click.echo("  systemctl --user status swarm-legacy")
+    else:
+        click.echo("  (no systemd here — start it yourself with 'swarm-legacy serve')")
+
+
 @main.group()
 def migration() -> None:
     """Verify and finish a migration to Swarm Next."""
@@ -2603,7 +2730,7 @@ def restore(backup_file: Path | None, yes: bool) -> None:
         )
 
     if backup_file is None:
-        backup_file = find_latest_backup(Path.home() / ".swarm" / "backups")
+        backup_file = find_latest_backup(state_dir() / "backups")
         if backup_file is None:
             raise click.ClickException(
                 "No backups found in ~/.swarm/backups/ — pass a backup file explicitly."

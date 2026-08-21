@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from aiohttp import web
 
+from swarm.paths import state_dir
 from swarm.server.daemon import console_log
 from swarm.server.helpers import get_daemon, handle_errors, json_error
 
@@ -107,9 +108,8 @@ async def handle_action_update_and_restart(request: web.Request) -> web.Response
 
 async def handle_action_clear_logs(request: web.Request) -> web.Response:
     """Truncate ~/.swarm/swarm.log."""
-    from pathlib import Path
 
-    log_path = Path.home() / ".swarm" / "swarm.log"
+    log_path = state_dir() / "swarm.log"
     try:
         log_path.write_text("")
         console_log("Log file cleared")

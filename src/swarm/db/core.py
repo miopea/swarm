@@ -17,10 +17,11 @@ from typing import Any
 
 from swarm.db.schema import CURRENT_VERSION, PRAGMAS, SCHEMA_V1
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 
 _log = get_logger("db")
 
-_DEFAULT_DB_PATH = Path.home() / ".swarm" / "swarm.db"
+_DEFAULT_DB_PATH = state_dir() / "swarm.db"
 
 
 class SwarmDB:

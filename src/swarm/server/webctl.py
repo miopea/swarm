@@ -8,10 +8,10 @@ import signal
 import subprocess
 import sys
 import threading
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 
 if TYPE_CHECKING:
     from aiohttp import web
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 _log = get_logger("server.webctl")
 
-_PID_DIR = Path.home() / ".swarm"
+_PID_DIR = state_dir()
 _WEB_PID_FILE = _PID_DIR / "web.pid"
 _WEB_LOG_FILE = _PID_DIR / "web.log"
 

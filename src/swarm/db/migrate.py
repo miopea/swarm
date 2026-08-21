@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 
 if TYPE_CHECKING:
     from swarm.db.core import SwarmDB
@@ -34,7 +35,7 @@ _log = get_logger("db.migrate")
 
 def auto_migrate(db: SwarmDB, swarm_dir: Path | None = None) -> int:
     """Run all migrations for legacy files. Returns count of files migrated."""
-    swarm_dir = swarm_dir or Path.home() / ".swarm"
+    swarm_dir = swarm_dir or state_dir()
     migrated = 0
 
     migrated += _migrate_tasks(db, swarm_dir / "tasks.json")

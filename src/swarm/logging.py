@@ -7,7 +7,9 @@ import logging
 import sys
 from pathlib import Path
 
-_DEFAULT_LOG_FILE = "~/.swarm/swarm.log"
+from swarm.paths import state_path_str
+
+_DEFAULT_LOG_FILE = state_path_str("swarm.log")
 _MAX_LOG_BYTES = 5 * 1024 * 1024  # 5 MB
 _BACKUP_COUNT = 3
 

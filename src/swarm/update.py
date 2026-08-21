@@ -12,15 +12,18 @@ import json
 import logging
 import re
 import shlex
+import shutil
 import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from swarm.paths import state_dir
+
 _log = logging.getLogger(__name__)
 
-_CACHE_DIR = Path.home() / ".swarm"
+_CACHE_DIR = state_dir()
 _CACHE_FILE = _CACHE_DIR / "update_cache.json"
 _CACHE_TTL = 86400  # 24 hours
 
@@ -265,6 +268,111 @@ def check_for_update_sync() -> UpdateResult | None:
     return _read_cache()
 
 
+_FOREIGN_BACKUP_SUFFIX = ".pre-swarm-update"
+
+
+def _is_our_shim(path: Path) -> bool:
+    """True when *path* is the console script uv installs for this package."""
+    try:
+        return "swarm-ai" in str(path.resolve())
+    except OSError:
+        return False
+
+
+def _preserve_foreign_entrypoints() -> list[tuple[Path, Path]]:
+    """Move a ``swarm`` we do not own out of ``uv``'s way before installing.
+
+    ``uv tool install --force`` overwrites whatever sits at a declared
+    script's name — verified, not assumed: a foreign ``swarm`` on PATH is
+    silently replaced by ours.  On a relocated install that name has been
+    deliberately handed to something else, so an update would destroy the
+    binary now standing there.
+
+    The file is moved aside and put back afterwards, which also preserves a
+    symlink as a symlink.  Only relocated installs do this; before
+    relocation ``swarm`` is legitimately ours.
+    """
+    from swarm.paths import is_relocated
+    from swarm.relocate import _shim_directories
+
+    if not is_relocated():
+        return []
+    saved: list[tuple[Path, Path]] = []
+    for directory in _shim_directories():
+        shim = directory / "swarm"
+        if not (shim.exists() or shim.is_symlink()) or _is_our_shim(shim):
+            continue
+        backup = shim.with_name(shim.name + _FOREIGN_BACKUP_SUFFIX)
+        try:
+            if backup.exists() or backup.is_symlink():
+                backup.unlink()
+            shutil.move(str(shim), str(backup))
+            saved.append((shim, backup))
+            _log.warning("Moved %s aside for the update; it is not ours", shim)
+        except OSError:
+            _log.warning("could not preserve %s across the update", shim, exc_info=True)
+    return saved
+
+
+def _restore_foreign_entrypoints(saved: list[tuple[Path, Path]]) -> None:
+    """Put back what ``uv`` overwrote, discarding the copy it installed."""
+    for shim, backup in saved:
+        try:
+            if shim.exists() or shim.is_symlink():
+                shim.unlink()
+            shutil.move(str(backup), str(shim))
+            _log.warning("Restored %s after the update", shim)
+        except OSError:
+            _log.warning("could not restore %s — the copy is at %s", shim, backup, exc_info=True)
+
+
+def _drop_reoccupied_entrypoint() -> Path | None:
+    """Remove the ``swarm`` shim a reinstall recreates on a relocated install.
+
+    ``uv tool install`` writes every console script the package declares, so
+    every update hands ``swarm`` back to Legacy even though ``swarm relocate``
+    deliberately gave that name up.  Left alone, each update silently
+    re-occupies a name the operator freed — and once something else owns that
+    name, re-occupying it is a collision, not a cosmetic wart.
+
+    Only a shim resolving into this package's own tool directory is removed, so
+    a ``swarm`` belonging to something else is never deleted by us.
+    """
+    from swarm.paths import is_relocated
+    from swarm.relocate import _shim_directories
+
+    if not is_relocated():
+        return None
+    # Shared with the relocation itself so the two cannot disagree about
+    # where a shim lives.
+    for directory in _shim_directories():
+        shim = directory / "swarm"
+        if not (shim.exists() or shim.is_symlink()):
+            continue
+        try:
+            owned = "swarm-ai" in str(shim.resolve())
+        except OSError:
+            owned = False
+        if not owned:
+            _log.warning(
+                "%s exists but is not ours — leaving it alone. This install is "
+                "relocated and answers to 'swarm-legacy'.",
+                shim,
+            )
+            continue
+        try:
+            shim.unlink()
+            _log.warning(
+                "Removed %s recreated by the update; this install is relocated "
+                "and answers to 'swarm-legacy'.",
+                shim,
+            )
+            return shim
+        except OSError:
+            _log.warning("could not remove recreated entrypoint %s", shim, exc_info=True)
+    return None
+
+
 async def perform_update(
     on_output: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
@@ -282,6 +390,8 @@ async def perform_update(
     def _emit(line: str) -> None:
         if on_output:
             on_output(line)
+
+    preserved = _preserve_foreign_entrypoints()
 
     _emit("Installing from GitHub...")
     print("  → Installing from GitHub...", flush=True)
@@ -321,6 +431,13 @@ async def perform_update(
         _CACHE_FILE.unlink(missing_ok=True)
     except Exception:
         _log.debug("Failed to clear update cache", exc_info=True)
+
+    _restore_foreign_entrypoints(preserved)
+    dropped = _drop_reoccupied_entrypoint()
+    if dropped is not None:
+        msg = f"Removed {dropped} (this install is relocated; use 'swarm-legacy')"
+        output_lines.append(msg)
+        _emit(msg)
 
     _emit("Update complete!")
     return True, "\n".join(output_lines)

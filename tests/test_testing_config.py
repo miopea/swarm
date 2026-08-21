@@ -5,6 +5,7 @@ from pathlib import Path
 import yaml
 
 from swarm.config import HiveConfig, TestConfig, _parse_config, serialize_config
+from swarm.paths import state_path_str
 from swarm.testing.config import TestConfig as TestingTestConfig
 
 
@@ -19,7 +20,10 @@ class TestTestConfig:
         cfg = TestConfig()
         assert cfg.enabled is False
         assert cfg.auto_resolve_delay == 4.0
-        assert cfg.report_dir == "~/.swarm/reports"
+        # Follows the state dir rather than naming ~/.swarm outright, so a
+        # relocated install writes reports beside its own state.
+        assert cfg.report_dir == state_path_str("reports")
+        assert cfg.report_dir.startswith("~/")
 
     def test_testing_module_matches(self):
         """TestConfig in config.py and testing/config.py should have same fields."""

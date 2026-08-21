@@ -662,6 +662,15 @@ a stale copy, or a Reload button that silently reinstalls the wrong tree.
 
 ### If Next should later take the `swarm` name
 
+**Legacy updates no longer clobber it.** `uv tool install --force` overwrites
+whatever sits at a declared script's name — measured, not assumed. Since Legacy
+still declares a `swarm` console script, an update on a box where something else
+owns that name used to replace it silently. `perform_update()` now moves a
+`swarm` it does not own aside before installing and restores it afterwards, so
+the handoff survives updates. Dropping the entrypoint instead would break every
+un-relocated install, whose `swarm.service` still invokes `swarm serve`.
+
+
 The operator's stated intent is that Swarm Next eventually installs *as* `swarm`.
 That is a rename of Next, not of Legacy, and the order matters — Legacy currently
 owns `~/.local/bin/swarm`:
