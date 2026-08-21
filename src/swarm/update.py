@@ -32,6 +32,8 @@ _GITHUB_RAW_AT_SHA = (
     "https://raw.githubusercontent.com/miopea/swarm-legacy/{sha}/src/swarm/__init__.py"
 )
 _GITHUB_API_COMMITS_URL = "https://api.github.com/repos/miopea/swarm-legacy/commits?per_page=1"
+_GITHUB_API_REPO_URL = "https://api.github.com/repos/miopea/swarm-legacy"
+_REPO_FULL_NAME = "miopea/swarm-legacy"
 _VERSION_RE = re.compile(r'__version__\s*=\s*["\']([^"\']+)["\']')
 
 _CURL_TIMEOUT = "10"  # seconds (string for CLI arg)
@@ -64,6 +66,12 @@ class UpdateResult:
     checked_at: float = field(default_factory=time.time)
     error: str = ""
     is_dev: bool = False
+    # Where GitHub says this repo actually lives now.  Empty when the
+    # probe could not answer — which is NOT the same as "unmoved", so the
+    # two are kept distinguishable rather than defaulting to the baked-in
+    # name and reporting a move that was never checked for.
+    repo_full_name: str = ""
+    repo_moved: bool = False
 
 
 def _is_dev_install() -> bool:
@@ -113,7 +121,7 @@ async def _fetch_remote_version(sha: str = "") -> tuple[str, str]:
     try:
         proc = await asyncio.create_subprocess_exec(
             "curl",
-            "-sS",
+            "-sSL",  # -L: a repo rename answers 301; without it we parse the redirect
             "--max-time",
             _CURL_TIMEOUT,
             url,
@@ -140,7 +148,7 @@ async def _fetch_latest_commit() -> dict[str, str]:
     try:
         proc = await asyncio.create_subprocess_exec(
             "curl",
-            "-sS",
+            "-sSL",  # -L: see _fetch_remote_version — a rename 301s here too
             "--max-time",
             _CURL_TIMEOUT,
             "-H",
@@ -171,6 +179,50 @@ async def _fetch_latest_commit() -> dict[str, str]:
         # an update-check that mysteriously returns empty have a trail.
         _log.debug("get_latest_commit failed", exc_info=True)
         return {}
+
+
+async def fetch_repo_location() -> str:
+    """Where GitHub currently serves this repo, as ``owner/name``.
+
+    Every build bakes in the repo URL that was current when it shipped, so
+    a rename leaves existing installs pointing at the old name forever.
+    GitHub redirects, which is why the install keeps working and why the
+    breakage is quiet: ``git`` follows the redirect, and ``curl -L`` now
+    does too, so nothing fails — the name in the binary simply stops being
+    the truth.
+
+    Asking the API which repo it actually served turns that into a fact we
+    can report.  Returns ``""`` when the probe fails; the caller must not
+    read that as "unmoved".
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "curl",
+            "-sSL",
+            "--max-time",
+            _CURL_TIMEOUT,
+            "-H",
+            "Accept: application/vnd.github+json",
+            _GITHUB_API_REPO_URL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await proc.communicate()
+        if proc.returncode != 0:
+            return ""
+        data = json.loads(stdout.decode(errors="replace"))
+        if not isinstance(data, dict):
+            return ""
+        name = data.get("full_name")
+        return str(name) if isinstance(name, str) else ""
+    except Exception:
+        _log.debug("fetch_repo_location failed", exc_info=True)
+        return ""
+
+
+def repo_has_moved(resolved: str) -> bool:
+    """True only when the probe answered AND named a different repo."""
+    return bool(resolved) and resolved.casefold() != _REPO_FULL_NAME.casefold()
 
 
 def _read_cache() -> UpdateResult | None:
@@ -247,6 +299,17 @@ async def check_for_update(*, force: bool = False) -> UpdateResult:
     else:
         available = _version_tuple(remote) > _version_tuple(current)
 
+    resolved_repo = await fetch_repo_location()
+    moved = repo_has_moved(resolved_repo)
+    if moved:
+        _log.warning(
+            "[repo-moved] this build installs from %s but GitHub now serves it as %s. "
+            "Updates still work (git and curl follow the redirect); the compiled-in "
+            "name is stale and should be refreshed in a release.",
+            _REPO_FULL_NAME,
+            resolved_repo,
+        )
+
     result = UpdateResult(
         available=available,
         current_version=current,
@@ -255,6 +318,8 @@ async def check_for_update(*, force: bool = False) -> UpdateResult:
         commit_message=commit_info.get("message", ""),
         commit_date=commit_info.get("date", ""),
         is_dev=dev,
+        repo_full_name=resolved_repo,
+        repo_moved=moved,
     )
     _write_cache(result)
     return result
@@ -444,6 +509,23 @@ async def perform_update(
         msg = f"Removed {dropped} (this install is relocated; use 'swarm-legacy')"
         output_lines.append(msg)
         _emit(msg)
+
+    # Check where the repo actually lives now, AFTER installing.  The
+    # build just written carries whatever URL was current when it was
+    # committed, so this is the first moment the freshly-installed name
+    # can be compared against what GitHub serves.  Reported, never acted
+    # on: retargeting an install to a repo the operator did not name is
+    # not a decision an updater gets to make silently.
+    resolved_repo = await fetch_repo_location()
+    if repo_has_moved(resolved_repo):
+        msg = (
+            f"Note: this build installs from {_REPO_FULL_NAME}, but GitHub now "
+            f"serves it as {resolved_repo}. Updates still work through the "
+            f"redirect; the URL should be refreshed in a release."
+        )
+        output_lines.append(msg)
+        _emit(msg)
+        _log.warning("[repo-moved] %s -> %s (after update)", _REPO_FULL_NAME, resolved_repo)
 
     _emit("Update complete!")
     return True, "\n".join(output_lines)

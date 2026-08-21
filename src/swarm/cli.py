@@ -2392,10 +2392,12 @@ def update(check_only: bool, no_restart: bool) -> None:
 
 def _dir_size(path: Path) -> str:
     """Human-readable size of *path*, or "?" when it cannot be walked."""
-    try:
-        total = sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
-    except OSError:
+    from swarm.relocate import dir_size_bytes
+
+    measured = dir_size_bytes(path)
+    if measured is None:
         return "?"
+    total: float = measured
     for unit in ("B", "K", "M", "G"):
         if total < 1024 or unit == "G":
             return f"{total:.0f}{unit}"

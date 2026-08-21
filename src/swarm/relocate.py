@@ -292,6 +292,24 @@ def _entrypoint_candidates() -> list[Path]:
     return found
 
 
+def dir_size_bytes(path: Path) -> int | None:
+    """Total size of *path* in bytes, or ``None`` when it cannot be walked.
+
+    ``None`` rather than ``0`` on failure: a relocation banner that says
+    "0 B" about a 99 MB hive reads as "nothing to move" and invites the
+    operator to skip the very thing they need to do.  Not knowing and
+    knowing it is empty are different facts, so they get different values.
+    """
+    # rglob on a missing directory yields nothing and raises nothing, so
+    # the sum would be a perfectly confident 0.  Check first.
+    if not path.is_dir():
+        return None
+    try:
+        return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+    except OSError:
+        return None
+
+
 def plan(*, source: Path | None = None, target: Path | None = None) -> RelocationPlan:
     """Resolve what relocating would change, touching nothing."""
     src = source or original_state_dir()
