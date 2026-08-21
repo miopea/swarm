@@ -492,10 +492,40 @@ Swarm (legacy) originally owned the `swarm` command, `swarm.service`, and `~/.sw
 | Service | `swarm.service` | `swarm-legacy.service` |
 | State | `~/.swarm` | `~/.swarm-legacy` |
 
+#### The upgrade, step by step
+
+Two separate things. **Updating changes nothing about where anything lives** —
+you keep `swarm`, `swarm.service` and `~/.swarm` until you choose to relocate.
+
 ```bash
-swarm relocate --dry-run   # show exactly what would change, touch nothing
-swarm relocate             # asks you to type 'relocate' to confirm
+# 1. Update. Nothing moves; both `swarm` and `swarm-legacy` are now installed.
+#    (Or click Update & Restart in the dashboard.)
+swarm --version                 # expect 2026.8.21 or later
+
+# 2. Look before you leap. Touches nothing.
+swarm relocate --dry-run
+
+# 3. Stop or finish your workers — the next step terminates them.
+
+# 4. Relocate. Asks you to type 'relocate'.
+swarm relocate
+
+# 5. From here on the hive answers to `swarm-legacy`.
+swarm-legacy status
+systemctl --user status swarm-legacy
 ```
+
+The service is re-enabled and started for you, so the hive is back up when the
+command returns. Your tasks, database, history and config come across untouched
+— only the directory holding them changes name.
+
+If anything interrupts step 4, **re-run it**. Every step is idempotent and the
+command tells you what is left; it is designed to converge rather than need
+unpicking. Running it on an already-relocated install just prints
+`Already relocated — nothing to do.`
+
+There is no source checkout involved in a normal install: the service runs
+`~/.local/bin/swarm-legacy serve` from your home directory.
 
 Nothing about your hive's *contents* changes and you keep using Legacy exactly as
 before — only under the new name. The relocation is what makes the old names

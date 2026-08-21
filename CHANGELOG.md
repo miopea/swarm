@@ -10,6 +10,19 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+- **After an update, a relocated install was told to relocate again — forever.**
+  `uv` writes two copies of every console script: the shim on `PATH` and the
+  script it points at inside the tool directory. The post-update cleanup stopped
+  after removing the first, so the inner copy survived every update and kept
+  `already_done` false. An operator who had relocated weeks ago would be shown
+  the full destructive banner — "every running worker will be terminated" — on a
+  routine `swarm-legacy relocate --dry-run`. It now removes every copy it owns
+  and leaves anything it does not.
+
+  The journey rehearsal missed this because it only checked the `PATH` shim. The
+  regression test now asserts the end state an operator actually sees: after an
+  update on a relocated install, `already_done` is true.
+
 ## [2026.8.21] - 2026-08-21
 
 ### Features
