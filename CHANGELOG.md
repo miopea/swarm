@@ -10,6 +10,50 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+## [2026.8.21.3] - 2026-08-21
+
+### Features
+
+- **Relocate from the dashboard — the last step that still needed a terminal.**
+  `swarm relocate` was reachable only from a shell, so "update without a
+  terminal" was a half-truth: the in-app update landed the new build, and then
+  the one remaining move required a prompt. A banner now appears while the hive
+  still answers to the `swarm` name, showing source, target, measured size and
+  the live PIDs about to die, behind one `Move now` button.
+
+  The work cannot run in the daemon. `relocate()` stops the unit and SIGTERMs
+  the PID it reads from `daemon.lock` — which is the daemon serving the request
+  — so an in-process call would kill itself between moving the state and
+  rewriting the unit. `POST /api/relocate` hands off to a detached
+  `swarm-legacy relocate --yes` instead and returns immediately; the helper
+  stops the daemon, moves the state and starts `swarm-legacy.service`, which
+  rebinds the same port for the dashboard to reconnect to.
+
+  Two things decide whether that handoff survives, and both are now enforced
+  rather than assumed. The helper is resolved as `swarm-legacy` and never
+  `swarm`, because `_remove_old_entrypoints()` unlinks that shim partway
+  through — a helper launched under it would delete its own executable
+  mid-move. And `start_new_session=True` creates a new session but *not* a new
+  cgroup, so without `KillMode=process` the `systemctl stop` takes the helper
+  down with the daemon, leaving state moved and no unit written. That is the one
+  outcome needing a terminal to repair, so it is now a pre-flight 409 naming the
+  fix instead of a post-mortem.
+
+### Changes
+
+- `/api/health` carries `relocated` and `state_dir`. The banner polls that
+  boolean rather than `plan()`, which shells out to `systemctl is-active` and
+  walks the state directory — far too expensive per tick. Detail is fetched
+  once, from `GET /api/relocate`, when the banner first renders.
+
+### Fixes
+
+- **`dir_size_bytes()` reported a confident `0` for a directory it could not
+  read.** `rglob` on a missing path yields nothing and raises nothing, so the
+  sum succeeded at zero. Rendered in the banner that reads as "nothing to
+  move" — an invitation to skip the very step the operator needs. Unknown and
+  empty are now different values.
+
 ## [2026.8.21.2] - 2026-08-21
 
 ### Features

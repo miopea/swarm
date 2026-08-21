@@ -265,6 +265,8 @@
         hidePalette: function() { hidePalette(); },
         copyHolderDriftCmd: function() { window.copyHolderDriftCmd && window.copyHolderDriftCmd(); },
         bounceHolder: function() { bounceHolder(); },
+        relocateHive: function() { relocateHive(); },
+        hideRelocateBanner: function() { hideRelocateBanner(); },
     };
 
     // Click delegation for [data-action]
@@ -9129,6 +9131,95 @@
         if (cmdEl) cmdEl.textContent = _holderDriftCmd;
         banner.style.display = 'block';
     }
+    // --- Relocation banner ---
+    // Shown while this hive still answers to the `swarm` name. The health
+    // poll carries only a cheap boolean; the detail (sizes, live PIDs)
+    // comes from one /api/relocate call the first time we render, because
+    // building it shells out to systemctl.
+    var _relocateDismissed = false;
+    var _relocateDetailFetched = false;
+
+    function formatRelocateSize(bytes) {
+        if (bytes === null || bytes === undefined) return '';
+        var units = ['B', 'K', 'M', 'G'];
+        var n = bytes;
+        for (var i = 0; i < units.length; i++) {
+            if (n < 1024 || i === units.length - 1) return ' (' + n.toFixed(0) + units[i] + ')';
+            n /= 1024;
+        }
+        return '';
+    }
+
+    function updateRelocateBanner(health) {
+        var banner = document.getElementById('relocate-banner');
+        if (!banner) return;
+        // `relocated` is absent on a daemon older than this feature — treat
+        // only an explicit false as "still on the old name" so an old
+        // daemon never shows a banner whose endpoint it does not serve.
+        if (health.relocated !== false || _relocateDismissed) {
+            banner.style.display = 'none';
+            return;
+        }
+        if (_relocateDetailFetched) return;
+        _relocateDetailFetched = true;
+        fetch('/api/relocate')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.relocated) return;
+                var detail = document.getElementById('relocate-banner-detail');
+                if (detail) {
+                    detail.textContent = ' ' + data.source + ' \u2192 ' + data.target
+                        + formatRelocateSize(data.size_bytes)
+                        + '. All running workers will be terminated.';
+                }
+                if (!_relocateDismissed) banner.style.display = 'block';
+            })
+            .catch(function() {
+                // Let a later poll retry rather than hiding the action forever.
+                _relocateDetailFetched = false;
+            });
+    }
+
+    function hideRelocateBanner() {
+        _relocateDismissed = true;
+        var banner = document.getElementById('relocate-banner');
+        if (banner) banner.style.display = 'none';
+    }
+
+    function relocateHive() {
+        showConfirm(
+            'Move this hive to swarm-legacy? Every running worker is terminated, '
+            + '~/.swarm moves to ~/.swarm-legacy, and swarm.service becomes '
+            + 'swarm-legacy.service. The dashboard returns on the same port.',
+            function() {
+                actionFetch('/api/relocate', { method: 'POST' })
+                    .then(function(r) {
+                        return r.json().then(function(data) { return { ok: r.ok, data: data }; });
+                    })
+                    .then(function(res) {
+                        if (!res.ok) {
+                            showToast('Relocation refused: ' + (res.data.error || 'unknown error'), true);
+                            return;
+                        }
+                        if (res.data.status === 'already') {
+                            showToast('Already relocated \u2014 nothing to move.');
+                            hideRelocateBanner();
+                            return;
+                        }
+                        showToast('Relocating \u2014 the dashboard will reconnect as swarm-legacy. '
+                            + 'If it does not return within ~30s, hard-refresh.');
+                        hideRelocateBanner();
+                        waitForRestart();
+                    })
+                    .catch(function() {
+                        // The daemon may already be down — start polling.
+                        hideRelocateBanner();
+                        waitForRestart();
+                    });
+            }
+        );
+    }
+
     window.copyHolderDriftCmd = function() {
         if (!_holderDriftCmd) return;
         try {
@@ -9183,6 +9274,7 @@
             .then(function(data) {
                 updateSchemaDriftIndicator(!!data.mcp_schema_drift);
                 updateHolderDriftIndicator(data.holder_drift);
+                updateRelocateBanner(data);
             })
             .catch(function() { /* swallow — transient failures are fine */ });
     }

@@ -5,11 +5,16 @@ from __future__ import annotations
 import asyncio
 import os
 import time
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from aiohttp import web
 
 from swarm.auth.password import verify_password
 from swarm.server.helpers import get_daemon, handle_errors, json_error, read_file_field
+
+if TYPE_CHECKING:
+    from swarm.relocate import RelocationPlan
 
 
 async def _best_effort_reinstall(context: str, timeout: float = 30.0) -> None:
@@ -46,6 +51,8 @@ def register(app: web.Application) -> None:
     app.router.add_get("/api/mcp/schema-drift", handle_mcp_schema_drift)
     app.router.add_get("/api/holder/drift", handle_holder_drift)
     app.router.add_post("/api/holder/bounce", handle_holder_bounce)
+    app.router.add_get("/api/relocate", handle_relocation_status)
+    app.router.add_post("/api/relocate", handle_relocate)
     app.router.add_get("/api/resources", handle_resources)
     app.router.add_post("/api/client-vitals", handle_client_vitals)
     app.router.add_get("/api/resources/history", handle_resource_history)
@@ -163,6 +170,7 @@ async def handle_health_check(request: web.Request) -> web.Response:
 @handle_errors
 async def handle_health(request: web.Request) -> web.Response:
     from swarm.mcp.tools import tools_source_drift
+    from swarm.paths import is_relocated, state_dir
     from swarm.update import _get_installed_version, build_sha
 
     d = get_daemon(request)
@@ -189,6 +197,11 @@ async def handle_health(request: web.Request) -> web.Response:
             "build_sha": build_sha(),
             "mcp_schema_drift": tools_source_drift()["drift"],
             "holder_drift": holder_drift,
+            # Cheap enough for the poll loop: a name comparison and one
+            # is_dir().  The full plan() shells out to systemctl, so the
+            # banner fetches /api/relocate once rather than every tick.
+            "relocated": is_relocated(),
+            "state_dir": str(state_dir()),
             "source_checked": bool(src.checked) if src else False,
             "source_dirty": bool(src.is_dirty) if src else False,
             "source_dirty_files": list(src.dirty_files) if src else [],
@@ -290,6 +303,138 @@ async def handle_holder_bounce(request: web.Request) -> web.Response:
 
     shutdown.set()
     return web.json_response({"status": "bouncing", "killed_pid": holder_pid})
+
+
+def _relocation_payload(plan_: RelocationPlan) -> dict[str, object]:
+    """Serialize a :class:`RelocationPlan` for the dashboard banner."""
+    from swarm.relocate import dir_size_bytes
+
+    return {
+        "relocated": plan_.already_done,
+        "source": str(plan_.source),
+        "target": str(plan_.target),
+        "move_needed": plan_.move_needed,
+        "size_bytes": dir_size_bytes(plan_.source) if plan_.move_needed else 0,
+        "old_unit": plan_.old_unit.name if plan_.old_unit else None,
+        "new_unit": plan_.new_unit.name,
+        "old_entrypoints": [str(e) for e in plan_.old_entrypoints],
+        "live": [
+            {"kind": proc.kind, "pid": proc.pid, "detail": proc.detail} for proc in plan_.live
+        ],
+    }
+
+
+def _relocate_helper() -> Path | None:
+    """The command that runs the relocation, or None if it cannot be found.
+
+    Deliberately ``swarm-legacy`` and never ``swarm``:
+    ``_remove_old_entrypoints()`` deletes the ``swarm`` shim partway
+    through, so a helper launched under that name would have its own
+    executable removed while running.
+    """
+    import shutil
+    import sys
+
+    candidate = Path(sys.executable).parent / "swarm-legacy"
+    if candidate.exists():
+        return candidate
+    found = shutil.which("swarm-legacy")
+    return Path(found) if found else None
+
+
+def _kill_mode_guard() -> str | None:
+    """Refuse the relocation when systemd would kill the helper mid-move.
+
+    ``relocate()`` runs ``systemctl stop swarm.service`` as its first
+    real step.  ``start_new_session=True`` puts the helper in its own
+    session but NOT its own cgroup, so without ``KillMode=process`` the
+    stop takes the whole cgroup down — helper included — leaving state
+    moved and the unit never rewritten.  That is exactly the
+    half-relocated hive that needs a terminal to repair, so it is worth
+    a pre-flight check rather than a post-mortem.
+    """
+    from swarm.service import current_unit_path
+
+    unit = current_unit_path()
+    if not unit.exists():
+        # Not systemd-managed — nothing stops the unit, nothing kills the helper.
+        return None
+    try:
+        if "KillMode=process" in unit.read_text():
+            return None
+    except OSError:
+        return None
+    return (
+        f"{unit.name} does not set KillMode=process, so stopping the service would "
+        "kill the relocation partway through. Reload swarm once (which patches the "
+        "unit), then try again."
+    )
+
+
+@handle_errors
+async def handle_relocation_status(request: web.Request) -> web.Response:
+    """Report whether this hive still occupies the ``swarm`` name.
+
+    ``plan()`` runs ``systemctl is-active`` and walks the state
+    directory, so it is off the poll path — the dashboard reads the
+    cheap ``relocated`` flag from ``/api/health`` and calls this once,
+    when it needs the detail to render.
+    """
+    from swarm.relocate import plan
+
+    plan_ = await asyncio.to_thread(plan)
+    return web.json_response(_relocation_payload(plan_))
+
+
+@handle_errors
+async def handle_relocate(request: web.Request) -> web.Response:
+    """Move this hive off the ``swarm`` name, without a terminal.
+
+    DESTRUCTIVE: every worker is terminated, ``~/.swarm`` becomes
+    ``~/.swarm-legacy``, and ``swarm.service`` becomes
+    ``swarm-legacy.service``.
+
+    The work CANNOT run in this process.  ``relocate()`` stops the unit
+    and SIGTERMs the daemon PID it reads from ``daemon.lock`` — which is
+    us — so an in-process call would kill itself between moving the
+    state and rewriting the unit.  Instead we hand off to a detached
+    ``swarm-legacy relocate --yes`` and return immediately; it stops
+    this daemon, does the move, and starts ``swarm-legacy.service``,
+    which rebinds the same port for the dashboard to reconnect to.
+    """
+    from swarm.relocate import plan
+
+    plan_ = await asyncio.to_thread(plan)
+    if plan_.already_done:
+        return web.json_response({"status": "already", **_relocation_payload(plan_)})
+
+    helper = _relocate_helper()
+    if helper is None:
+        return json_error(
+            "could not find the 'swarm-legacy' command needed to run the relocation", 500
+        )
+
+    refusal = _kill_mode_guard()
+    if refusal is not None:
+        return json_error(refusal, 409)
+
+    await asyncio.create_subprocess_exec(
+        str(helper),
+        "relocate",
+        "--yes",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return web.json_response(
+        {
+            "status": "relocating",
+            "source": str(plan_.source),
+            "target": str(plan_.target),
+            "unit": plan_.new_unit.name,
+        }
+    )
 
 
 @handle_errors
