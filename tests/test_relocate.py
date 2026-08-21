@@ -98,12 +98,18 @@ class TestMove:
         assert (dst / "uploads" / "a.txt").read_text() == "attachment"
 
     def test_refuses_rather_than_merging_two_hives(self, home: Path) -> None:
-        """Two state directories must never be silently combined."""
+        """Two state directories must never be silently combined.
+
+        The refusal now comes from ``preflight()`` rather than from
+        ``_move_state`` — same contract, but raised before ``_stop_live``
+        rather than after it had killed every worker. Ordering is pinned
+        in test_relocate_preflight.py.
+        """
         (home / ".swarm").mkdir()
         (home / ".swarm-legacy").mkdir()
         (home / ".swarm-legacy" / "swarm.db").write_text("the other hive")
 
-        with pytest.raises(rl.RelocationError, match="Target already exists"):
+        with pytest.raises(rl.RelocationError, match="merge two hives"):
             rl.relocate(rl.plan(), start=False)
 
         # Both survive untouched — nothing was merged or clobbered.

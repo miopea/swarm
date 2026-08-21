@@ -239,3 +239,71 @@ class TestHealthSurface:
 
         assert payload["relocated"] is False, "an explicit false is what shows the banner"
         assert payload["state_dir"].endswith(".swarm")
+
+
+class TestBlockedRelocation:
+    def test_endpoint_refuses_before_launching_the_helper(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, spawns: list, helper_ok: Path
+    ) -> None:
+        """Both directories exist — relocate() would kill the hive, then fail.
+
+        The endpoint must refuse without spawning anything, because the
+        helper stops the service as its first real step.
+        """
+        source = tmp_path / ".swarm"
+        target = tmp_path / ".swarm-legacy"
+        source.mkdir()
+        target.mkdir()
+        blocked = rl.RelocationPlan(
+            source=source,
+            target=target,
+            move_needed=True,
+            old_unit=None,
+            new_unit=tmp_path / "swarm-legacy.service",
+            unit_active=False,
+            target_exists=True,
+        )
+        assert blocked.blocked_reason is not None, "positive control"
+        monkeypatch.setattr(rl, "plan", lambda: blocked)
+
+        resp = asyncio.run(system.handle_relocate(_post()))
+
+        assert resp.status == 409
+        assert spawns == [], "nothing may be launched for a move that cannot succeed"
+
+    def test_status_payload_carries_the_reason(self, tmp_path: Path) -> None:
+        """The banner needs the reason to drop its own button."""
+        source = tmp_path / ".swarm"
+        target = tmp_path / ".swarm-legacy"
+        source.mkdir()
+        target.mkdir()
+        payload = system._relocation_payload(
+            rl.RelocationPlan(
+                source=source,
+                target=target,
+                move_needed=True,
+                old_unit=None,
+                new_unit=tmp_path / "swarm-legacy.service",
+                unit_active=False,
+                target_exists=True,
+            )
+        )
+
+        assert payload["blocked_reason"] is not None
+        assert "merge two hives" in str(payload["blocked_reason"])
+
+    def test_ordinary_plan_has_no_reason(self, tmp_path: Path) -> None:
+        source = tmp_path / ".swarm"
+        source.mkdir()
+        payload = system._relocation_payload(
+            rl.RelocationPlan(
+                source=source,
+                target=tmp_path / ".swarm-legacy",
+                move_needed=True,
+                old_unit=None,
+                new_unit=tmp_path / "swarm-legacy.service",
+                unit_active=False,
+                target_exists=False,
+            )
+        )
+        assert payload["blocked_reason"] is None

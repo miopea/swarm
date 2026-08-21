@@ -10,6 +10,43 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+## [2026.8.21.4] - 2026-08-21
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **"Move now" would have killed a live hive to perform a move that could never
+  succeed.** Seen on a relocated box with 1843 tasks in `~/.swarm-legacy` where
+  something recreated a 3 MB `~/.swarm`. That makes `move_needed` true, so the
+  banner offered the relocation — but `_move_state()` refuses to merge two
+  hives, and it refused from INSIDE `relocate()`, after `_stop_live()` had
+  stopped the service and SIGKILLed the daemon and holder. Full destructive
+  price, zero chance of success. The check is now a `preflight()` that runs
+  before anything is stopped, the endpoint returns 409 without launching the
+  helper, and the banner drops its own button and explains what it found
+  instead. A guard that fires after the damage is not a guard.
+
+- **A failed relocation left no trace anywhere.** The detached helper was
+  spawned with `stdout`/`stderr` to `DEVNULL`, so a `RelocationError` vanished
+  and the dashboard sat on "Relocating..." forever. Output now goes to
+  `~/.swarm-relocate.log` — deliberately in `$HOME` rather than the state
+  directory, which the relocation is in the middle of moving.
+
+- **`swarm relocate` reported "nothing to do" while the dashboard was down.**
+  `already_done` was defined purely as "nothing of the old name is left" — moved
+  state, no old unit, no old shims — and never asked whether the hive it
+  relocated INTO was running. An operator whose daemon never came back was told
+  the command had nothing to offer. `RelocationPlan` now carries
+  `new_unit_exists` / `new_unit_active` with a separate `needs_repair`, and a
+  non-destructive `repair()` writes a missing unit, reloads, enables, starts,
+  then VERIFIES — exiting non-zero with the journal command when the daemon
+  still is not up. Kept out of `already_done` on purpose: folding it in would
+  show the destructive plan to an operator who had already relocated, which is
+  the regression #1677 fixed.
+
 ## [2026.8.21.3] - 2026-08-21
 
 ### Features
