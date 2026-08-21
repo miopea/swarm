@@ -6,6 +6,10 @@ import hashlib
 import os
 from dataclasses import asdict, dataclass, field
 
+from swarm.paths import state_path_str
+
+_DEFAULT_REPORT_DIR = state_path_str("reports")
+
 
 @dataclass
 class TestConfig:
@@ -14,7 +18,7 @@ class TestConfig:
     enabled: bool = False
     port: int = 9091  # dedicated test port (separate from main web UI)
     auto_resolve_delay: float = 4.0  # seconds before Queen resolves proposal
-    report_dir: str = "~/.swarm/reports"
+    report_dir: str = _DEFAULT_REPORT_DIR
     auto_complete_min_idle: float = 10.0  # shorter idle threshold for test mode
     # Optional override — pin test runs to a specific model identifier so
     # results stay comparable across model upgrades. Falls back to the

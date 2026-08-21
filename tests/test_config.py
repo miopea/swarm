@@ -23,6 +23,7 @@ from swarm.config import (
     save_config,
     serialize_config,
 )
+from swarm.paths import state_path_str
 from swarm.testing.config import TestConfig
 
 
@@ -327,7 +328,10 @@ class TestSerializeConfig:
         assert "test" in data
         assert data["test"]["port"] == 9091
         assert data["test"]["auto_resolve_delay"] == 4.0
-        assert data["test"]["report_dir"] == "~/.swarm/reports"
+        # Derived from the state dir, not a literal — a hardcoded "~/.swarm"
+        # here would silently break every relocated install.
+        assert data["test"]["report_dir"] == state_path_str("reports")
+        assert data["test"]["report_dir"].startswith("~/")
         assert data["test"]["auto_complete_min_idle"] == 10.0
 
     def test_serialize_omits_none(self):

@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 from swarm.testing.config import InfraSnapshot
 
 _log = get_logger("testing.log")
@@ -52,7 +53,7 @@ class TestRunLog:
         infra: InfraSnapshot | None = None,
     ) -> None:
         self.run_id = run_id
-        self.report_dir = report_dir or Path("~/.swarm/reports").expanduser()
+        self.report_dir = report_dir or state_dir() / "reports"
         self.report_dir.mkdir(parents=True, exist_ok=True)
         self._log_path = self.report_dir / f"test-run-{run_id}.jsonl"
         self._entries: list[TestLogEntry] = []

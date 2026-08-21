@@ -5,10 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 
 _log = get_logger("worker.memory")
 
-_MEMORY_ROOT = Path.home() / ".swarm" / "memory"
+_MEMORY_ROOT = state_dir() / "memory"
 
 
 def memory_dir(worker_name: str) -> Path:

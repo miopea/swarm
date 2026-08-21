@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from swarm.drones.log import DroneLog, LogCategory, SystemAction
+from swarm.paths import state_dir
 from swarm.server.email_service import EmailService
 from swarm.tasks.task import TaskType
 
@@ -749,7 +750,9 @@ class TestEmailServiceInit:
             graph_mgr=graph_mgr,
             broadcast_ws=broadcast_ws,
         )
-        assert svc._uploads_dir == (Path.home() / ".swarm" / "uploads").resolve()
+        # Resolved through state_dir(), so this holds before and after
+        # `swarm relocate` instead of only on an un-relocated box.
+        assert svc._uploads_dir == (state_dir() / "uploads").resolve()
 
     def test_custom_uploads_dir(self, tmp_path, drone_log, queen, graph_mgr, broadcast_ws):
         custom = tmp_path / "custom_uploads"

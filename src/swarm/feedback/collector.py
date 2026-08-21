@@ -20,11 +20,12 @@ from typing import TYPE_CHECKING
 
 import swarm
 from swarm.feedback.redact import redact_config_dict, redact_text
+from swarm.paths import state_dir
 
 if TYPE_CHECKING:
     from swarm.server.daemon import SwarmDaemon
 
-_DEFAULT_LOG_PATH = Path("~/.swarm/swarm.log").expanduser()
+_DEFAULT_LOG_PATH = state_dir() / "swarm.log"
 _DEFAULT_LOG_LINES = 200
 _DEFAULT_DRONE_EVENTS = 50
 

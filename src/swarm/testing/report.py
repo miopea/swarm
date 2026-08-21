@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 from swarm.testing.log import TestLogEntry, TestRunLog
 
 _log = get_logger("testing.report")
@@ -246,7 +247,7 @@ class ReportGenerator:
 
     def __init__(self, test_log: TestRunLog, report_dir: Path | None = None) -> None:
         self._test_log = test_log
-        self._report_dir = report_dir or Path("~/.swarm/reports").expanduser()
+        self._report_dir = report_dir or state_dir() / "reports"
         self._report_dir.mkdir(parents=True, exist_ok=True)
 
     async def generate(self) -> Path:

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from swarm.drones.store import LogStore
 from swarm.events import EventEmitter
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 
 if TYPE_CHECKING:
     from swarm.db.buzz_store import BuzzStore
@@ -46,7 +47,7 @@ def truncate_for_log(text: str, limit: int) -> str:
     return f"{text[:limit]}…(truncated, {len(text)} chars total)"
 
 
-_DEFAULT_LOG_PATH = Path.home() / ".swarm" / "system.jsonl"
+_DEFAULT_LOG_PATH = state_dir() / "system.jsonl"
 _DEFAULT_MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
 _DEFAULT_MAX_ROTATIONS = 2
 _MAX_PENDING_WRITES = 32  # backpressure cap for async log writes

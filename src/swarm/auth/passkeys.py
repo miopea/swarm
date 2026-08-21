@@ -11,9 +11,11 @@ from pathlib import Path
 
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
+from swarm.paths import state_dir
+
 _log = logging.getLogger("swarm.auth.passkeys")
 
-_DEFAULT_PATH = Path.home() / ".swarm" / "passkeys.json"
+_DEFAULT_PATH = state_dir() / "passkeys.json"
 
 
 @dataclass

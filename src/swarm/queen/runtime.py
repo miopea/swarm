@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 
 from swarm.config.models import WorkerConfig
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 from swarm.worker.worker import QUEEN_WORKER_NAME, WORKER_KIND_QUEEN, Worker
 
 if TYPE_CHECKING:
@@ -38,7 +39,7 @@ _log = get_logger("queen.runtime")
 
 # Queen's working directory — dedicated so Claude's `--continue` resumes
 # her session without clashing with any operator shell history.
-QUEEN_WORK_DIR = Path.home() / ".swarm" / "queen" / "workdir"
+QUEEN_WORK_DIR = state_dir() / "queen" / "workdir"
 
 # First-pass system prompt for the interactive Queen.
 # Written to `workdir/CLAUDE.md` on startup when no prior copy exists,

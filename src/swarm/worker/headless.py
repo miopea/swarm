@@ -9,12 +9,13 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 from swarm.services.registry import ServiceContext, ServiceResult
 
 _log = get_logger("worker.headless")
 
 _DEFAULT_TIMEOUT = 120
-_WORK_DIR = Path.home() / ".swarm" / "headless"
+_WORK_DIR = state_dir() / "headless"
 
 
 @dataclass

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 from swarm.providers import get_provider
 
 _log = get_logger("hooks.install")
@@ -268,16 +269,16 @@ def _remove_legacy_hook(settings: dict[str, Any]) -> None:
 
 
 _APPROVAL_HOOK_SRC = Path(__file__).parent / "approval_hook.sh"
-_APPROVAL_HOOK_DST = Path.home() / ".swarm" / "hooks" / "approval-hook.sh"
+_APPROVAL_HOOK_DST = state_dir() / "hooks" / "approval-hook.sh"
 
 _SESSION_END_HOOK_SRC = Path(__file__).parent / "session_end_hook.sh"
-_SESSION_END_HOOK_DST = Path.home() / ".swarm" / "hooks" / "session-end-hook.sh"
+_SESSION_END_HOOK_DST = state_dir() / "hooks" / "session-end-hook.sh"
 
 _SESSION_START_HOOK_SRC = Path(__file__).parent / "session_start_hook.sh"
-_SESSION_START_HOOK_DST = Path.home() / ".swarm" / "hooks" / "session-start-hook.sh"
+_SESSION_START_HOOK_DST = state_dir() / "hooks" / "session-start-hook.sh"
 
 _EVENT_HOOK_SRC = Path(__file__).parent / "event_hook.sh"
-_EVENT_HOOK_DST = Path.home() / ".swarm" / "hooks" / "event-hook.sh"
+_EVENT_HOOK_DST = state_dir() / "hooks" / "event-hook.sh"
 
 _COMMANDS_SRC_DIR = Path(__file__).parent / "commands"
 _SKILLS_SRC_DIR = Path(__file__).parent / "skills"
@@ -301,8 +302,8 @@ WORKER_SKILL_NAMES = (
 )
 
 # Legacy hook destinations (for cleanup only)
-_CROSS_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "cross-task-hook.sh"
-_COMPLETE_TASK_HOOK_DST = Path.home() / ".swarm" / "hooks" / "complete-task-hook.sh"
+_CROSS_TASK_HOOK_DST = state_dir() / "hooks" / "cross-task-hook.sh"
+_COMPLETE_TASK_HOOK_DST = state_dir() / "hooks" / "complete-task-hook.sh"
 
 
 def _remove_legacy_post_tool_hooks(settings: dict[str, Any]) -> None:

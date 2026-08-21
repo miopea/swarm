@@ -10,15 +10,15 @@ import logging
 import os
 import secrets
 import time
-from pathlib import Path
 from typing import Any
 
 import aiohttp
 
 from swarm.auth._oauth import apply_token_response, parse_token_error
 from swarm.integrations.retry import is_transient_status, retry_transient
+from swarm.paths import state_dir
 
-_TOKEN_PATH = Path.home() / ".swarm" / "graph_tokens.json"
+_TOKEN_PATH = state_dir() / "graph_tokens.json"
 _AUTH_BASE = "https://login.microsoftonline.com"
 _SCOPE = "Mail.ReadWrite offline_access"
 _log = logging.getLogger(__name__)

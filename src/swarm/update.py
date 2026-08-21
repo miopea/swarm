@@ -18,9 +18,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from swarm.paths import state_dir
+
 _log = logging.getLogger(__name__)
 
-_CACHE_DIR = Path.home() / ".swarm"
+_CACHE_DIR = state_dir()
 _CACHE_FILE = _CACHE_DIR / "update_cache.json"
 _CACHE_TTL = 86400  # 24 hours
 

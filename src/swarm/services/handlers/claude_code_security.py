@@ -26,13 +26,14 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from swarm.logging import get_logger
+from swarm.paths import state_path_str
 from swarm.services.registry import ServiceContext, ServiceResult
 
 _log = get_logger("services.claude_code_security")
 
 _DEFAULT_TIMEOUT = 600
 _DEFAULT_CMD = ("claude", "code", "security", "scan", "--json")
-_DEFAULT_DEDUP_PATH = "~/.swarm/security-scan-state.json"
+_DEFAULT_DEDUP_PATH = state_path_str("security-scan-state.json")
 
 # Severity from the scanner → Swarm task priority.
 _SEVERITY_TO_PRIORITY: dict[str, str] = {

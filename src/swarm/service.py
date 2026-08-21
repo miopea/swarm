@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 
 _log = get_logger("service")
 
@@ -298,7 +299,7 @@ def service_status() -> str:
 _PLIST_LABEL = "com.swarm.dashboard"
 _PLIST_DIR = Path.home() / "Library" / "LaunchAgents"
 _PLIST_PATH = _PLIST_DIR / f"{_PLIST_LABEL}.plist"
-_SWARM_LOG_DIR = Path.home() / ".swarm"
+_SWARM_LOG_DIR = state_dir()
 
 _PLIST_TEMPLATE = """\
 <?xml version="1.0" encoding="UTF-8"?>

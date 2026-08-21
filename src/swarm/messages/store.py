@@ -10,13 +10,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 
 if TYPE_CHECKING:
     from swarm.db.core import SwarmDB
 
 _log = get_logger("messages.store")
 
-_DEFAULT_DB_PATH = Path.home() / ".swarm" / "messages.db"
+_DEFAULT_DB_PATH = state_dir() / "messages.db"
 _DEDUP_WINDOW = 60.0  # seconds — same (sender, recipient, type) within window is merged
 
 _VALID_MSG_TYPES = frozenset({"finding", "warning", "dependency", "status", "operator", "note"})

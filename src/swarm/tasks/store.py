@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 from swarm.tasks.task import (
     SwarmTask,
     TaskPriority,
@@ -20,7 +21,7 @@ from swarm.tasks.task import (
 
 _log = get_logger("tasks.store")
 
-_DEFAULT_PATH = Path.home() / ".swarm" / "tasks.json"
+_DEFAULT_PATH = state_dir() / "tasks.json"
 
 
 class TaskStore(Protocol):

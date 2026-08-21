@@ -67,7 +67,11 @@ dev = [
 ]
 
 [project.scripts]
+# Both names ship together on purpose.  `swarm` keeps every existing
+# install working across the update; `swarm-legacy` is the name the
+# hive answers to after `swarm relocate` frees `swarm`.
 swarm = "swarm.cli:main"
+swarm-legacy = "swarm.cli:main"
 
 [build-system]
 requires = ["hatchling"]

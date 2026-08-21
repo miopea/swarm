@@ -10,11 +10,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from swarm.paths import state_path_str
+
 _log = logging.getLogger("swarm.config")
 
 
 class ConfigError(Exception):
     """Raised when swarm.yaml is invalid."""
+
+
+_DEFAULT_REPORT_DIR = state_path_str("reports")
 
 
 @dataclass
@@ -134,7 +139,8 @@ class DroneConfig:
     stung_reap_timeout: float = 30.0  # seconds before STUNG workers are auto-removed
     state_thresholds: StateThresholds = field(default_factory=StateThresholds)
     approval_rules: list[DroneApprovalRule] = field(default_factory=list)
-    # Directory prefixes that are always safe to read from (e.g. "~/.swarm/uploads/").
+    # Directory prefixes that are always safe to read from (e.g. the state
+    # directory's "uploads/" — see swarm.paths.state_dir).
     # Read operations matching these paths are auto-approved regardless of approval_rules.
     allowed_read_paths: list[str] = field(default_factory=list)
     # Context window awareness: warn at this percentage (0.0-1.0), 0 = disabled
@@ -730,7 +736,7 @@ class TestConfig:
     enabled: bool = False
     port: int = 9091  # dedicated test port (separate from main web UI)
     auto_resolve_delay: float = 4.0  # seconds before Queen resolves proposal
-    report_dir: str = "~/.swarm/reports"
+    report_dir: str = _DEFAULT_REPORT_DIR
     auto_complete_min_idle: float = 10.0  # shorter idle threshold for test mode
 
 

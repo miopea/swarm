@@ -56,6 +56,7 @@ from swarm.config.models import (
     WebhookConfig,
     WorkerConfig,
 )
+from swarm.paths import state_path_str
 
 _log = logging.getLogger("swarm.config")
 
@@ -535,7 +536,7 @@ def _parse_config(path: Path) -> HiveConfig:
         enabled=test_data.get("enabled", False),
         port=test_port,
         auto_resolve_delay=test_data.get("auto_resolve_delay", 4.0),
-        report_dir=test_data.get("report_dir", "~/.swarm/reports"),
+        report_dir=test_data.get("report_dir", state_path_str("reports")),
         auto_complete_min_idle=test_data.get("auto_complete_min_idle", 10.0),
     )
 

@@ -17,11 +17,11 @@ import asyncio
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from swarm.logging import get_logger
 from swarm.notify.bus import EventType, NotifyEvent, Severity
+from swarm.paths import state_dir
 
 if TYPE_CHECKING:
     from swarm.db.core import SwarmDB
@@ -46,7 +46,7 @@ class DiskUsage:
 
 
 def _swarm_disk_usage() -> DiskUsage:
-    usage = shutil.disk_usage(Path.home() / ".swarm")
+    usage = shutil.disk_usage(state_dir())
     return DiskUsage(total=usage.total, free=usage.free)
 
 
@@ -96,7 +96,7 @@ class HealthSweep:
             _log.warning("disk space low: %.1f GiB free (%.0f%%)", free_gb, free_pct * 100)
             self._emit(
                 "Disk space low",
-                f"~/.swarm volume has {free_gb:.1f} GiB free ({free_pct:.0%}). "
+                f"{state_dir()} volume has {free_gb:.1f} GiB free ({free_pct:.0%}). "
                 "SQLite writes and PTY logs will start failing if it fills.",
             )
         elif not low:

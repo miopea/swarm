@@ -5,13 +5,13 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from aiohttp import web
 
 from swarm.auth.password import verify_password
 from swarm.logging import get_logger
+from swarm.paths import state_dir
 from swarm.server.api import check_origin_or_error, get_api_password, get_client_ip
 from swarm.server.helpers import get_daemon
 
@@ -28,7 +28,7 @@ _ws_auth_failures: dict[str, list[float]] = {}
 
 def register(app: web.Application) -> None:
     # Serve uploaded files
-    uploads_dir = Path.home() / ".swarm" / "uploads"
+    uploads_dir = state_dir() / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
     app.router.add_static("/uploads/", uploads_dir)
 

@@ -9,7 +9,9 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-_INSTALL_ID_PATH = Path("~/.swarm/install-id").expanduser()
+from swarm.paths import state_dir
+
+_INSTALL_ID_PATH = state_dir() / "install-id"
 
 
 def get_install_id(path: Path | None = None) -> str:
