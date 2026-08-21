@@ -267,6 +267,50 @@ def check_for_update_sync() -> UpdateResult | None:
     return _read_cache()
 
 
+def _drop_reoccupied_entrypoint() -> Path | None:
+    """Remove the ``swarm`` shim a reinstall recreates on a relocated install.
+
+    ``uv tool install`` writes every console script the package declares, so
+    every update hands ``swarm`` back to Legacy even though ``swarm relocate``
+    deliberately gave that name up.  Left alone, each update silently
+    re-occupies a name the operator freed — and once something else owns that
+    name, re-occupying it is a collision, not a cosmetic wart.
+
+    Only a shim resolving into this package's own tool directory is removed, so
+    a ``swarm`` belonging to something else is never deleted by us.
+    """
+    from swarm.paths import is_relocated
+
+    if not is_relocated():
+        return None
+    for directory in (Path.home() / ".local" / "bin", Path.home() / "bin"):
+        shim = directory / "swarm"
+        if not (shim.exists() or shim.is_symlink()):
+            continue
+        try:
+            owned = "swarm-ai" in str(shim.resolve())
+        except OSError:
+            owned = False
+        if not owned:
+            _log.warning(
+                "%s exists but is not ours — leaving it alone. This install is "
+                "relocated and answers to 'swarm-legacy'.",
+                shim,
+            )
+            continue
+        try:
+            shim.unlink()
+            _log.warning(
+                "Removed %s recreated by the update; this install is relocated "
+                "and answers to 'swarm-legacy'.",
+                shim,
+            )
+            return shim
+        except OSError:
+            _log.warning("could not remove recreated entrypoint %s", shim, exc_info=True)
+    return None
+
+
 async def perform_update(
     on_output: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
@@ -323,6 +367,12 @@ async def perform_update(
         _CACHE_FILE.unlink(missing_ok=True)
     except Exception:
         _log.debug("Failed to clear update cache", exc_info=True)
+
+    dropped = _drop_reoccupied_entrypoint()
+    if dropped is not None:
+        msg = f"Removed {dropped} (this install is relocated; use 'swarm-legacy')"
+        output_lines.append(msg)
+        _emit(msg)
 
     _emit("Update complete!")
     return True, "\n".join(output_lines)

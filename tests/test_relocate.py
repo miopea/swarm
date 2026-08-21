@@ -252,3 +252,58 @@ class TestServiceNamingFollowsRelocation:
         monkeypatch.setattr(Path, "home", classmethod(lambda _cls: home))
         (home / ".swarm-legacy").mkdir(exist_ok=True)
         assert svc.current_unit_name() == "swarm-legacy.service"
+
+
+class TestUpdateDoesNotReoccupyTheName:
+    """`uv tool install` rewrites every declared console script.
+
+    So each in-app update hands `swarm` back to Legacy even though the
+    operator deliberately gave that name up. Verified against the real
+    behaviour, not assumed: a reinstall on a relocated box does recreate it.
+    """
+
+    def _shim(self, home: Path, target: Path) -> Path:
+        bin_dir = home / ".local" / "bin"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        shim = bin_dir / "swarm"
+        shim.symlink_to(target)
+        return shim
+
+    def test_removes_the_shim_the_update_recreated(self, home: Path) -> None:
+        from swarm.update import _drop_reoccupied_entrypoint
+
+        (home / ".swarm-legacy").mkdir()
+        tools = home / ".local" / "share" / "uv" / "tools" / "swarm-ai" / "bin"
+        tools.mkdir(parents=True)
+        (tools / "swarm").write_text("#!/bin/sh\n")
+        shim = self._shim(home, tools / "swarm")
+
+        assert _drop_reoccupied_entrypoint() == shim
+        assert not shim.exists()
+
+    def test_leaves_a_swarm_that_is_not_ours_alone(self, home: Path) -> None:
+        """Once something else owns `swarm`, deleting it would be destructive."""
+        from swarm.update import _drop_reoccupied_entrypoint
+
+        (home / ".swarm-legacy").mkdir()
+        other = home / "somewhere" / "bin" / "swarm"
+        other.parent.mkdir(parents=True)
+        other.write_text("#!/bin/sh\n# a different project\n")
+        shim = self._shim(home, other)
+
+        assert _drop_reoccupied_entrypoint() is None
+        assert shim.exists()
+        assert other.exists()
+
+    def test_does_nothing_on_an_un_relocated_install(self, home: Path) -> None:
+        """`swarm` is the correct name there — removing it would break them."""
+        from swarm.update import _drop_reoccupied_entrypoint
+
+        (home / ".swarm").mkdir()
+        tools = home / ".local" / "share" / "uv" / "tools" / "swarm-ai" / "bin"
+        tools.mkdir(parents=True)
+        (tools / "swarm").write_text("#!/bin/sh\n")
+        shim = self._shim(home, tools / "swarm")
+
+        assert _drop_reoccupied_entrypoint() is None
+        assert shim.exists()

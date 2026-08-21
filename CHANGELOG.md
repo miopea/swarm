@@ -6,6 +6,14 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Features
 
+### Changes
+
+### Fixes
+
+## [2026.8.21] - 2026-08-21
+
+### Features
+
 - **`swarm relocate` — the destructive update that frees the `swarm` name.**
   Moves `~/.swarm` → `~/.swarm-legacy`, renames `swarm.service` →
   `swarm-legacy.service` (carrying any `swarm.service.d/` drop-in across, with
@@ -77,6 +85,17 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
   waited on a real daemon. The circular-import fix above is what exposed it: the
   `ImportError` had been aborting the test before it ever got that far. The mock
   now raises `SystemExit`, which is what the real call does to the interpreter.
+
+- **Every in-app update re-occupied the `swarm` name on a relocated install.**
+  `uv tool install` writes every console script the package declares, so each
+  update handed `swarm` straight back to Legacy — silently undoing the one thing
+  `swarm relocate` exists to do. Confirmed by running the real update command on
+  a relocated box and watching `~/.local/bin/swarm` reappear. `perform_update()`
+  now removes the recreated shim and says so at WARNING level.
+
+  It removes the shim **only** when it resolves into this package's own tool
+  directory. Once something else owns `swarm`, deleting it would be destructive
+  rather than tidy, so a foreign binary is left alone and logged instead.
 
 ## [2026.8.20] - 2026-08-20
 
