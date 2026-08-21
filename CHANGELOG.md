@@ -10,6 +10,14 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+## [2026.8.21.2] - 2026-08-21
+
+### Features
+
+### Changes
+
+### Fixes
+
 - **After an update, a relocated install was told to relocate again — forever.**
   `uv` writes two copies of every console script: the shim on `PATH` and the
   script it points at inside the tool directory. The post-update cleanup stopped
