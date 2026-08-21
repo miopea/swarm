@@ -123,3 +123,54 @@ class TestSuccessIsVerified:
 
         assert ok is False, "a package missing its templates is not a successful update"
         assert "did not finish" in output
+
+
+class TestFailureIsRecoverable:
+    """A failed update must leave the full output somewhere on disk.
+
+    Both UI callers truncated to the FIRST 200 characters — which is uv's
+    download progress, while the line explaining the failure is appended
+    last. An operator was shown progress and told it was an error, on two
+    separate pages, and the real cause could not be recovered from the
+    browser at all.
+    """
+
+    @pytest.mark.asyncio()
+    async def test_a_failed_install_writes_the_full_output(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+
+        async def _location() -> str:
+            return up._REPO_FULL_NAME
+
+        monkeypatch.setattr(up, "fetch_repo_location", _location)
+        monkeypatch.setattr(up, "_preserve_foreign_entrypoints", list)
+
+        async def _fail(cmd, output_lines, emit):
+            output_lines.append("Resolved 44 packages in 848ms")
+            output_lines.append("Downloading cryptography (4.5MiB)")
+            output_lines.append("error: the actual cause, appended last")
+            return False
+
+        monkeypatch.setattr(up, "_stream_install", _fail)
+
+        ok, output = await up.perform_update()
+
+        assert ok is False
+        log = tmp_path / up.UPDATE_LOG
+        assert log.is_file(), "the full output must survive the UI's truncation"
+        assert "the actual cause, appended last" in log.read_text()
+        assert str(log) in output, "and the operator must be told where it is"
+
+    @pytest.mark.asyncio()
+    async def test_the_log_is_rewritten_not_appended(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """A stale log reads as evidence about the run you just did."""
+        monkeypatch.setattr(Path, "home", classmethod(lambda _cls: tmp_path))
+        (tmp_path / up.UPDATE_LOG).write_text("OUTPUT FROM A PREVIOUS ATTEMPT")
+
+        up._write_update_log("the new attempt")
+
+        assert (tmp_path / up.UPDATE_LOG).read_text() == "the new attempt"

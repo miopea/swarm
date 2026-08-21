@@ -656,6 +656,32 @@ async def _stream_install(
         return False
 
 
+# In $HOME, beside the relocation log and for the same reason: the update
+# REPLACES the package, so a log inside the install tree is destroyed by the
+# very operation it is recording.
+UPDATE_LOG = ".swarm-update.log"
+
+
+def _write_update_log(output: str) -> Path | None:
+    """Persist the full update output, whatever the UI chose to show.
+
+    Both callers truncated: the dashboard and the config page each showed
+    the first 200 characters, which is uv's download progress, while the
+    line that explains the failure is appended LAST. An operator was
+    shown progress and told it was an error, twice, and the actual cause
+    was unrecoverable from the browser.
+
+    A file on disk is not subject to anyone's formatting decisions.
+    """
+    path = Path.home() / UPDATE_LOG
+    try:
+        path.write_text(output)
+        return path
+    except OSError:
+        _log.debug("could not write %s", path, exc_info=True)
+        return None
+
+
 async def perform_update(
     on_output: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
@@ -689,13 +715,22 @@ async def perform_update(
 
     output_lines: list[str] = []
     if not await _stream_install(cmd, output_lines, _emit):
-        return False, "\n".join(output_lines)
+        combined = "\n".join(output_lines)
+        written = _write_update_log(combined)
+        if written:
+            note = f"Full output: {written}"
+            _emit(note)
+            combined += f"\n{note}"
+        _log.error("[update] failed; full output at %s", written or "<unwritable>")
+        return False, combined
 
     # uv exited 0 — but verify what it produced rather than trusting the
     # exit code, since a broken install is reported by the WEB layer four
     # steps later, long after the update claimed to have worked.
     if _report_partial_install(output_lines, _emit):
-        return False, "\n".join(output_lines)
+        combined = "\n".join(output_lines)
+        _write_update_log(combined)
+        return False, combined
 
     # Clear cache so next check reflects the new version
     try:

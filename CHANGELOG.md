@@ -10,6 +10,27 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+## [2026.8.21.7] - 2026-08-21
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **A failed update could not be diagnosed from the browser.** Both UI callers
+  showed `output.substring(0, 200)` — the FIRST 200 characters, which is uv's
+  download progress, while the line that explains the failure is appended LAST.
+  The operator was shown progress and told it was an error. `dashboard.js` was
+  corrected in 2026.8.21.5; `config.html` has its own copy of the handler and
+  was missed, so the Updates panel kept doing it.
+
+  Both now show the tail, and `perform_update()` writes the complete output to
+  `~/.swarm-update.log` regardless — in `$HOME` rather than the install tree,
+  because the update REPLACES the package and a log inside it is destroyed by
+  the operation it is recording. A file on disk is not subject to anyone's
+  formatting decisions.
+
 ## [2026.8.21.6] - 2026-08-21
 
 ### Features
