@@ -33,6 +33,14 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         lambda *args: subprocess.CompletedProcess(list(args), 0, stdout="", stderr=""),
     )
     monkeypatch.delenv(ENV_VAR, raising=False)
+    monkeypatch.delenv("UV_TOOL_BIN_DIR", raising=False)
+    monkeypatch.delenv("XDG_BIN_HOME", raising=False)
+    # Pin the discovery sources inside the sandbox. Without this the shim
+    # search finds the *test runner's* own bin directory, which makes every
+    # assertion depend on the developer's checkout.
+    monkeypatch.setattr(rl.sys, "argv", [str(tmp_path / ".local" / "bin" / "swarm-legacy")])
+    monkeypatch.setattr(rl, "_uv_bin_dir", lambda: None)
+    monkeypatch.setattr(rl, "_receipt_bin_dirs", list)
     return tmp_path
 
 
@@ -464,3 +472,55 @@ class TestUpdateDoesNotDestroyWhatOwnsTheNameNow:
 
         assert _preserve_foreign_entrypoints() == []
         assert (bin_dir / "swarm").exists()
+
+
+class TestJourneyGotchas:
+    """Found by rehearsing the developer journey end to end."""
+
+    def test_refuses_a_move_that_would_break_the_holder_socket(
+        self, home: Path, monkeypatch
+    ) -> None:
+        """`sockaddr_un.sun_path` caps a Unix socket path at ~104 bytes.
+
+        The relocated directory name is seven bytes longer than the
+        original, so a deep home can push `<state>/holder.sock` over the
+        limit. The holder then cannot bind and no worker starts — after a
+        one-way move. Refuse before touching anything.
+        """
+        deep = home / ("d" * 200)
+        with pytest.raises(rl.RelocationError, match="Unix socket"):
+            rl._check_socket_path_fits(deep / ".swarm-legacy")
+
+    def test_the_normal_case_still_fits(self, home: Path) -> None:
+        rl._check_socket_path_fits(home / ".swarm-legacy")  # must not raise
+
+    def test_finds_the_shim_beside_the_running_command(self, home: Path, monkeypatch) -> None:
+        """$UV_TOOL_BIN_DIR is an install-time variable, usually unset later.
+
+        Without this the command reported success while leaving `swarm`
+        occupied in a custom bin directory — failing at the one thing it
+        exists to do.
+        """
+        odd = home / "opt" / "somewhere" / "bin"
+        odd.mkdir(parents=True)
+        (odd / "swarm").write_text("#!/bin/sh\n")
+        (odd / "swarm-legacy").write_text("#!/bin/sh\n")
+        monkeypatch.delenv("UV_TOOL_BIN_DIR", raising=False)
+        monkeypatch.setattr(rl.sys, "argv", [str(odd / "swarm-legacy"), "relocate"])
+        monkeypatch.setattr(rl, "_uv_bin_dir", lambda: None)
+
+        assert odd / "swarm" in rl._entrypoint_candidates()
+
+    def test_reports_when_the_name_is_still_occupied(self, home: Path, monkeypatch) -> None:
+        """Never claim success the run did not achieve."""
+        bin_dir = home / ".local" / "bin"
+        bin_dir.mkdir(parents=True)
+        (bin_dir / "swarm").write_text("#!/bin/sh\n")
+        (home / ".swarm").mkdir()
+
+        # Removal fails (read-only dir, permissions, whatever the cause).
+        monkeypatch.setattr(rl, "_remove_old_entrypoints", lambda _paths: [])
+
+        result = rl.relocate(rl.plan(), start=False)
+
+        assert bin_dir / "swarm" in result.still_occupied

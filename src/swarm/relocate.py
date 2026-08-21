@@ -42,6 +42,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,6 +50,14 @@ from swarm.logging import get_logger
 from swarm.paths import original_state_dir, relocated_state_dir
 
 _log = get_logger("relocate")
+
+# A Unix socket path is capped by ``sockaddr_un.sun_path`` — 108 bytes on
+# Linux, 104 on macOS, NUL included.  The relocated directory name is seven
+# bytes longer than the original, so a deep enough home directory can push
+# ``<state>/holder.sock`` over the limit.  The holder then cannot bind and
+# no worker can start — after a one-way move.  Checked before anything is
+# touched, using the smaller of the two limits.
+_SUN_PATH_MAX = 104
 
 LEGACY_UNIT = "swarm-legacy.service"
 OLD_UNIT = "swarm.service"
@@ -108,6 +117,9 @@ class RelocationResult:
     old_unit_removed: bool
     entrypoints_removed: list[Path]
     dropins_carried: list[Path] = field(default_factory=list)
+    # Shims still occupying the old name after the attempt.  Reported so
+    # the command cannot claim success it did not achieve.
+    still_occupied: list[Path] = field(default_factory=list)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -168,6 +180,77 @@ def find_live_processes(state: Path) -> list[LiveProcess]:
     return live
 
 
+def _running_bin_dir() -> str | None:
+    """The directory this very command was launched from.
+
+    The most reliable signal there is: if the operator can type
+    ``swarm relocate`` or ``swarm-legacy relocate``, the shim they typed
+    is sitting right there, whatever ``uv`` was configured to do at
+    install time.  ``$UV_TOOL_BIN_DIR`` is set when a tool is *installed*
+    and usually absent from the shell that later relocates, so relying on
+    it alone let a custom bin directory keep the old name occupied while
+    the command reported success.
+    """
+    argv0 = sys.argv[0] if sys.argv else ""
+    if not argv0:
+        return None
+    try:
+        resolved = Path(argv0).resolve()
+    except OSError:
+        return None
+    parent = resolved.parent
+    return str(parent) if parent.is_dir() else None
+
+
+def _receipt_bin_dirs() -> list[str]:
+    """Entrypoint locations recorded by ``uv`` in this tool's receipt.
+
+    ``uv-receipt.toml`` names the exact ``install-path`` of every console
+    script it wrote, which is authoritative even when the environment that
+    chose it is long gone.  Located relative to this package so it is
+    found regardless of ``$UV_TOOL_DIR``.
+    """
+    found: list[str] = []
+    try:
+        here = Path(__file__).resolve()
+    except OSError:
+        return found
+    for parent in here.parents:
+        receipt = parent / "uv-receipt.toml"
+        if not receipt.is_file():
+            continue
+        try:
+            text = receipt.read_text(encoding="utf-8")
+        except OSError:
+            break
+        for match in re.finditer(r'install-path\s*=\s*"([^"]+)"', text):
+            directory = str(Path(match.group(1)).parent)
+            if directory not in found:
+                found.append(directory)
+        break
+    return found
+
+
+def _uv_bin_dir() -> str | None:
+    """Where ``uv`` actually puts console scripts, asked at runtime.
+
+    ``$UV_TOOL_BIN_DIR`` is an *install-time* variable and is usually not
+    set in the shell that later runs ``swarm relocate``.  An install that
+    used a custom bin directory would then keep ``swarm`` occupied while
+    the command cheerfully reported success — the exact failure this
+    command exists to prevent.  ``uv tool dir --bin`` reports the
+    configured directory whether or not the variable is set.
+    """
+    try:
+        proc = subprocess.run(
+            ["uv", "tool", "dir", "--bin"], capture_output=True, text=True, timeout=10
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = proc.stdout.strip()
+    return out or None
+
+
 def _shim_directories() -> list[Path]:
     """Every directory a ``swarm`` shim could plausibly live in.
 
@@ -178,6 +261,9 @@ def _shim_directories() -> list[Path]:
     """
     seen: list[Path] = []
     for raw in (
+        _running_bin_dir(),
+        *_receipt_bin_dirs(),
+        _uv_bin_dir(),
         os.environ.get("UV_TOOL_BIN_DIR"),
         os.environ.get("XDG_BIN_HOME"),
         str(Path.home() / ".local" / "bin"),
@@ -218,6 +304,20 @@ def plan(*, source: Path | None = None, target: Path | None = None) -> Relocatio
         live=find_live_processes(src if src.is_dir() else dst),
         stale_enable_link=wants.is_symlink() and not wants.exists(),
     )
+
+
+def _check_socket_path_fits(target: Path) -> None:
+    """Refuse a move that would leave the holder unable to bind."""
+    sock = target / "holder.sock"
+    length = len(str(sock).encode()) + 1  # sockaddr_un is NUL-terminated
+    if length > _SUN_PATH_MAX:
+        raise RelocationError(
+            f"The relocated holder socket path would be {length} bytes, over the "
+            f"{_SUN_PATH_MAX}-byte limit for a Unix socket:\n  {sock}\n"
+            "The pty-holder could not bind it and no worker would start. "
+            "Nothing was changed. Use $SWARM_STATE_DIR to place the state "
+            "directory somewhere shorter instead."
+        )
 
 
 def _stop_live(plan_: RelocationPlan) -> None:
@@ -342,6 +442,7 @@ def _remove_old_entrypoints(paths: list[Path]) -> list[Path]:
 
 def relocate(plan_: RelocationPlan, *, start: bool = True) -> RelocationResult:
     """Execute *plan_*.  Idempotent — safe to re-run after a failure."""
+    _check_socket_path_fits(plan_.target)
     _stop_live(plan_)
     moved = _move_state(plan_.source, plan_.target)
     unit = _write_unit()
@@ -360,4 +461,5 @@ def relocate(plan_: RelocationPlan, *, start: bool = True) -> RelocationResult:
         old_unit_removed=removed_unit,
         entrypoints_removed=removed_entrypoints,
         dropins_carried=dropins,
+        still_occupied=_entrypoint_candidates(),
     )

@@ -10,6 +10,34 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+- **End-to-end rehearsal of the developer journey found three more defects.**
+  A released 2026.8.20 install was built, given real state and a bound holder,
+  updated through its own `perform_update()`, then relocated — on a machine with
+  no systemd and a non-standard `uv` bin directory.
+
+  - **Relocation reported success while leaving `swarm` occupied.**
+    `$UV_TOOL_BIN_DIR` is an *install-time* variable and is normally absent from
+    the shell that later runs `swarm relocate`, and `uv tool dir --bin` then
+    reports the default rather than the directory actually used. The command's
+    entire purpose failed silently. The shim search now starts from the
+    directory of the running command — if you can type `swarm relocate`, the
+    shim is right there — and also reads the `install-path` entries in `uv`'s own
+    receipt.
+
+  - **The command could claim success it had not achieved.** It now re-checks
+    afterwards and, if any `swarm` is still present, says so in red with the
+    paths rather than printing "Relocation complete".
+
+  - **A move that would break the holder is now refused.** A Unix socket path is
+    capped at ~104 bytes by `sockaddr_un.sun_path`, and `.swarm-legacy` is seven
+    bytes longer than `.swarm`. A deep enough home directory would leave the
+    holder unable to bind and no worker able to start — *after* a one-way move.
+    Checked before anything is touched. (Hit for real while rehearsing, in a
+    deep scratch directory.)
+
+  - The completion message no longer tells a machine without systemd to run
+    `systemctl`.
+
 - **Pre-merge review of `swarm relocate` turned up five defects.** All were
   found by exercising the awkward paths rather than re-reading the code:
 

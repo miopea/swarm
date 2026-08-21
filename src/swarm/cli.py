@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -2479,10 +2480,25 @@ def relocate(dry_run: bool, yes: bool, no_start: bool) -> None:
         click.echo(f"Service: {result.unit_written.name}")
     for entry in result.entrypoints_removed:
         click.echo(f"Removed: {entry}")
+    if result.still_occupied:
+        click.echo("")
+        click.secho(
+            "  WARNING: the 'swarm' name is still occupied — relocation is incomplete:",
+            fg="red",
+        )
+        for entry in result.still_occupied:
+            click.echo(f"    {entry}")
+        click.echo("  Remove it by hand, then re-run 'swarm-legacy relocate'.")
+
     click.echo("")
     click.secho("Relocation complete. This hive now answers to 'swarm-legacy'.", bold=True)
     click.echo("  swarm-legacy status      # instead of 'swarm status'")
-    click.echo("  systemctl --user status swarm-legacy")
+    # Only point at systemctl where it exists — macOS and systemd-less WSL
+    # would otherwise be told to run a command they do not have.
+    if shutil.which("systemctl"):
+        click.echo("  systemctl --user status swarm-legacy")
+    else:
+        click.echo("  (no systemd here — start it yourself with 'swarm-legacy serve')")
 
 
 @main.group()
