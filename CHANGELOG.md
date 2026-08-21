@@ -10,6 +10,37 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+## [2026.8.21.9] - 2026-08-21
+
+### Features
+
+### Changes
+
+### Fixes
+
+- **The in-app update failed on any machine whose git rewrites GitHub URLs.**
+  This is the root cause behind every "Update failed" report in this sequence.
+
+  A rule like `url."git@github.com:".insteadOf = "https://github.com/"` — common
+  on machines set up for other tooling — drags an anonymous HTTPS clone of a
+  PUBLIC repository onto SSH. From a shell that still works, because the
+  operator types the passphrase. In a systemd user daemon there is no terminal
+  to prompt on and no `SSH_AUTH_SOCK` to unlock a key with, so the fetch dies as
+  `error: Git operation failed / process didn't exit successfully` — with the
+  cause never reaching any log, because uv does not pass through git's stderr.
+
+  Better messages were not the fix; not needing credentials was. The updater now
+  injects an identity `insteadOf` for its own owner prefix into the install
+  child's environment via `GIT_CONFIG_*`. git resolves `insteadOf` by longest
+  matching prefix, so `https://github.com/miopea/` outranks a rule written for
+  all of `github.com`, and the clone stays on anonymous HTTPS. Scoped to the
+  repo we install from, applied only to that child, and no other remote's
+  routing is affected.
+
+  Verified against a real git carrying that rule: without the override the fetch
+  fails with `Host key verification failed`; with it, `git ls-remote` returns the
+  HEAD sha.
+
 ## [2026.8.21.8] - 2026-08-21
 
 ### Features

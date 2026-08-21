@@ -621,7 +621,43 @@ def _noninteractive_git_env() -> dict[str, str]:
         env["GIT_SSH_COMMAND"] = f"{existing} -oBatchMode=yes"
     env.pop("SSH_ASKPASS", None)
     env.pop("SSH_ASKPASS_REQUIRE", None)
+
+    # Neutralise any `insteadOf` rewrite for OUR url, for this child only.
+    #
+    # Failing fast is better than hanging, but the best outcome is not
+    # needing credentials at all: this repository is public, so anonymous
+    # HTTPS works everywhere. An operator rule like
+    #   url."git@github.com:".insteadOf = "https://github.com/"
+    # (common on machines set up for other tooling) drags the clone onto
+    # SSH, and a systemd user daemon has neither a terminal to prompt on
+    # nor an ssh-agent to unlock a key with. Observed exactly that: the
+    # same command succeeds from a shell, where the operator types the
+    # passphrase, and fails in the daemon with no recoverable reason.
+    #
+    # git resolves insteadOf by LONGEST matching prefix, so an identity
+    # rewrite on the more specific owner prefix wins over a rule written
+    # for all of github.com. Scoped to the repo we actually install from,
+    # so no other remote's routing is touched.
+    prefix = _install_url_prefix()
+    if prefix:
+        count = env.get("GIT_CONFIG_COUNT")
+        index = int(count) if count and count.isdigit() else 0
+        env[f"GIT_CONFIG_KEY_{index}"] = f"url.{prefix}.insteadOf"
+        env[f"GIT_CONFIG_VALUE_{index}"] = prefix
+        env["GIT_CONFIG_COUNT"] = str(index + 1)
     return env
+
+
+def _install_url_prefix() -> str:
+    """The ``https://host/owner/`` prefix of the install source, or ''."""
+    url = _INSTALL_SOURCE.removeprefix("git+")
+    if not url.startswith("https://"):
+        return ""
+    parts = url.split("/")
+    # https: / / host / owner / repo  ->  need at least the owner segment
+    if len(parts) < 5:
+        return ""
+    return "/".join(parts[:4]) + "/"
 
 
 def git_auth_hint(output: str) -> str | None:

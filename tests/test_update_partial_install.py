@@ -243,3 +243,64 @@ class TestGitFailureExplainsItself:
 
         monkeypatch.setattr(up.subprocess, "run", _boom)
         assert up.github_url_rewrites() == []
+
+
+class TestTheChildDoesNotInheritAUrlRewrite:
+    """The update must not need credentials for a PUBLIC repository.
+
+    Failing fast beats hanging, but needing no credentials beats both.
+    An operator rule like
+
+        url."git@github.com:".insteadOf = "https://github.com/"
+
+    drags an anonymous HTTPS clone onto SSH. From a shell that works —
+    the operator types the passphrase. In a systemd user daemon there is
+    no terminal to prompt on and no SSH_AUTH_SOCK to unlock a key with,
+    so the fetch dies as "process didn't exit successfully" with no cause
+    attached. Verified by hand against a real git with that rule set:
+    the fetch fails with "Host key verification failed" without this
+    override, and returns the HEAD sha with it.
+    """
+
+    def test_the_prefix_is_the_owner_not_the_whole_repo(self) -> None:
+        """Owner-scoped: long enough to beat a github.com-wide rule on
+        git's longest-prefix rule, narrow enough to leave every other
+        remote's routing alone."""
+        assert up._install_url_prefix() == "https://github.com/miopea/"
+
+    def test_an_identity_rewrite_is_injected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+
+        env = up._noninteractive_git_env()
+
+        assert env["GIT_CONFIG_COUNT"] == "1"
+        assert env["GIT_CONFIG_KEY_0"] == "url.https://github.com/miopea/.insteadOf"
+        assert env["GIT_CONFIG_VALUE_0"] == "https://github.com/miopea/", (
+            "value must equal the key's prefix — that is what makes it a no-op "
+            "that outranks the operator's rewrite"
+        )
+
+    def test_existing_git_config_env_is_extended_not_clobbered(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An operator already using GIT_CONFIG_* keeps theirs."""
+        monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+        monkeypatch.setenv("GIT_CONFIG_KEY_0", "http.sslVerify")
+        monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
+
+        env = up._noninteractive_git_env()
+
+        assert env["GIT_CONFIG_COUNT"] == "2"
+        assert env["GIT_CONFIG_KEY_0"] == "http.sslVerify", "theirs survives"
+        assert env["GIT_CONFIG_KEY_1"] == "url.https://github.com/miopea/.insteadOf"
+
+    def test_git_cannot_prompt_or_ask(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A prompt against stdin=DEVNULL is a hang, not a failure."""
+        monkeypatch.setenv("SSH_ASKPASS", "/usr/bin/ssh-askpass")
+        monkeypatch.delenv("GIT_CONFIG_COUNT", raising=False)
+
+        env = up._noninteractive_git_env()
+
+        assert env["GIT_TERMINAL_PROMPT"] == "0"
+        assert "BatchMode=yes" in env["GIT_SSH_COMMAND"]
+        assert "SSH_ASKPASS" not in env, "a GUI prompt on a headless daemon is a hang too"
