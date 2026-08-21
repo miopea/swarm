@@ -560,3 +560,62 @@ class TestPostMoveFailuresAreActionable:
 
         # The move itself stands; re-running finishes the job.
         assert (home / ".swarm-legacy").is_dir()
+
+
+class TestLingeringProcesses:
+    def test_waits_for_a_slow_daemon_before_moving(self, home: Path, monkeypatch) -> None:
+        """SIGTERM without waiting let the old daemon undo the relocation.
+
+        A daemon still shutting down keeps the log path it resolved at
+        import — the old one — and recreates the directory the move just
+        emptied. Observed: a relocation reporting success with `~/.swarm`
+        back moments later holding a lone `swarm.log`.
+        """
+        state = home / ".swarm"
+        state.mkdir()
+        (state / "daemon.lock").write_text("4242")
+
+        alive = {"n": 3}  # dies only after a few polls
+
+        def _alive(pid: int) -> bool:
+            if pid != 4242:
+                return False
+            alive["n"] -= 1
+            return alive["n"] > 0
+
+        killed: list[int] = []
+        monkeypatch.setattr(rl, "_pid_alive", _alive)
+        monkeypatch.setattr(rl.os, "kill", lambda pid, sig: killed.append(pid))
+
+        rl._stop_live(rl.plan(), timeout=5.0)
+
+        assert 4242 in killed  # asked it to stop
+        assert alive["n"] <= 0  # and waited until it was actually gone
+
+    def test_kills_a_daemon_that_ignores_sigterm(self, home: Path, monkeypatch) -> None:
+        """It must not get to undo a relocation by refusing to exit."""
+        state = home / ".swarm"
+        state.mkdir()
+        (state / "daemon.lock").write_text("4243")
+
+        signals: list[int] = []
+        monkeypatch.setattr(rl, "_pid_alive", lambda pid: pid == 4243)
+        monkeypatch.setattr(rl.os, "kill", lambda pid, sig: signals.append(sig))
+
+        rl._stop_live(rl.plan(), timeout=0.5)
+
+        assert rl.signal.SIGTERM in signals
+        assert rl.signal.SIGKILL in signals
+
+    def test_reports_the_old_directory_coming_back(self, home: Path, monkeypatch) -> None:
+        (home / ".swarm").mkdir()
+        real_move = rl._move_state
+
+        def _move_then_resurrect(src: Path, dst: Path) -> bool:
+            moved = real_move(src, dst)
+            src.mkdir(parents=True, exist_ok=True)  # a straggler recreates it
+            return moved
+
+        monkeypatch.setattr(rl, "_move_state", _move_then_resurrect)
+
+        assert rl.relocate(rl.plan(), start=False).source_recreated is True

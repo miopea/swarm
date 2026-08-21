@@ -41,8 +41,10 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -120,6 +122,9 @@ class RelocationResult:
     # Shims still occupying the old name after the attempt.  Reported so
     # the command cannot claim success it did not achieve.
     still_occupied: list[Path] = field(default_factory=list)
+    # The old state directory reappearing means something is still running
+    # against it and will keep re-occupying the freed name.
+    source_recreated: bool = False
 
 
 def _pid_alive(pid: int) -> bool:
@@ -320,17 +325,45 @@ def _check_socket_path_fits(target: Path) -> None:
         )
 
 
-def _stop_live(plan_: RelocationPlan) -> None:
-    """Take the unit down so nothing holds the directory mid-move."""
+def _stop_live(plan_: RelocationPlan, *, timeout: float = 20.0) -> None:
+    """Take the unit down and **wait** for it to actually be gone.
+
+    Signalling without waiting is not enough.  A daemon that is still
+    shutting down keeps the log path it resolved at import — the old one —
+    and recreates the very directory the move just emptied, re-occupying
+    the name and making a re-run believe there is still state to move.
+    Observed exactly that: a relocation that reported success, with
+    ``~/.swarm`` back moments later containing a lone ``swarm.log``.
+
+    So: SIGTERM, wait, then SIGKILL what refuses to leave.  The operator
+    has already been told every worker dies; a process that ignores the
+    polite request does not get to undo the relocation.
+    """
     if plan_.unit_active:
         _systemctl("stop", OLD_UNIT)
-    for proc in plan_.live:
-        if not _pid_alive(proc.pid):
-            continue
+    pids = [p.pid for p in plan_.live if _pid_alive(p.pid)]
+    for pid in pids:
         try:
-            os.kill(proc.pid, 15)
+            os.kill(pid, signal.SIGTERM)
         except OSError:
-            _log.warning("could not signal %s pid %s", proc.kind, proc.pid, exc_info=True)
+            _log.warning("could not signal pid %s", pid, exc_info=True)
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pids = [pid for pid in pids if _pid_alive(pid)]
+        if not pids:
+            return
+        time.sleep(0.2)
+
+    for pid in pids:
+        _log.warning("pid %s ignored SIGTERM; killing it before the move", pid)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            _log.warning("could not kill pid %s", pid, exc_info=True)
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and any(_pid_alive(pid) for pid in pids):
+        time.sleep(0.2)
 
 
 def _move_state(src: Path, dst: Path) -> bool:
@@ -489,4 +522,5 @@ def relocate(plan_: RelocationPlan, *, start: bool = True) -> RelocationResult:
         entrypoints_removed=removed_entrypoints,
         dropins_carried=dropins,
         still_occupied=_entrypoint_candidates(),
+        source_recreated=plan_.source.exists(),
     )

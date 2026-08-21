@@ -2403,6 +2403,28 @@ def _dir_size(path: Path) -> str:
     return "?"
 
 
+def _print_relocation_warnings(result: Any) -> None:
+    """Surface anything that means the relocation did not fully land."""
+    if result.source_recreated:
+        click.echo("")
+        click.secho(
+            f"  WARNING: {result.source} came back after the move — something is",
+            fg="red",
+        )
+        click.secho("  still running against it and will keep re-occupying the name.", fg="red")
+        click.echo("  Stop it, delete that directory, then re-run.")
+
+    if result.still_occupied:
+        click.echo("")
+        click.secho(
+            "  WARNING: the 'swarm' name is still occupied — relocation is incomplete:",
+            fg="red",
+        )
+        for entry in result.still_occupied:
+            click.echo(f"    {entry}")
+        click.echo("  Remove it by hand, then re-run 'swarm-legacy relocate'.")
+
+
 def _print_relocation_plan(current: Any) -> None:
     """Show exactly what the relocation will change, before asking."""
     click.echo("")
@@ -2480,15 +2502,7 @@ def relocate(dry_run: bool, yes: bool, no_start: bool) -> None:
         click.echo(f"Service: {result.unit_written.name}")
     for entry in result.entrypoints_removed:
         click.echo(f"Removed: {entry}")
-    if result.still_occupied:
-        click.echo("")
-        click.secho(
-            "  WARNING: the 'swarm' name is still occupied — relocation is incomplete:",
-            fg="red",
-        )
-        for entry in result.still_occupied:
-            click.echo(f"    {entry}")
-        click.echo("  Remove it by hand, then re-run 'swarm-legacy relocate'.")
+    _print_relocation_warnings(result)
 
     click.echo("")
     click.secho("Relocation complete. This hive now answers to 'swarm-legacy'.", bold=True)
