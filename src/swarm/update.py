@@ -326,7 +326,7 @@ def _restore_foreign_entrypoints(saved: list[tuple[Path, Path]]) -> None:
             _log.warning("could not restore %s — the copy is at %s", shim, backup, exc_info=True)
 
 
-def _drop_reoccupied_entrypoint() -> Path | None:
+def _drop_reoccupied_entrypoint() -> list[Path]:
     """Remove the ``swarm`` shim a reinstall recreates on a relocated install.
 
     ``uv tool install`` writes every console script the package declares, so
@@ -337,12 +337,19 @@ def _drop_reoccupied_entrypoint() -> Path | None:
 
     Only a shim resolving into this package's own tool directory is removed, so
     a ``swarm`` belonging to something else is never deleted by us.
+
+    Removes **every** copy it finds, not just the first.  ``uv`` writes both the
+    PATH shim and the script it points at inside the tool directory; stopping
+    after one left the inner copy behind, which kept
+    :attr:`RelocationPlan.already_done` false forever — so an operator who had
+    long since relocated was shown the destructive banner again on every check.
     """
     from swarm.paths import is_relocated
     from swarm.relocate import _shim_directories
 
     if not is_relocated():
-        return None
+        return []
+    removed: list[Path] = []
     # Shared with the relocation itself so the two cannot disagree about
     # where a shim lives.
     for directory in _shim_directories():
@@ -367,10 +374,10 @@ def _drop_reoccupied_entrypoint() -> Path | None:
                 "and answers to 'swarm-legacy'.",
                 shim,
             )
-            return shim
+            removed.append(shim)
         except OSError:
             _log.warning("could not remove recreated entrypoint %s", shim, exc_info=True)
-    return None
+    return removed
 
 
 async def perform_update(
@@ -433,8 +440,7 @@ async def perform_update(
         _log.debug("Failed to clear update cache", exc_info=True)
 
     _restore_foreign_entrypoints(preserved)
-    dropped = _drop_reoccupied_entrypoint()
-    if dropped is not None:
+    for dropped in _drop_reoccupied_entrypoint():
         msg = f"Removed {dropped} (this install is relocated; use 'swarm-legacy')"
         output_lines.append(msg)
         _emit(msg)

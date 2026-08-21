@@ -290,7 +290,7 @@ class TestUpdateDoesNotReoccupyTheName:
         (tools / "swarm").write_text("#!/bin/sh\n")
         shim = self._shim(home, tools / "swarm")
 
-        assert _drop_reoccupied_entrypoint() == shim
+        assert _drop_reoccupied_entrypoint() == [shim]
         assert not shim.exists()
 
     def test_leaves_a_swarm_that_is_not_ours_alone(self, home: Path) -> None:
@@ -303,7 +303,7 @@ class TestUpdateDoesNotReoccupyTheName:
         other.write_text("#!/bin/sh\n# a different project\n")
         shim = self._shim(home, other)
 
-        assert _drop_reoccupied_entrypoint() is None
+        assert _drop_reoccupied_entrypoint() == []
         assert shim.exists()
         assert other.exists()
 
@@ -317,7 +317,7 @@ class TestUpdateDoesNotReoccupyTheName:
         (tools / "swarm").write_text("#!/bin/sh\n")
         shim = self._shim(home, tools / "swarm")
 
-        assert _drop_reoccupied_entrypoint() is None
+        assert _drop_reoccupied_entrypoint() == []
         assert shim.exists()
 
 
@@ -619,3 +619,46 @@ class TestLingeringProcesses:
         monkeypatch.setattr(rl, "_move_state", _move_then_resurrect)
 
         assert rl.relocate(rl.plan(), start=False).source_recreated is True
+
+
+class TestEveryCopyOfTheOldNameGoes:
+    def test_removes_the_inner_tool_script_too(self, home: Path, monkeypatch) -> None:
+        """uv writes both the PATH shim and the script it points at.
+
+        Stopping after the first left the inner copy behind, which kept
+        `already_done` false forever — so an operator who had long since
+        relocated was shown the destructive banner again on every check.
+        """
+        from swarm.update import _drop_reoccupied_entrypoint
+
+        (home / ".swarm-legacy").mkdir()
+        tools = home / ".local" / "share" / "uv" / "tools" / "swarm-ai" / "bin"
+        tools.mkdir(parents=True)
+        inner = tools / "swarm"
+        inner.write_text("#!/bin/sh\n")
+        bin_dir = home / ".local" / "bin"
+        bin_dir.mkdir(parents=True)
+        shim = bin_dir / "swarm"
+        shim.symlink_to(inner)
+        monkeypatch.setattr(rl, "_receipt_bin_dirs", lambda: [str(tools)])
+
+        removed = _drop_reoccupied_entrypoint()
+
+        assert shim in removed and inner in removed
+        assert not shim.exists() and not inner.exists()
+
+    def test_already_done_after_an_update_on_a_relocated_install(
+        self, home: Path, monkeypatch
+    ) -> None:
+        """The end state an operator actually sees: nothing left to do."""
+        from swarm.update import _drop_reoccupied_entrypoint
+
+        (home / ".swarm-legacy").mkdir()
+        tools = home / ".local" / "share" / "uv" / "tools" / "swarm-ai" / "bin"
+        tools.mkdir(parents=True)
+        (tools / "swarm").write_text("#!/bin/sh\n")
+        monkeypatch.setattr(rl, "_receipt_bin_dirs", lambda: [str(tools)])
+
+        _drop_reoccupied_entrypoint()
+
+        assert rl.plan().already_done is True

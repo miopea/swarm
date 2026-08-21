@@ -675,7 +675,9 @@ it. The order matters, because three things pin the old absolute path:
 4. **Repoint any worker whose `path` is the checkout** — with the daemon stopped,
    or its in-memory config writes the old value back. Here that was the worker
    literally named `swarm`, holding 13 open tasks.
-5. **Then** `mv` the directory. A rename on one filesystem keeps open handles
+5. **Then** `mv` the directory. Rebuild `.venv` afterwards — a virtualenv
+   hard-codes absolute paths, so the moved one cannot run anything
+   (`uv run pytest` fails to spawn until `rm -rf .venv && uv sync --extra dev`). A rename on one filesystem keeps open handles
    valid — cwd follows the inode — so even a shell sitting inside it survives.
 
 Skipping step 2 or 3 gives a daemon that starts from a stale copy, or a Reload
