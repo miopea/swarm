@@ -8893,6 +8893,21 @@
         worker: '/static/bees/worker.svg',
     };
 
+    // The END of the output, not the start. A failed update was reported as
+    // its first 200 characters — which is uv's download progress — while the
+    // actual cause ("Install timed out after 120s and was killed") is appended
+    // last. The operator was shown the least informative slice available, and
+    // a partly-written install went undiagnosed until the dashboard failed to
+    // render at all.
+    function lastOutputLines(output, maxLines, maxChars) {
+        if (!output) return 'unknown error';
+        var lines = String(output).split('\n').filter(function(l) { return l.trim() !== ''; });
+        if (!lines.length) return 'unknown error';
+        var tail = lines.slice(-(maxLines || 3)).join(' | ');
+        var limit = maxChars || 300;
+        return tail.length > limit ? '...' + tail.slice(-limit) : tail;
+    }
+
     // --- Update banner ---
     function showUpdateBanner(data) {
         var el = document.getElementById('update-banner');
@@ -8916,7 +8931,7 @@
                     hideUpdateBanner();
                     waitForRestart();
                 } else {
-                    showToast('Update failed: ' + (data.output || 'unknown error').substring(0, 200), true);
+                    showToast('Update failed: ' + lastOutputLines(data.output), true);
                     resetUpdateBanner();
                 }
             })

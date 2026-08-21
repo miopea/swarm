@@ -10,6 +10,88 @@ Swarm (legacy) uses calendar versioning (`YYYY.M.D.patch`) — see `pyproject.to
 
 ### Fixes
 
+## [2026.8.21.5] - 2026-08-21
+
+### Fixed — the relocation banner froze the daemon it was offering to move
+
+- **`/api/relocate` blocked the event loop, so the dashboard hung instead of
+  responding.** `plan()` was correctly offloaded with `asyncio.to_thread` — and
+  then `_relocation_payload()` was called on the loop, where `dir_size_bytes()`
+  runs `rglob("*")` plus a `stat()` on every file in the state directory:
+  `backups/` (up to seven daily copies of the database), `uploads/`, `memory/`,
+  and the Queen's workdir. Nothing else runs during that walk — no HTTP, no
+  WebSocket, no worker polling.
+
+  Observed on a real box as a dashboard that HUNG rather than errored, and
+  because the freeze happens on the very request the banner makes to render
+  itself, the relocation it was offering could never be started at all: pressing
+  "Move now" produced no `~/.swarm-relocate.log` because no helper was ever
+  spawned. Both the plan and the payload now run in the thread. This is the rule
+  the project already states — "Async everywhere. Never block the event loop" —
+  and the cost of breaking it is a hang, which is strictly worse than an error
+  because it looks like a network problem.
+
+- **Relocation now verifies systemd BEFORE stopping anything.** systemd is what
+  starts the hive again at the end; without it the sequence would stop the
+  service, move the state, write a unit nothing can load, and leave the operator
+  with no dashboard and no obvious way back — from pressing one button in a web
+  page. The availability check moved into `preflight()`, and its refusal states
+  that nothing was changed. Checking it beforehand is not something a dev is
+  going to do, and a one-click action that expects a pre-flight command is not
+  one click.
+
+### Features
+
+- **`swarm update --yes`** — skips the confirmation prompt. `click.confirm`
+  aborts on EOF, so the command could not be driven from a script, which is
+  precisely how a fleet gets moved onto a build before an old repo name is
+  reused.
+
+### Changes
+
+- **The update refuses a repo that is not ours.** Freeing the `swarm` name
+  means something else eventually claims it. GitHub's rename redirect — the
+  only reason builds carrying the old URL still update — dies the moment that
+  happens, and the same baked-in URL then resolves to another project, which
+  would be installed straight over the hive with no error at any layer.
+  `perform_update()` now resolves the repo BEFORE running uv and refuses
+  anything outside `{miopea/swarm, miopea/swarm-legacy}`. A rename within our
+  own history is the supported path and is reported, not refused; an
+  unreachable probe never refuses, because a network failure is not evidence
+  of a hijacked name.
+
+### Fixes
+
+- **A slow update did not just fail — it left the tool broken.**
+  `_INSTALL_TIMEOUT` was 120s, which fit a warm cache and nothing else. A real
+  update on a real connection was still fetching cryptography (4.5 MiB) and
+  building red-black-tree-mod from source when the timeout fired and
+  `proc.kill()` ran. But `uv tool install --force` uninstalls BEFORE it
+  installs, so the kill landed after the old version was gone and before the
+  data files were written: the `.py` modules were present, the daemon started
+  and served, and the first page load died with `Template 'dashboard.html' not
+  found` — a symptom four steps from its cause. The entrypoint shims were gone
+  too, so `swarm-legacy update` could not repair it; only a raw
+  `uv tool install` could.
+
+  Timeout raised to 600s, and `missing_install_artifacts()` now checks the data
+  files on disk after both the timeout path and a uv exit of 0. A partial
+  install is named by the updater, with the recovery command, instead of being
+  discovered later by the web layer.
+
+- **The failure toast showed the least useful part of the output.** It printed
+  the FIRST 200 characters — uv's download progress — while the line that
+  explains the failure is appended last. The operator was shown progress and
+  told it was an error. It now shows the tail.
+
+- **git could hang the updater indefinitely.** The install runs with
+  `stdin=DEVNULL`; an operator whose git rewrites `https://github.com/` to SSH
+  sends a public-repo clone down an authenticated path, and a passphrase prompt
+  against a closed stdin blocks until the timeout kills it mid-install. Now
+  `GIT_TERMINAL_PROMPT=0` and `BatchMode=yes` turn that into an immediate,
+  readable error, and an auth failure on a public repo is explained rather than
+  surfaced as a raw ssh message.
+
 ## [2026.8.21.4] - 2026-08-21
 
 ### Features

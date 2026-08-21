@@ -389,8 +389,14 @@ async def handle_relocation_status(request: web.Request) -> web.Response:
     """
     from swarm.relocate import plan
 
-    plan_ = await asyncio.to_thread(plan)
-    return web.json_response(_relocation_payload(plan_))
+    # BOTH the plan and the payload run in the thread. Splitting them left
+    # dir_size_bytes() — an rglob + stat over every file in the state
+    # directory, backups/ included — on the event loop, which froze the
+    # whole daemon: no HTTP, no WebSocket, no worker polling. Observed as
+    # a dashboard that hung rather than errored, on the very request the
+    # relocation banner makes to render itself.
+    payload = await asyncio.to_thread(lambda: _relocation_payload(plan()))
+    return web.json_response(payload)
 
 
 @handle_errors
@@ -413,7 +419,8 @@ async def handle_relocate(request: web.Request) -> web.Response:
 
     plan_ = await asyncio.to_thread(plan)
     if plan_.already_done:
-        return web.json_response({"status": "already", **_relocation_payload(plan_)})
+        payload = await asyncio.to_thread(_relocation_payload, plan_)
+        return web.json_response({"status": "already", **payload})
 
     blocked = plan_.blocked_reason
     if blocked:

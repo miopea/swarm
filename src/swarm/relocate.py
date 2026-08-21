@@ -604,6 +604,23 @@ def preflight(plan_: RelocationPlan) -> None:
     blocked = plan_.blocked_reason
     if blocked:
         raise RelocationError(blocked)
+
+    # systemd is what starts the hive again at the end.  Without it the
+    # relocation would stop the service, move the state, write a unit
+    # nothing can load, and leave the operator with no dashboard and no
+    # obvious way back.  Checked here rather than left to the operator:
+    # a dev pressing a button in a web page is not going to run a
+    # pre-flight command first, and expecting them to is how a one-click
+    # action becomes a five-step one.
+    from swarm.service import _check_systemd
+
+    systemd_problem = _check_systemd()
+    if systemd_problem:
+        raise RelocationError(
+            f"Cannot relocate: {systemd_problem}\n"
+            "Nothing was changed — the hive is still running where it was."
+        )
+
     _check_socket_path_fits(plan_.target)
 
 

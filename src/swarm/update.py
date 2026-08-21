@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shlex
 import shutil
@@ -34,10 +35,23 @@ _GITHUB_RAW_AT_SHA = (
 _GITHUB_API_COMMITS_URL = "https://api.github.com/repos/miopea/swarm-legacy/commits?per_page=1"
 _GITHUB_API_REPO_URL = "https://api.github.com/repos/miopea/swarm-legacy"
 _REPO_FULL_NAME = "miopea/swarm-legacy"
+# Every name this project has answered to.  GitHub redirects a renamed repo,
+# which is why builds with the old URL still update — but a redirect dies the
+# moment a NEW repo claims the freed name, and then the same URL silently
+# resolves to a different product.  Landing anywhere outside this set means
+# the name was reused, not renamed.
+_KNOWN_REPO_NAMES = frozenset({"miopea/swarm", "miopea/swarm-legacy"})
 _VERSION_RE = re.compile(r'__version__\s*=\s*["\']([^"\']+)["\']')
 
 _CURL_TIMEOUT = "10"  # seconds (string for CLI arg)
-_INSTALL_TIMEOUT = 120  # seconds
+# A COLD install: `--no-cache` re-fetches all 44 packages (cryptography is
+# 4.5 MiB alone) and builds red-black-tree-mod from source.  120s fit a warm
+# cache and nothing else — a real update on a real connection was killed
+# mid-download and reported as a failure, which blocks the one thing that
+# has to work for a repo migration: users being able to update at all.
+# The restart paths bound themselves separately (`_best_effort_reinstall`
+# passes its own 30s), so this only governs the deliberate update.
+_INSTALL_TIMEOUT = 600  # seconds
 
 _INSTALL_SOURCE = "git+https://github.com/miopea/swarm-legacy.git"
 
@@ -223,6 +237,35 @@ async def fetch_repo_location() -> str:
 def repo_has_moved(resolved: str) -> bool:
     """True only when the probe answered AND named a different repo."""
     return bool(resolved) and resolved.casefold() != _REPO_FULL_NAME.casefold()
+
+
+def foreign_repo_refusal(resolved: str) -> str | None:
+    """Refuse to install from a repo that is not one of ours.
+
+    The hazard this exists for: freeing the ``swarm`` name means some
+    other project eventually claims it.  GitHub's rename redirect —
+    which is the only reason builds carrying the old URL still update —
+    disappears the instant that happens, and the baked-in URL stops
+    being a redirect and starts being a real repo belonging to someone
+    else.  An install would then quietly replace Legacy with whatever
+    now lives there, with no error at any layer.
+
+    A rename within our OWN history is not a refusal; that is the
+    normal, supported path.  Only a name outside ``_KNOWN_REPO_NAMES``
+    is.
+
+    An unanswered probe returns ``""`` and must never refuse — a network
+    failure is not evidence of a hijacked name, and blocking updates on
+    it would break the very migration this protects.
+    """
+    if not resolved or resolved.casefold() in {n.casefold() for n in _KNOWN_REPO_NAMES}:
+        return None
+    return (
+        f"Refusing to update: {_REPO_FULL_NAME} now resolves to {resolved}, which is "
+        f"not a Swarm (legacy) repository. The name was most likely reused by another "
+        f"project. Reinstall explicitly from the correct URL rather than letting this "
+        f"install follow the old name."
+    )
 
 
 def _read_cache() -> UpdateResult | None:
@@ -445,6 +488,174 @@ def _drop_reoccupied_entrypoint() -> list[Path]:
     return removed
 
 
+# Data files, not modules.  ``uv tool install --force`` uninstalls before it
+# installs, so a process killed partway through leaves the package importable
+# — the .py files land early — while templates and static assets are still
+# missing.  The daemon then starts, serves, and dies on the first request with
+# "Template 'dashboard.html' not found", which names a symptom four steps
+# removed from the cause.  Observed exactly that after a 120s timeout kill.
+_REQUIRED_ARTIFACTS = (
+    ("web/templates", "dashboard.html"),
+    ("web/static", "dashboard.js"),
+)
+
+
+def missing_install_artifacts() -> list[str]:
+    """Files the installed package must have, and does not.
+
+    Checked on disk rather than through the import system: the running
+    daemon holds the OLD code in memory but the tool directory it was
+    loaded from is the one just rewritten, so the filesystem is the only
+    thing that reflects what an update actually produced.
+    """
+    try:
+        import swarm
+
+        root = Path(str(swarm.__file__)).resolve().parent
+    except Exception:
+        return []  # cannot locate the package — do not invent a failure
+    missing: list[str] = []
+    for subdir, name in _REQUIRED_ARTIFACTS:
+        if not (root / subdir / name).is_file():
+            missing.append(f"{subdir}/{name}")
+    return missing
+
+
+def _incomplete_install_message(missing: list[str]) -> str:
+    return (
+        "Update did not finish: the install is missing "
+        + ", ".join(missing)
+        + ". The package was partly written, so the dashboard will fail to render. "
+        "Re-run the update, or from a terminal: "
+        "uv tool install --force --no-cache " + _INSTALL_SOURCE
+    )
+
+
+def _report_partial_install(output_lines: list[str], emit: Callable[[str], None]) -> bool:
+    """Append and emit a partial-install report. True when one was found."""
+    missing = missing_install_artifacts()
+    if not missing:
+        return False
+    broken = _incomplete_install_message(missing)
+    output_lines.append(broken)
+    emit(broken)
+    _log.error("[update] %s", broken)
+    return True
+
+
+_GIT_AUTH_MARKERS = (
+    "enter passphrase",
+    "permission denied (publickey)",
+    "could not read from remote repository",
+    "authentication failed",
+    "host key verification failed",
+)
+
+
+def _noninteractive_git_env() -> dict[str, str]:
+    """Environment that makes git FAIL rather than wait for a human.
+
+    The install runs with ``stdin=DEVNULL``.  This repository is public,
+    so a plain HTTPS clone needs no credentials at all — but an operator
+    whose git rewrites ``https://github.com/`` to SSH (an ``insteadOf``
+    rule, common on machines set up for other tooling) sends the update
+    down an authenticated path anyway.  A passphrase-protected key then
+    prompts, and a prompt against a closed stdin blocks until the install
+    timeout kills it.
+
+    That is the worst available shape: the longest possible wait produces
+    the least possible information, and the kill lands mid-install and
+    leaves a package that imports but has no templates.  Observed exactly
+    that, twice, on a real box.
+
+    ``GIT_TERMINAL_PROMPT=0`` plus ``BatchMode=yes`` turn the hang into an
+    immediate, readable authentication error.  ``SSH_ASKPASS`` is cleared
+    for the same reason — a graphical prompt on a headless daemon is a
+    hang wearing a different hat.
+    """
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    existing = env.get("GIT_SSH_COMMAND", "ssh")
+    if "BatchMode" not in existing:
+        env["GIT_SSH_COMMAND"] = f"{existing} -oBatchMode=yes"
+    env.pop("SSH_ASKPASS", None)
+    env.pop("SSH_ASKPASS_REQUIRE", None)
+    return env
+
+
+def git_auth_hint(output: str) -> str | None:
+    """Explain an auth failure that should never have been reachable.
+
+    Without this the operator sees a raw ssh error for a PUBLIC repo,
+    which reads as "the update is broken" rather than "your git is
+    rewriting this URL to SSH and the daemon has no key".
+    """
+    lowered = output.lower()
+    if not any(marker in lowered for marker in _GIT_AUTH_MARKERS):
+        return None
+    return (
+        "The update needed git credentials, but this repository is public and "
+        "an HTTPS clone needs none. Your git is almost certainly rewriting "
+        "https://github.com/ to SSH (an 'insteadOf' rule in ~/.gitconfig), and "
+        "the daemon has no way to unlock a passphrase-protected key. Remove or "
+        "scope that rewrite, or load the key into an ssh-agent the daemon can "
+        "reach. Check with: git config --get-regexp 'url\\..*insteadOf'"
+    )
+
+
+async def _stream_install(
+    cmd: list[str],
+    output_lines: list[str],
+    emit: Callable[[str], None],
+) -> bool:
+    """Run the install, streaming output. False on any failure.
+
+    Split out of :func:`perform_update` so the timeout handling — the
+    part that can leave a half-written package behind — reads as one
+    thing rather than as nesting inside the wider update flow.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            env=_noninteractive_git_env(),
+        )
+        if proc.stdout is None:
+            raise RuntimeError("subprocess stdout is None despite PIPE")
+        try:
+            async with asyncio.timeout(_INSTALL_TIMEOUT):
+                async for raw in proc.stdout:
+                    line = raw.decode(errors="replace").rstrip()
+                    output_lines.append(line)
+                    emit(line)
+                await proc.wait()
+        except TimeoutError:
+            proc.kill()
+            # Killing uv mid-install is destructive, not merely a failure:
+            # --force has already removed the previous version by this point.
+            msg = (
+                f"Install timed out after {_INSTALL_TIMEOUT}s and was killed. "
+                "This can leave the package partly written."
+            )
+            output_lines.append(msg)
+            emit(msg)
+            _report_partial_install(output_lines, emit)
+            return False
+        if proc.returncode != 0:
+            hint = git_auth_hint("\n".join(output_lines))
+            if hint:
+                output_lines.append(hint)
+                emit(hint)
+                _log.error("[update] %s", hint)
+            return False
+        return True
+    except Exception as exc:
+        output_lines.append(str(exc))
+        return False
+
+
 async def perform_update(
     on_output: Callable[[str], None] | None = None,
 ) -> tuple[bool, str]:
@@ -463,39 +674,27 @@ async def perform_update(
         if on_output:
             on_output(line)
 
+    # Checked BEFORE anything is installed: refusing afterwards would mean
+    # the wrong package is already on disk.
+    refusal = foreign_repo_refusal(await fetch_repo_location())
+    if refusal:
+        _log.error("[repo-identity] %s", refusal)
+        _emit(refusal)
+        return False, refusal
+
     preserved = _preserve_foreign_entrypoints()
 
     _emit("Installing from GitHub...")
     print("  → Installing from GitHub...", flush=True)
 
     output_lines: list[str] = []
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        if proc.stdout is None:
-            raise RuntimeError("subprocess stdout is None despite PIPE")
-        try:
-            async with asyncio.timeout(_INSTALL_TIMEOUT):
-                async for raw in proc.stdout:
-                    line = raw.decode(errors="replace").rstrip()
-                    output_lines.append(line)
-                    _emit(line)
-                await proc.wait()
-        except TimeoutError:
-            proc.kill()
-            msg = f"Command timed out after {_INSTALL_TIMEOUT}s"
-            output_lines.append(msg)
-            _emit(msg)
-            return False, "\n".join(output_lines)
+    if not await _stream_install(cmd, output_lines, _emit):
+        return False, "\n".join(output_lines)
 
-        if proc.returncode != 0:
-            return False, "\n".join(output_lines)
-    except Exception as exc:
-        output_lines.append(str(exc))
+    # uv exited 0 — but verify what it produced rather than trusting the
+    # exit code, since a broken install is reported by the WEB layer four
+    # steps later, long after the update claimed to have worked.
+    if _report_partial_install(output_lines, _emit):
         return False, "\n".join(output_lines)
 
     # Clear cache so next check reflects the new version

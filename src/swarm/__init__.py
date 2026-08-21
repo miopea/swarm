@@ -4,4 +4,4 @@ Superseded by Swarm Next (https://github.com/miopea/swarm-next); this
 package is maintained for existing hives only.
 """
 
-__version__ = "2026.8.21.4"
+__version__ = "2026.8.21.5"
