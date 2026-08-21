@@ -16,6 +16,11 @@ from swarm.server.helpers import get_daemon, handle_errors, json_error, read_fil
 if TYPE_CHECKING:
     from swarm.relocate import RelocationPlan
 
+# Lives in $HOME, not the state directory: the relocation MOVES the state
+# directory, so a log written inside it is either moved mid-write or lands
+# in whichever copy the operator is not looking at.
+_RELOCATE_LOG = ".swarm-relocate.log"
+
 
 async def _best_effort_reinstall(context: str, timeout: float = 30.0) -> None:
     """Reinstall from local source without ever blocking a restart.
@@ -311,6 +316,8 @@ def _relocation_payload(plan_: RelocationPlan) -> dict[str, object]:
 
     return {
         "relocated": plan_.already_done,
+        "blocked_reason": plan_.blocked_reason,
+        "needs_repair": plan_.needs_repair,
         "source": str(plan_.source),
         "target": str(plan_.target),
         "move_needed": plan_.move_needed,
@@ -408,6 +415,14 @@ async def handle_relocate(request: web.Request) -> web.Response:
     if plan_.already_done:
         return web.json_response({"status": "already", **_relocation_payload(plan_)})
 
+    blocked = plan_.blocked_reason
+    if blocked:
+        # Refused BEFORE the helper is launched. relocate() would stop the
+        # service and kill every worker before hitting the same condition,
+        # so discovering it here is the difference between a 409 and a
+        # destroyed hive.
+        return json_error(blocked, 409)
+
     helper = _relocate_helper()
     if helper is None:
         return json_error(
@@ -418,21 +433,37 @@ async def handle_relocate(request: web.Request) -> web.Response:
     if refusal is not None:
         return json_error(refusal, 409)
 
-    await asyncio.create_subprocess_exec(
-        str(helper),
-        "relocate",
-        "--yes",
-        stdin=asyncio.subprocess.DEVNULL,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    # The daemon dies partway through, so its output cannot be read back
+    # in-process — and DEVNULL meant a RelocationError vanished entirely,
+    # leaving the dashboard on "Relocating..." with no way to learn why.
+    # A file outside the state directory survives the move either way.
+    log_path = Path.home() / _RELOCATE_LOG
+    try:
+        log = log_path.open("w")
+    except OSError:
+        log = None
+    try:
+        await asyncio.create_subprocess_exec(
+            str(helper),
+            "relocate",
+            "--yes",
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=log or asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.STDOUT if log else asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    finally:
+        # The child holds its own dup of the fd; ours is done.
+        if log is not None:
+            log.close()
+
     return web.json_response(
         {
             "status": "relocating",
             "source": str(plan_.source),
             "target": str(plan_.target),
             "unit": plan_.new_unit.name,
+            "log": str(log_path),
         }
     )
 

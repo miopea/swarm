@@ -92,6 +92,10 @@ class RelocationPlan:
     old_entrypoints: list[Path] = field(default_factory=list)
     live: list[LiveProcess] = field(default_factory=list)
     stale_enable_link: bool = False
+    # The NEW side, which `already_done` deliberately does not consider.
+    new_unit_exists: bool = False
+    new_unit_active: bool = False
+    target_exists: bool = False
 
     @property
     def already_done(self) -> bool:
@@ -108,6 +112,44 @@ class RelocationPlan:
             and not self.old_entrypoints
             and not self.stale_enable_link
         )
+
+    @property
+    def blocked_reason(self) -> str | None:
+        """Why relocating would fail, or None when it can proceed.
+
+        ``_move_state`` already refuses to merge two hives — but it
+        refused from *inside* :func:`relocate`, after ``_stop_live`` had
+        stopped the service and killed every worker. The operator paid
+        the full destructive price for an operation that could never
+        have succeeded, and the traceback went to a detached process
+        nobody was reading.
+
+        Both directories existing means this hive already relocated and
+        something recreated the old name. The remedy is to find out what
+        did that — not to move a live hive onto itself.
+        """
+        if self.move_needed and self.target_exists:
+            return (
+                f"{self.source} and {self.target} both exist. This hive is already "
+                f"relocated and something recreated the old directory; relocating "
+                f"would merge two hives. Inspect {self.source} and remove it once "
+                f"you know what recreated it."
+            )
+        return None
+
+    @property
+    def needs_repair(self) -> bool:
+        """Relocated, but the hive it relocated INTO is not running.
+
+        Kept out of :attr:`already_done` deliberately.  Folding it in
+        would make a relocated install whose unit is merely stopped
+        report as un-relocated, and #1677's fix exists precisely to stop
+        showing the destructive plan to operators who already moved.
+        The old name being gone and the new hive being healthy are two
+        different questions; conflating them is what let a relocation
+        that stranded the daemon answer "nothing to do".
+        """
+        return self.already_done and not (self.new_unit_exists and self.new_unit_active)
 
 
 @dataclass
@@ -326,6 +368,9 @@ def plan(*, source: Path | None = None, target: Path | None = None) -> Relocatio
         old_entrypoints=_entrypoint_candidates(),
         live=find_live_processes(src if src.is_dir() else dst),
         stale_enable_link=wants.is_symlink() and not wants.exists(),
+        new_unit_exists=(_UNIT_DIR / LEGACY_UNIT).exists(),
+        new_unit_active=_unit_is_active(LEGACY_UNIT),
+        target_exists=dst.exists(),
     )
 
 
@@ -508,9 +553,63 @@ def _remove_old_entrypoints(paths: list[Path]) -> list[Path]:
     return removed
 
 
+def repair(plan_: RelocationPlan, *, start: bool = True) -> list[str]:
+    """Finish a relocation whose old side is gone but whose new side is not up.
+
+    NON-DESTRUCTIVE, unlike :func:`relocate`: nothing is stopped, moved or
+    deleted.  It rewrites the unit, reloads, and enables/starts it — every
+    step idempotent, so running it on a healthy install changes nothing.
+
+    Exists because "the old name is gone" and "the new hive is running"
+    were treated as one question.  A relocation that completed every
+    removal but left a daemon that would not start reported "Already
+    relocated — nothing to do", which is a true statement about the old
+    name and a useless one to an operator whose dashboard is down.
+
+    Returns the human-readable steps taken, for the caller to print.
+    """
+    steps: list[str] = []
+    if not plan_.new_unit_exists:
+        written = _write_unit()
+        steps.append(f"Wrote missing unit: {written}")
+    _systemctl("daemon-reload")
+    steps.append("Reloaded systemd")
+    if start:
+        enabled = _systemctl("enable", LEGACY_UNIT)
+        if enabled.returncode != 0:
+            steps.append(f"enable failed: {enabled.stderr.strip() or enabled.stdout.strip()}")
+        started = _systemctl("start", LEGACY_UNIT)
+        if started.returncode != 0:
+            # The unit refusing to start is the whole reason we are here,
+            # so surface systemd's reason rather than reporting a step
+            # that silently did nothing.
+            steps.append(f"start failed: {started.stderr.strip() or started.stdout.strip()}")
+        else:
+            steps.append(f"Started {LEGACY_UNIT}")
+    return steps
+
+
+def preflight(plan_: RelocationPlan) -> None:
+    """Every check that must pass BEFORE anything destructive happens.
+
+    Ordering is the whole point.  ``_move_state`` refused to merge two
+    hives, but it refused after ``_stop_live`` had already stopped the
+    service and SIGKILLed the daemon and holder — so an operator whose
+    old directory had been recreated lost every worker to an operation
+    that could not have succeeded under any circumstances.  A guard that
+    fires after the damage is not a guard.
+
+    Raises :class:`RelocationError` with an actionable message.
+    """
+    blocked = plan_.blocked_reason
+    if blocked:
+        raise RelocationError(blocked)
+    _check_socket_path_fits(plan_.target)
+
+
 def relocate(plan_: RelocationPlan, *, start: bool = True) -> RelocationResult:
     """Execute *plan_*.  Idempotent — safe to re-run after a failure."""
-    _check_socket_path_fits(plan_.target)
+    preflight(plan_)
     _stop_live(plan_)
     moved = _move_state(plan_.source, plan_.target)
     # Past this point the state directory has already moved.  Anything that

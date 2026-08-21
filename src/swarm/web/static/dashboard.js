@@ -9166,11 +9166,25 @@
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.relocated) return;
+                var title = document.getElementById('relocate-banner-title');
                 var detail = document.getElementById('relocate-banner-detail');
-                if (detail) {
-                    detail.textContent = ' ' + data.source + ' \u2192 ' + data.target
-                        + formatRelocateSize(data.size_bytes)
-                        + '. All running workers will be terminated.';
+                var move = document.getElementById('relocate-banner-move');
+                if (data.blocked_reason) {
+                    // Both directories exist: this hive already relocated and
+                    // something recreated the old name. Offering "Move now"
+                    // here would stop the service and kill every worker before
+                    // failing on a merge it can never perform, so the action is
+                    // removed rather than left to be refused after the damage.
+                    if (title) title.textContent = 'The \u2018swarm\u2019 name has been re-occupied.';
+                    if (detail) detail.textContent = ' ' + data.blocked_reason;
+                    if (move) move.style.display = 'none';
+                } else {
+                    if (move) move.style.display = '';
+                    if (detail) {
+                        detail.textContent = ' ' + data.source + ' \u2192 ' + data.target
+                            + formatRelocateSize(data.size_bytes)
+                            + '. All running workers will be terminated.';
+                    }
                 }
                 if (!_relocateDismissed) banner.style.display = 'block';
             })
@@ -9199,6 +9213,9 @@
                     .then(function(res) {
                         if (!res.ok) {
                             showToast('Relocation refused: ' + (res.data.error || 'unknown error'), true);
+                            // Re-read so a refusal repaints the banner with the
+                            // reason rather than leaving the stale offer up.
+                            _relocateDetailFetched = false;
                             return;
                         }
                         if (res.data.status === 'already') {

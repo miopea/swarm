@@ -2427,6 +2427,51 @@ def _print_relocation_warnings(result: Any) -> None:
         click.echo("  Remove it by hand, then re-run 'swarm-legacy relocate'.")
 
 
+def _report_already_relocated(current: Any, *, dry_run: bool, no_start: bool) -> None:
+    """Report a relocated hive, and finish the job when it is not running.
+
+    "Already relocated — nothing to do" was true about the OLD name and
+    useless to an operator whose dashboard was down: the removals had all
+    landed, so the command declared success and exited 0 while the hive it
+    relocated into never came up. The old name being gone and the new hive
+    being healthy are separate questions; this answers both.
+    """
+    from swarm.relocate import plan
+    from swarm.relocate import repair as do_repair
+
+    click.echo("Already relocated.")
+    click.echo(f"  State:   {current.target}")
+    click.echo(f"  Service: {current.new_unit.name}")
+    if not current.needs_repair:
+        click.echo("  Status:  running")
+        return
+
+    if not current.new_unit_exists:
+        click.secho("  Status:  NOT RUNNING — the unit is missing.", fg="yellow")
+    else:
+        click.secho("  Status:  NOT RUNNING — the unit exists but is inactive.", fg="yellow")
+
+    if dry_run:
+        click.echo("\n  Would repair it: write the unit, reload, enable, start.")
+        click.echo("  Dry run. Nothing was changed.")
+        return
+
+    click.echo("")
+    for step in do_repair(current, start=not no_start):
+        click.echo(f"  {step}")
+
+    if plan().new_unit_active:
+        click.secho("\n  Repaired — the hive is running.", fg="green")
+        return
+    click.secho(
+        "\n  Still not running. systemd accepted the unit but the daemon did not "
+        "stay up. The reason is in the journal:\n"
+        "    journalctl --user -u swarm-legacy.service -n 50 --no-pager",
+        fg="red",
+    )
+    raise SystemExit(1)
+
+
 def _print_relocation_plan(current: Any) -> None:
     """Show exactly what the relocation will change, before asking."""
     click.echo("")
@@ -2475,10 +2520,14 @@ def relocate(dry_run: bool, yes: bool, no_start: bool) -> None:
 
     current = plan()
     if current.already_done:
-        click.echo("Already relocated — nothing to do.")
-        click.echo(f"  State:   {current.target}")
-        click.echo(f"  Service: {current.new_unit.name}")
+        _report_already_relocated(current, dry_run=dry_run, no_start=no_start)
         return
+
+    blocked = current.blocked_reason
+    if blocked:
+        click.secho("  Cannot relocate:", fg="red", bold=True)
+        click.echo(f"  {blocked}")
+        raise SystemExit(1)
 
     _print_relocation_plan(current)
 
