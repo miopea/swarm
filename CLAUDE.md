@@ -5,8 +5,8 @@
 ## Orientation
 
 - **What this is.** `swarm-ai` — **Swarm (legacy)**, a hive-mind orchestrator for
-  Claude Code agents. Python ≥3.12, aiohttp daemon plus PTY workers, one `swarm`
-  entry point. Superseded by Swarm Next; this repo is maintenance-only. The
+  Claude Code agents. Python ≥3.12, aiohttp daemon plus PTY workers, and two
+  console scripts (`swarm` and `swarm-legacy`) that are the same entry point. Superseded by Swarm Next; this repo is maintenance-only. The
   GitHub repo is `miopea/swarm-legacy`, and this checkout now lives at
   `~/projects/personal/swarm-legacy` — `~/projects/personal/swarm` was freed
   for Swarm Next on 2026-08-21.
